@@ -1,0 +1,140 @@
+# GrowMate Garden Configuration
+# This file describes YOUR specific garden setup.
+# The AI Core uses this to understand your garden and generate correct commands.
+
+robot:
+  name: "GrowMate"
+  model: "FarmBot Genesis XL"
+  workspace:
+    x_max: 2800  # mm
+    y_max: 5800  # mm
+    z_min: -500  # mm (negative = into soil)
+    z_max: 0
+
+# Your garden - where plants are located
+# The AI uses this to resolve "the tomatoes" -> coordinates
+garden:
+  plants:
+    - name: tomatoes
+      aliases: [the tomatoes, tomato bed, tomato plants, tomato section]
+      position: {x: 400, y: 200, z: -100}
+      water_quantity: 6  # seconds of water pulse
+      stage: growing
+
+    - name: herbs
+      aliases: [the herbs, herb garden, herb bed, herb section]
+      position: {x: 800, y: 200, z: -100}
+      water_quantity: 4
+      stage: growing
+
+    - name: lettuce
+      aliases: [the lettuce, lettuce bed, salad, salad greens]
+      position: {x: 1200, y: 200, z: -100}
+      water_quantity: 5
+      stage: growing
+
+    - name: carrots
+      aliases: [the carrots, carrot bed, carrot patch]
+      position: {x: 400, y: 1400, z: -100}
+      water_quantity: 4
+      stage: growing
+
+    - name: strawberries
+      aliases: [the strawberries, strawberry bed, berry patch, berries]
+      position: {x: 800, y: 1400, z: -100}
+      water_quantity: 5
+      stage: growing
+
+  locations:
+    - name: home
+      aliases: [home position, start, origin, starting position]
+      position: {x: 0, y: 0, z: 0}
+
+    - name: bed 1
+      aliases: [bed one, first bed]
+      position: {x: 0, y: 0, z: 0}
+
+    - name: bed 2
+      aliases: [bed two, second bed]
+      position: {x: 0, y: 1400, z: 0}
+
+    - name: bed 3
+      aliases: [bed three, third bed]
+      position: {x: 0, y: 2800, z: 0}
+
+# FarmBot ROS2 command reference (from AURA documentation)
+# The AI Core needs to know what commands exist
+commands:
+  movement:
+    - code: "M {x} {y} {z}"
+      description: "Move gantry to absolute position"
+    - code: "M_S {x} {y} {z} {speed}"
+      description: "Move gantry to position at speed (%)"
+    - code: "H_0"
+      description: "Go to home position"
+
+  estop:
+    - code: "e"
+      description: "Emergency stop - halts everything"
+    - code: "E"
+      description: "Reset emergency stop"
+
+  plants:
+    - code: "P_4"
+      description: "Water all plants regardless of moisture"
+    - code: "P_5"
+      description: "Water all plants based on moisture levels"
+    - code: "P_9"
+      description: "Check moisture levels around all plants"
+
+  devices:
+    - code: "D_W_1"
+      description: "Turn water pump ON"
+    - code: "D_W_0"
+      description: "Turn water pump OFF"
+    - code: "D_L_1"
+      description: "Turn LED strip ON"
+    - code: "D_L_0"
+      description: "Turn LED strip OFF"
+    - code: "D_V_1"
+      description: "Turn vacuum pump ON"
+    - code: "D_V_0"
+      description: "Turn vacuum pump OFF"
+    - code: "D_S_C"
+      description: "Read soil sensor"
+    - code: "D_C"
+      description: "Check if tool is mounted"
+
+  vision:
+    - code: "I_1"
+      description: "Take photo at current position"
+    - code: "I_2"
+      description: "Create panorama of whole bed"
+    - code: "I_4"
+      description: "Detect weeds"
+
+# Safety rules
+safety:
+  emergency_phrases:
+    - stop
+    - halt
+    - emergency
+    - emergency stop
+    - freeze
+    - abort
+  workspace_bounds:
+    x: [0, 2800]
+    y: [0, 5800]
+    z: [-500, 0]
+  dangerous_commands:
+    - "P_3"  # Seeding all - resource intensive
+  always_confirm:
+    - water_all
+    - calibrate
+
+# Location context for weather and plant advice queries
+location:
+  name: "Maynooth"
+  country: "Ireland"
+  latitude: 53.385
+  longitude: -6.601
