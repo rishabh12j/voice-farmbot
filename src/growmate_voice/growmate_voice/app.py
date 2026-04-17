@@ -15,10 +15,11 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .ros2_publisher import ROS2Publisher
 from .speech import AudioTranscriber
@@ -34,6 +35,7 @@ class AppState:
     pos_x: float = 0.0
     pos_y: float = 0.0
     pos_z: float = 0.0
+    farmbot_process: Optional[Any] = None   # Popen handle for farmbot_bringup
 
 
 _STATE = AppState()
@@ -170,6 +172,51 @@ footer { display: none !important; }
     color: #90caf9 !important;
 }
 
+/* ── farmbot power buttons ── */
+.power-on-btn {
+    background: #1b4332 !important;
+    color: #ffffff !important;
+    font-size: 1.2em !important;
+    font-weight: 700 !important;
+    min-height: 72px !important;
+    border-radius: 16px !important;
+    border: 2px solid #2d6a4f !important;
+}
+.power-on-btn:hover { background: #2d6a4f !important; }
+
+.power-off-btn {
+    background: #3b1f1f !important;
+    color: #ef9a9a !important;
+    font-size: 1.2em !important;
+    font-weight: 700 !important;
+    min-height: 72px !important;
+    border-radius: 16px !important;
+    border: 2px solid #7f0000 !important;
+}
+.power-off-btn:hover { background: #5c2020 !important; }
+
+.status-btn {
+    background: #1a2a3a !important;
+    color: #90caf9 !important;
+    font-size: 1.05em !important;
+    font-weight: 600 !important;
+    min-height: 52px !important;
+    border-radius: 12px !important;
+    border: 2px solid #1e3a5f !important;
+}
+
+/* ── farmbot status box ── */
+.fb-status textarea {
+    font-size: 1.2em !important;
+    font-family: ui-monospace, monospace !important;
+    font-weight: 700 !important;
+    background: #0d1a2e !important;
+    color: #90caf9 !important;
+    border: 2px solid #1e3a5f !important;
+    border-radius: 12px !important;
+    padding: 10px 14px !important;
+}
+
 /* ── audio widget ── */
 .gradio-container .audio-container,
 .gradio-container [data-testid="audio"] {
@@ -232,6 +279,66 @@ def _jog(axis: str, direction: int, step: float) -> str:
     return _status(last_cmd=f"{cmd}  — {label}  [{records[0].status}]")
 
 
+# --------------------------------------------------------------------------- farmbot bringup
+_BRINGUP_NODES = ["farmbotcontroller", "mapcontroller", "devicecmdhandler"]
+
+
+def _farmbot_status() -> str:
+    """Check if farmbot_bringup is running by querying ros2 node list."""
+    # If we launched it ourselves, check the process first
+    if _STATE.farmbot_process is not None:
+        if _STATE.farmbot_process.poll() is not None:
+            _STATE.farmbot_process = None   # it exited
+
+    try:
+        result = subprocess.run(
+            ["ros2", "node", "list"],
+            capture_output=True, text=True, timeout=4,
+        )
+        nodes = result.stdout.lower()
+        if any(n in nodes for n in _BRINGUP_NODES):
+            return "● ONLINE — FarmBot is running"
+        return "● OFFLINE — FarmBot is not running"
+    except FileNotFoundError:
+        return "● OFFLINE — ros2 not found (source your workspace)"
+    except subprocess.TimeoutExpired:
+        return "● TIMEOUT — ROS2 not responding"
+    except Exception as e:
+        return f"● ERROR — {e}"
+
+
+def _launch_farmbot() -> str:
+    """Start farmbot_bringup standard.launch.py as a background process."""
+    if _STATE.farmbot_process is not None and _STATE.farmbot_process.poll() is None:
+        return "● Already running — nothing to launch"
+    try:
+        _STATE.farmbot_process = subprocess.Popen(
+            ["ros2", "launch", "farmbot_bringup", "standard.launch.py"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Give nodes a moment to register before status check
+        import time; time.sleep(3)
+        return _farmbot_status()
+    except FileNotFoundError:
+        return "● FAILED — ros2 not found (source your workspace first)"
+    except Exception as e:
+        return f"● FAILED — {e}"
+
+
+def _stop_farmbot() -> str:
+    """Terminate farmbot_bringup."""
+    if _STATE.farmbot_process is not None:
+        _STATE.farmbot_process.terminate()
+        try:
+            _STATE.farmbot_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _STATE.farmbot_process.kill()
+        _STATE.farmbot_process = None
+        return "● OFFLINE — FarmBot stopped"
+    return "● OFFLINE — Nothing was running"
+
+
 # --------------------------------------------------------------------------- voice
 # Pure string matching — no LLM.  Emergency checked first (arch rule #3).
 _VOICE_MAP = [
@@ -254,13 +361,32 @@ def _classify_voice(text: str) -> Optional[str]:
 
 def _process_voice(audio_path: Optional[str], step: float):
     """Transcribe → classify → execute. Returns (voice_feedback, position_status)."""
+    import os, shutil
+
     if not audio_path:
         return "No audio received.", _status()
 
-    transcript = (_STATE.transcriber.transcribe(audio_path)
-                  if _STATE.transcriber else "")
+    if not os.path.exists(audio_path):
+        return f"Audio file not found: {audio_path}", _status()
+
+    file_kb = os.path.getsize(audio_path) / 1024
+    if file_kb < 1:
+        return f"Audio file too small ({file_kb:.1f} KB) — recording may be empty.", _status()
+
+    if _STATE.transcriber is None:
+        return "Transcriber not initialised — restart the app.", _status()
+
+    if _STATE.transcriber.backend is None:
+        has_ffmpeg = shutil.which("ffmpeg") is not None
+        if not has_ffmpeg:
+            return "ffmpeg not found. Run:  sudo apt install ffmpeg  then restart.", _status()
+        return "No STT backend loaded. Run:  pip install faster-whisper  then restart.", _status()
+
+    transcript = _STATE.transcriber.transcribe(audio_path)
     if not transcript:
-        return "Could not transcribe — check your microphone.", _status()
+        return (f"Transcription returned empty (file: {os.path.basename(audio_path)}, "
+                f"{file_kb:.1f} KB, backend: {_STATE.transcriber.backend}). "
+                "Try speaking more clearly or closer to the mic."), _status()
 
     action = _classify_voice(transcript)
     heard = f'Heard:  "{transcript}"'
@@ -300,6 +426,27 @@ def build_ui():
           </div>
         </div>
         """)
+
+        # ── farmbot bringup ─────────────────────────────────────────────────
+        gr.HTML("""
+        <div style="font-size:1.2em; font-weight:700; color:#90caf9;
+                    margin:8px 0 10px 4px;">
+          ⚡  FarmBot System
+        </div>
+        """)
+        fb_status_box = gr.Textbox(
+            value="Press Check Status to verify connection",
+            label="",
+            interactive=False,
+            lines=1,
+            elem_classes=["fb-status"],
+        )
+        with gr.Row():
+            power_on_btn  = gr.Button("⚡  Power ON",      elem_classes=["power-on-btn"])
+            power_off_btn = gr.Button("⏹  Power OFF",     elem_classes=["power-off-btn"])
+            check_btn     = gr.Button("🔍  Check Status",  elem_classes=["status-btn"])
+
+        gr.HTML('<hr style="border-color:#2a2a2a; margin:16px 0;">')
 
         # ── safety ──────────────────────────────────────────────────────────
         gr.HTML("""
@@ -406,6 +553,10 @@ def build_ui():
         )
 
         # ── wiring ───────────────────────────────────────────────────────────
+        power_on_btn .click(_launch_farmbot,   [], fb_status_box)
+        power_off_btn.click(_stop_farmbot,     [], fb_status_box)
+        check_btn    .click(_farmbot_status,   [], fb_status_box)
+
         estop_btn.click(_emergency_stop, [],       status_box)
         reset_btn.click(_reset_estop,    [],       status_box)
 
