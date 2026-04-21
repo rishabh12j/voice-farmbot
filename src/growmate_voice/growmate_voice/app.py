@@ -23,6 +23,7 @@ from typing import Any, List, Optional
 
 from .ros2_publisher import ROS2Publisher
 from .speech import AudioTranscriber
+from .logger import log, log_path
 
 
 # --------------------------------------------------------------------------- state
@@ -234,9 +235,11 @@ def _ensure_initialised(ros2_enabled: bool, whisper_size: str = "tiny.en") -> No
         if _STATE.robot is not None:
             return
         _STATE.ros2_enabled = ros2_enabled
+        log.info("Initialising — ros2=%s  whisper=%s", ros2_enabled, whisper_size)
         _STATE.robot = ROS2Publisher(ros2_enabled=ros2_enabled)
         _STATE.transcriber = AudioTranscriber(model_size=whisper_size)
-        print("[growmate_voice] Jog panel ready.")
+        log.info("Transcriber backend: %s", _STATE.transcriber.backend or "NONE")
+        log.info("Jog panel ready.  Log file: %s", log_path())
 
 
 # --------------------------------------------------------------------------- helpers
@@ -253,12 +256,16 @@ def _status(last_cmd: str = "") -> str:
 
 # --------------------------------------------------------------------------- handlers
 def _emergency_stop() -> str:
+    log.critical("EMERGENCY STOP triggered")
     record = _STATE.robot.emergency_stop()
+    log.critical("E-stop result: %s", record.status)
     return f"EMERGENCY STOP  [{record.status.upper()}]"
 
 
 def _reset_estop() -> str:
+    log.warning("E-stop RESET requested")
     records = _STATE.robot.execute(["E"])
+    log.info("E-stop reset result: %s", records[0].status)
     return _status(last_cmd=f"E  — reset  [{records[0].status}]")
 
 
@@ -276,6 +283,8 @@ def _jog(axis: str, direction: int, step: float) -> str:
     label = {"x": ("LEFT" if direction < 0 else "RIGHT"),
              "y": ("BACK" if direction < 0 else "FORWARD"),
              "z": ("DOWN" if direction < 0 else "UP")}[axis]
+    log.info("JOG  axis=%s dir=%+d step=%.0f  cmd=%s  status=%s",
+             axis, direction, step, cmd, records[0].status)
     return _status(last_cmd=f"{cmd}  — {label}  [{records[0].status}]")
 
 
@@ -285,10 +294,11 @@ _BRINGUP_NODES = ["farmbotcontroller", "mapcontroller", "devicecmdhandler"]
 
 def _farmbot_status() -> str:
     """Check if farmbot_bringup is running by querying ros2 node list."""
-    # If we launched it ourselves, check the process first
     if _STATE.farmbot_process is not None:
         if _STATE.farmbot_process.poll() is not None:
-            _STATE.farmbot_process = None   # it exited
+            log.warning("FarmBot process exited unexpectedly (returncode=%s)",
+                        _STATE.farmbot_process.returncode)
+            _STATE.farmbot_process = None
 
     try:
         result = subprocess.run(
@@ -296,46 +306,63 @@ def _farmbot_status() -> str:
             capture_output=True, text=True, timeout=4,
         )
         nodes = result.stdout.lower()
+        log.debug("ros2 node list output: %s", result.stdout.strip() or "(empty)")
         if any(n in nodes for n in _BRINGUP_NODES):
+            log.info("FarmBot status: ONLINE")
             return "● ONLINE — FarmBot is running"
+        log.warning("FarmBot status: OFFLINE — expected nodes not found")
         return "● OFFLINE — FarmBot is not running"
     except FileNotFoundError:
+        log.error("FarmBot status: ros2 binary not found")
         return "● OFFLINE — ros2 not found (source your workspace)"
     except subprocess.TimeoutExpired:
+        log.error("FarmBot status: ros2 node list timed out")
         return "● TIMEOUT — ROS2 not responding"
     except Exception as e:
+        log.exception("FarmBot status: unexpected error")
         return f"● ERROR — {e}"
 
 
 def _launch_farmbot() -> str:
     """Start farmbot_bringup standard.launch.py as a background process."""
     if _STATE.farmbot_process is not None and _STATE.farmbot_process.poll() is None:
+        log.info("Launch requested but FarmBot is already running (pid=%s)",
+                 _STATE.farmbot_process.pid)
         return "● Already running — nothing to launch"
     try:
+        log.info("Launching farmbot_bringup standard.launch.py ...")
         _STATE.farmbot_process = subprocess.Popen(
             ["ros2", "launch", "farmbot_bringup", "standard.launch.py"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        # Give nodes a moment to register before status check
+        log.info("FarmBot bringup started  pid=%s — waiting 3 s for nodes",
+                 _STATE.farmbot_process.pid)
         import time; time.sleep(3)
         return _farmbot_status()
     except FileNotFoundError:
+        log.error("Launch failed: ros2 binary not found")
         return "● FAILED — ros2 not found (source your workspace first)"
     except Exception as e:
+        log.exception("Launch failed: unexpected error")
         return f"● FAILED — {e}"
 
 
 def _stop_farmbot() -> str:
     """Terminate farmbot_bringup."""
     if _STATE.farmbot_process is not None:
+        pid = _STATE.farmbot_process.pid
+        log.warning("Stopping FarmBot bringup  pid=%s", pid)
         _STATE.farmbot_process.terminate()
         try:
             _STATE.farmbot_process.wait(timeout=5)
+            log.info("FarmBot process stopped cleanly  pid=%s", pid)
         except subprocess.TimeoutExpired:
             _STATE.farmbot_process.kill()
+            log.warning("FarmBot process killed (SIGKILL)  pid=%s", pid)
         _STATE.farmbot_process = None
         return "● OFFLINE — FarmBot stopped"
+    log.info("Stop requested but no process was running")
     return "● OFFLINE — Nothing was running"
 
 
@@ -363,32 +390,50 @@ def _process_voice(audio_path: Optional[str], step: float):
     """Transcribe → classify → execute. Returns (voice_feedback, position_status)."""
     import os, shutil
 
+    log.debug("Voice input received — path=%s", audio_path)
+
     if not audio_path:
+        log.warning("Voice: no audio path received from browser")
         return "No audio received.", _status()
 
     if not os.path.exists(audio_path):
+        log.error("Voice: audio path does not exist — %s", audio_path)
         return f"Audio file not found: {audio_path}", _status()
 
     file_kb = os.path.getsize(audio_path) / 1024
+    log.debug("Voice: audio file %.1f KB  ext=%s", file_kb,
+              os.path.splitext(audio_path)[1])
+
     if file_kb < 1:
+        log.warning("Voice: audio file too small (%.1f KB) — likely silent", file_kb)
         return f"Audio file too small ({file_kb:.1f} KB) — recording may be empty.", _status()
 
     if _STATE.transcriber is None:
+        log.error("Voice: transcriber is None — was _ensure_initialised called?")
         return "Transcriber not initialised — restart the app.", _status()
 
     if _STATE.transcriber.backend is None:
         has_ffmpeg = shutil.which("ffmpeg") is not None
+        log.error("Voice: no STT backend  ffmpeg=%s", "yes" if has_ffmpeg else "NOT FOUND")
         if not has_ffmpeg:
             return "ffmpeg not found. Run:  sudo apt install ffmpeg  then restart.", _status()
         return "No STT backend loaded. Run:  pip install faster-whisper  then restart.", _status()
 
+    log.info("Voice: transcribing  backend=%s  model=%s  file=%.1f KB",
+             _STATE.transcriber.backend, _STATE.transcriber.model_size, file_kb)
     transcript = _STATE.transcriber.transcribe(audio_path)
+
     if not transcript:
+        log.warning("Voice: transcription empty  backend=%s  file=%.1f KB",
+                    _STATE.transcriber.backend, file_kb)
         return (f"Transcription returned empty (file: {os.path.basename(audio_path)}, "
                 f"{file_kb:.1f} KB, backend: {_STATE.transcriber.backend}). "
                 "Try speaking more clearly or closer to the mic."), _status()
 
+    log.info("Voice: transcript=%r", transcript)
+
     action = _classify_voice(transcript)
+    log.info("Voice: classified as %s", action or "(no match)")
     heard = f'Heard:  "{transcript}"'
 
     dispatch = {
@@ -402,8 +447,10 @@ def _process_voice(audio_path: Optional[str], step: float):
 
     if action in dispatch:
         pos_status, label = dispatch[action]()
+        log.info("Voice: executed %s", label)
         return f"{heard}\nCommand:  {label}", pos_status
 
+    log.warning("Voice: no command matched for %r", transcript)
     return f"{heard}\nCommand:  (not understood — try again)", _status()
 
 
@@ -586,16 +633,18 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args(argv)
 
+    log.info("=== GrowMate startup  ros2=%s  whisper=%s  %s:%s ===",
+             not args.no_ros2, args.whisper, args.host, args.port)
     _ensure_initialised(ros2_enabled=not args.no_ros2, whisper_size=args.whisper)
 
     try:
         import gradio as gr
     except ImportError:
-        print("[growmate_voice] ERROR: gradio is not installed  (pip install gradio)")
+        log.critical("gradio is not installed — run: pip install gradio")
         sys.exit(1)
 
     app = build_ui()
-    print(f"[growmate_voice] Jog panel at http://{args.host}:{args.port}")
+    log.info("Jog panel at http://%s:%s  (log: %s)", args.host, args.port, log_path())
     try:
         app.launch(
             server_name=args.host,
