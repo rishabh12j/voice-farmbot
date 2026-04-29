@@ -2,13 +2,14 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>growmate_voice</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>
-    GrowMate voice controller for the AURA FarmBot ROS2 stack.
-    Drop-in replacement for keyboard_controller. Takes speech (or text), uses
-    an on-device LLM to classify intent, constructs an inspectable behaviour
-    tree, validates safety per node, and publishes the resulting commands to
-    keyboard_topic. Includes a Gradio web app for end-to-end audio control.
+    GrowMate voice + jog interface for the AURA FarmBot ROS2 stack.
+    A FastAPI web app records browser microphone input, runs offline STT,
+    matches the transcript against a fixed command vocabulary, and publishes
+    the corresponding FarmBot command strings to keyboard_topic — making it a
+    drop-in replacement for keyboard_controller. A jog d-pad and FarmBot
+    bringup controls are also exposed in the same UI.
   </description>
   <maintainer email="rishabh.jain.2025@mumail.ie">Rishabh Jain</maintainer>
   <license>MIT</license>

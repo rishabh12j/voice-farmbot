@@ -1,29 +1,30 @@
 # Runtime dependencies for the growmate_voice package.
 #
-# These are the NON-ROS2 Python deps. The ROS2 side (rclpy, std_msgs) comes
-# from your sourced ROS2 workspace — do not pip-install those.
+# Non-ROS2 Python deps. The ROS2 side (rclpy, std_msgs) comes from your
+# sourced ROS2 workspace — do not pip-install those.
 #
 # Install with:
 #   pip install -r src/growmate_voice/requirements.txt
 
-# Config parsing (also declared in package.xml as python3-yaml)
+# Config parsing
 pyyaml>=6.0
 
-# Gradio web app — needed for voice_app
-gradio>=4.0
+# Web app (FastAPI + uvicorn replaces Gradio)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
 
-# Speech-to-text for the browser mic. faster-whisper is the recommended
-# backend; it's CPU-friendly and runs acceptably on a Pi 5. If you can't
-# install it for some reason, openai-whisper is a slower fallback the code
-# will use automatically.
+# Audio handling
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12
+sounddevice>=0.4.6
+
+# STT backends — install whichever you plan to use
 faster-whisper>=1.0
+vosk>=0.3.45
+useful-moonshine-onnx>=0.1.1
 
-# Text-to-speech. pyttsx3 uses system voices on macOS / Windows / Linux.
-# On the Pi, install `piper` separately and set the PIPER_VOICE env var
-# for much better quality; the code will prefer Piper over pyttsx3.
-pyttsx3>=2.90
-
-# Optional: the legacy direct-mic listener (not used by the Gradio app).
-# Uncomment if you want voice_cli to listen on a system microphone.
-# SpeechRecognition>=3.10
-# pyaudio>=0.2.11
+# TTS backends — optional
+piper-tts>=1.2.0
+kokoro>=0.8.0

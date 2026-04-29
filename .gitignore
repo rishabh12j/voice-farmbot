@@ -1,8 +1,25 @@
-# Ignore directories
+# ROS2 build artefacts
 /build/
 /install/
 /log/
 
-# Ignore compiled Python files
+# Compiled Python
 *.pyc
 __pycache__/
+*.egg-info/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# GrowMate runtime data — do not commit (lives in ~/.growmate_voice/)
+*.log
+history.jsonl
+demo_recordings/
+
+# Local scratch
+tools/_*.yaml
+tools/_*.csv

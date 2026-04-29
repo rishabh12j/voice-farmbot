@@ -1,0 +1,576 @@
+map_reference:
+  tools:
+    T1: null
+    T2: null
+    T3: null
+    T4: null
+    T5: null
+    T6: null
+  trays: null
+  x_len: 5691.2
+  y_len: 2734.0
+  z_len: 380.08
+plant_details:
+  plant_count: 28
+  plants:
+    1:
+      identifiers:
+        index: 1
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 300.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    2:
+      identifiers:
+        index: 2
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 300.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    3:
+      identifiers:
+        index: 3
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 300.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    4:
+      identifiers:
+        index: 4
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 300.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    5:
+      identifiers:
+        index: 5
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1100.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    6:
+      identifiers:
+        index: 6
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1100.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    7:
+      identifiers:
+        index: 7
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1100.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    8:
+      identifiers:
+        index: 8
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1100.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    9:
+      identifiers:
+        index: 9
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1900.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    10:
+      identifiers:
+        index: 10
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1900.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    11:
+      identifiers:
+        index: 11
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1900.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    12:
+      identifiers:
+        index: 12
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 1900.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    13:
+      identifiers:
+        index: 13
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 2700.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    14:
+      identifiers:
+        index: 14
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 2700.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    15:
+      identifiers:
+        index: 15
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 2700.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    16:
+      identifiers:
+        index: 16
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 2700.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    17:
+      identifiers:
+        index: 17
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 3500.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    18:
+      identifiers:
+        index: 18
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 3500.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    19:
+      identifiers:
+        index: 19
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 3500.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    20:
+      identifiers:
+        index: 20
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 3500.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    21:
+      identifiers:
+        index: 21
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 4300.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    22:
+      identifiers:
+        index: 22
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 4300.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    23:
+      identifiers:
+        index: 23
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 4300.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    24:
+      identifiers:
+        index: 24
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 4300.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    25:
+      identifiers:
+        index: 25
+        plant_name: Cucumber
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 4.0
+      position:
+        x: 5100.0
+        y: 500.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    26:
+      identifiers:
+        index: 26
+        plant_name: Cucumber
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 4.0
+      position:
+        x: 5100.0
+        y: 1100.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    27:
+      identifiers:
+        index: 27
+        plant_name: Cucumber
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 4.0
+      position:
+        x: 5100.0
+        y: 1700.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    28:
+      identifiers:
+        index: 28
+        plant_name: Cucumber
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 4.0
+      position:
+        x: 5100.0
+        y: 2300.0
+        z: -290.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+  weeds: null
