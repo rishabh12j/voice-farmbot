@@ -1,0 +1,22 @@
+# Minimal Pi runtime — no torch, no GPU deps.
+# Install with:  pip install -r src/growmate_voice/requirements-pi.txt
+
+pyyaml>=6.0
+
+# Web app
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+
+# Audio I/O
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12
+sounddevice>=0.4.6
+
+# STT — faster-whisper (CTranslate2, no torch). Vosk is even lighter if you prefer.
+faster-whisper>=1.0
+# vosk>=0.3.45
+
+# TTS — Piper (ONNX, no torch). Kokoro is intentionally NOT here.
+piper-tts>=1.2.0

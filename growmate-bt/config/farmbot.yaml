@@ -6,9 +6,9 @@ robot:
   name: "GrowMate"
   model: "FarmBot Genesis XL"
   workspace:
-    x_max: 2800  # mm
-    y_max: 5800  # mm
-    z_min: -500  # mm (negative = into soil)
+    x_max: 5691.2  # mm — long axis (Genesis XL)
+    y_max: 2734.0  # mm — short axis
+    z_min: -500    # mm (negative = into soil)
     z_max: 0
 
 # Your garden - where plants are located
@@ -60,7 +60,7 @@ garden:
 
     - name: bed 3
       aliases: [bed three, third bed]
-      position: {x: 0, y: 2800, z: 0}
+      position: {x: 0, y: 2700, z: 0}   # placeholder — clamp to <2734 (Genesis XL y_max)
 
 # FarmBot ROS2 command reference (from AURA documentation)
 # The AI Core needs to know what commands exist
@@ -123,8 +123,8 @@ safety:
     - freeze
     - abort
   workspace_bounds:
-    x: [0, 2800]
-    y: [0, 5800]
+    x: [0, 5691.2]
+    y: [0, 2734.0]
     z: [-500, 0]
   dangerous_commands:
     - "P_3"  # Seeding all - resource intensive

@@ -212,9 +212,9 @@ This is the string protocol that ends up on `keyboard_topic`. It is **not** G-co
 | `I_1` / `I_2` / `I_4` | Photo / panorama / weed scan |
 
 FarmBot Genesis XL workspace bounds (defined in `config/farmbot.yaml`):
-- X: 0 to 2800 mm
-- Y: 0 to 5800 mm
-- Z: -500 to 0 mm (Z is negative downward)
+- X: 0 to 5691.2 mm  (long axis)
+- Y: 0 to 2734.0 mm  (short axis)
+- Z: -500 to 0 mm    (Z is negative downward)
 
 ---
 

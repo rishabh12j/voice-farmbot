@@ -70,7 +70,7 @@ class AppState:
 
 _STATE = AppState()
 
-_BOUNDS = {"x": (0.0, 2800.0), "y": (0.0, 5800.0), "z": (-500.0, 0.0)}
+_BOUNDS = {"x": (0.0, 5691.2), "y": (0.0, 2734.0), "z": (-500.0, 0.0)}
 _BRINGUP_NODES = ["farmbotcontroller", "mapcontroller", "devicecmdhandler"]
 _VOICE_STEP_MM = 100
 
