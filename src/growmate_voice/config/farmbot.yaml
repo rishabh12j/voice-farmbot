@@ -132,6 +132,10 @@ safety:
     - water_all
     - calibrate
 
+# Daily watering time — edit this to change when P_4 fires each day.
+schedule:
+  watering_time: "08:00"
+
 # Location context for weather and plant advice queries
 location:
   name: "Maynooth"
