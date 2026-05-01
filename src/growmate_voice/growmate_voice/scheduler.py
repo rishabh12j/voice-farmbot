@@ -64,6 +64,10 @@ _DEFAULT_CATCHUP_MIN = 30
 _DEFAULT_INTERVAL_S = 30
 _BRINGUP_CHECK_NODES = ["MapController", "FarmbotController", "DeviceCmdHandler"]
 
+# Commands that activate the water pump — substituted in --no-water test mode.
+_WATER_COMMANDS = {"P_4", "P_5", "D_W_1"}
+_WATER_SUBSTITUTE = "I_1"  # take a photo — safe, visible, confirms gantry + camera work
+
 
 # ─── schedule entry ────────────────────────────────────────────────────────
 @dataclass
@@ -220,6 +224,7 @@ def _tick(
     catchup_min: int,
     dry_run: bool,
     ros2_enabled: bool,
+    no_water: bool = False,
 ) -> None:
     state = _roll_if_new_day(state)
     fired = set(state.get("fired") or [])
@@ -258,23 +263,33 @@ def _tick(
         if sid in fired:
             continue
 
+        # Substitute water commands in test mode
+        actual_cmd = slot.command
+        if no_water and actual_cmd in _WATER_COMMANDS:
+            log.warning(
+                "Scheduler [NO-WATER] substituting %s -> %s for slot '%s'",
+                actual_cmd, _WATER_SUBSTITUTE, slot.label,
+            )
+            actual_cmd = _WATER_SUBSTITUTE
+
         if dry_run:
             log.info("Scheduler [DRY] would fire %s -> %s (%s)",
-                     slot.time_str, slot.command, slot.label)
+                     slot.time_str, actual_cmd, slot.label)
             fired.add(sid)
         else:
             log.info("Scheduler: firing %s -> %s (%s)",
-                     slot.time_str, slot.command, slot.label)
-            records = publisher.execute([slot.command])
+                     slot.time_str, actual_cmd, slot.label)
+            records = publisher.execute([actual_cmd])
             r = records[0]
             log.info("Scheduler: published %s -> %s", slot.command, r.status)
             history.append(
                 source="scheduler",
                 action=f"sched:{slot.label}",
-                emitted=[slot.command],
+                emitted=[actual_cmd],
                 status=r.status,
                 position={"x": 0, "y": 0, "z": 0},
-                note=f"{slot.time_str} {slot.command}  [{r.status}]",
+                note=f"{slot.time_str} {actual_cmd}  [{r.status}]"
+                     + (" [NO-WATER substitute]" if no_water and slot.command in _WATER_COMMANDS else ""),
             )
             fired.add(sid)
 
@@ -368,6 +383,9 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
                     help="fire a slot immediately by its id (HH:MM:CMD), e.g. '08:00:P_4'")
     ap.add_argument("--install-service", action="store_true",
                     help="print a systemd unit file for this scheduler")
+    ap.add_argument("--no-water", action="store_true",
+                    help="test mode: replace P_4/P_5/D_W_1 with I_1 (photo) "
+                         "so the scheduler runs fully but never fires the pump")
     return ap.parse_args(argv)
 
 
@@ -422,9 +440,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         log.warning("Scheduler: no slots loaded — exiting")
         return 0
 
+    if args.no_water:
+        log.warning("Scheduler: NO-WATER mode — %s will be replaced with %s",
+                    _WATER_COMMANDS, _WATER_SUBSTITUTE)
+
     log.info(
-        "Scheduler: %d slots, catchup=%dm, interval=%ds, ros2=%s, dry_run=%s",
-        len(slots), args.catchup_min, args.interval, ros2_enabled, args.dry_run,
+        "Scheduler: %d slots, catchup=%dm, interval=%ds, ros2=%s, dry_run=%s, no_water=%s",
+        len(slots), args.catchup_min, args.interval, ros2_enabled,
+        args.dry_run, args.no_water,
     )
 
     publisher = ROS2Publisher(ros2_enabled=ros2_enabled)
@@ -435,7 +458,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         while True:
             try:
                 _tick(slots, publisher, history, state,
-                      args.catchup_min, args.dry_run, ros2_enabled)
+                      args.catchup_min, args.dry_run, ros2_enabled,
+                      no_water=args.no_water)
                 state = _load_state()
             except Exception:  # noqa: BLE001
                 log.exception("Scheduler tick failed")
