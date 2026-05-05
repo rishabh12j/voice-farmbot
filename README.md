@@ -1,178 +1,304 @@
-# GrowMate fork — voice control for FarmBot ROS2
+# GrowMate — Voice Control for Agricultural Robots via Inspectable Behaviour Trees
 
-This is a fork of the [AURA FarmBot ROS2 stack](https://github.com/PetriJF/FarmBot_ROS2)
-with one additional package: **`src/growmate_voice`**, a drop-in voice
-controller that replaces `keyboard_controller` with natural-language
-speech input processed through an on-device LLM and an inspectable
-behaviour tree pipeline. Everything in the upstream repository is
-unchanged. The original README is reproduced below.
+[![ROS2](https://img.shields.io/badge/ROS2-Humble%20%7C%20Jazzy-blue)](https://docs.ros.org/en/humble/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-green)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-yellow)](LICENSE.md)
 
-**What is different about this fork:**
+GrowMate is a voice-control interface for the [FarmBot Genesis XL](https://farm.bot/)
+agricultural robot, built for elderly and disabled users who can describe what they
+want in natural language but cannot operate a keyboard or touchscreen comfortably.
 
-- `src/growmate_voice/` — new ROS2 ament-python package. Publishes to
-  the same `keyboard_topic` the existing `keyboard_controller` uses,
-  so nothing downstream of the topic needed to change.
-- Three entry points: a **Gradio web app** with browser mic, plan
-  preview, and emergency stop button (`voice_app`); a **headless
-  terminal node** that is a true drop-in for `keyboard_controller`
-  (`voice_controller`); and a **desktop CLI** that runs the same
-  pipeline in simulation mode for prompt iteration and evaluation
-  (`voice_cli`).
-- An on-device LLM (Gemma 3 4B via Ollama by default) classifies intent
-  from natural speech; deterministic Python code assembles a behaviour
-  tree from a typed node library; a BT engine executes the tree with
-  per-node safety validation before any command reaches the robot.
+This repository contains:
 
-**Quick start:**
+- **GrowMate** — the voice-control package (`src/growmate_voice/`).
+- **VoiceBT** — the underlying framework: LLM-constrained behaviour trees for
+  safe robot control.
+- **AURA FarmBot ROS2** — the upstream robot stack (`src/` except `growmate_voice/`),
+  unchanged. GrowMate is additive: it publishes to the same `keyboard_topic` the
+  existing `keyboard_controller` uses, so nothing downstream needed to change.
 
-```bash
-# Build
-colcon build --packages-select growmate_voice
-source install/setup.bash
-
-# Terminal 1 — standard FarmBot bringup (unchanged)
-ros2 launch farmbot_bringup standard.launch.py
-
-# Terminal 2 — voice app (browser mic) or headless terminal node
-ros2 run growmate_voice voice_app          # web UI on port 7860
-# or
-ros2 run growmate_voice voice_controller   # drop-in for keyboard_controller
-```
-
-Full installation instructions, prerequisites (Ollama, faster-whisper,
-TTS backends), deployment topology notes (Pi-resident vs separate
-machine), and troubleshooting are in
-**[`src/growmate_voice/README.md`](src/growmate_voice/README.md)**.
-
-This fork is part of the MSc thesis *"GrowMate: Transparent Voice-Robot
-Interaction through LLM-Constructed Behaviour Trees for Accessible
-Agricultural Robotics,"* Maynooth University, 2026.
+> MSc thesis: *"GrowMate: Transparent Voice-Robot Interaction through
+> LLM-Constructed Behaviour Trees for Accessible Agricultural Robotics"*
+> Rishabh Jain · Maynooth University · Supervisor: Dr Majid Sorouri · 2026
 
 ---
 
-# Description
+## Problem
 
-[![ROS2Humble](https://img.shields.io/badge/ROS2_Humble-Ubuntu_22.04-blue.svg)](https://docs.ros.org/en/humble/index.html)
-[![ROS2Jazzy](https://img.shields.io/badge/ROS2_Jazzy-Ubuntu_24.04-green.svg)](https://docs.python.org/3/whatsnew/3.10.html)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/license/MIT/)
+Agricultural robots like FarmBot are capable of watering, photographing, and
+tending plants autonomously — but today their interfaces assume a technically
+literate user sitting at a desktop. Elderly and disabled users, who stand to
+benefit most from autonomous gardening, are effectively locked out.
 
-This repository contains a ROS2 alternative to the Farmbot OS, which was originally written in Elixir, Lua and Python. This repository assumes you are using an unmodified version of the [Original Farmduino Firmware](https://github.com/FarmBot/farmbot-arduino-firmware). Note that there is no option within the repository yet for loading the firmware on the Farmduino (You can load it by running the original RPi software at least once with the system).
+Voice interfaces exist (Alexa, Siri) but are not designed for robot control:
 
-The codebase was tested on both ROS2 Humble (Ubuntu 22.04 - RPi 4&5) and ROS2 Jazzy (Ubuntu 24.04 - RPi 5). When preparing the environment, install the full version (not the barebones).
+- They are opaque — the user cannot see what the system understood or what it
+  is about to do.
+- End-to-end LLM pipelines hallucinate — a single wrong output can drive the
+  gantry into the bed wall or activate the pump at the wrong plant.
+- On-device 2–4 B parameter models, small enough to run on a Raspberry Pi,
+  are not reliable enough to generate structured action plans directly.
 
-Our implementation works purely from the terminal. You will need to SSH into the RPi and run 2 or 3 terminals (with the corrent ROS_DOMAIN_ID if running multiple farmbots from the same control machine). There are plans to add a user friendly GUI, but this task is currently in the backlog with low priority.
+**The gap:** a voice interface that accepts natural language, is safe to run
+unsupervised on a physical robot, and is inspectable — the user (and the
+researcher) can verify what the system will do before it does it.
 
-# Disclaimer
+---
 
-Please note that this is not a 1:1 refactoring of Farmbot OS. It contains all the tools necessary to run and utilize the main features of the Farmbots. The software was tested on the Genesis XL platform (v1.6 and v1.7), but it should work on the Express platform (needs testing).
+## Approach — VoiceBT
 
-This repository was developed in the AURA Project at Maynooth University and is a public fork of the research repository. Some features are specific to the research taking place in the project, and missing features will be added based on the priority dictated by the tasks and projects going on at the time.
+VoiceBT is the framework this project contributes. Its key architectural
+decision is to **restrict the LLM to flat intent classification** and leave all
+structural decisions to deterministic Python code.
 
-# Preparing the Environment
-
-### 1. Clone the respository
-
-Execute the following to clone the repo as a new subdirectory `/home/<yourname>/` containing the Farmbot ROS2 code base.
-``` bash
-git clone https://github.com/PetriJF/FarmBot_ROS2.git
+```
+   spoken utterance
+         |
+   STT  (faster-whisper / Moonshine / Vosk)
+         |
+   ┌─────────── LLM (Gemma 3:4b via Ollama) ─────────────┐
+   │  Flat intent classification — one JSON object only    │
+   │  { action: <FIXED_ENUM>, target: <plant|null>,        │
+   │    question: <str|null>, response: <str> }            │
+   │  The LLM never produces nested structure.             │
+   └──────────────────────────────────────────────────────┘
+         |
+   Deterministic tree builder (ai_core.py)
+   • looks up action in a typed node library
+   • prefixes every robot action with safety conditions:
+       check_available → [check_bounds] → [check_plant_found] → action
+   • tree is pure Python data, inspectable before execution
+         |
+   BT engine (bt_engine.py)
+   • executes nodes: robot_action / function_call / llm_reason / respond
+   • safety conditions can abort the tree at any node
+         |
+   ROS2 publisher → keyboard_topic → FarmBot
+         |
+   TTS confirmation (Piper / Kokoro)
 ```
 
-(OPTIONAL) And enable the submodules you might want to use.
-``` bash
-git submodule init src/X    # replace X with the package name
-git submodule update src/X  # replace X with the package name
+**Why not let the LLM generate the tree?**
+Early versions did. On-device 2–4 B models produced valid JSON tree structures
+roughly 0% of the time. Flat classification is a task these models handle
+reliably; structured recursive generation is not.
+
+**Why behaviour trees?**
+BTs are modular, inspectable, and fail-safe. Each node returns
+`SUCCESS / FAILURE / RUNNING`. A safety condition that returns `FAILURE` stops
+the entire sequence before any physical action occurs.
+
+---
+
+## Implementation
+
+### Repository layout
+
+```
+voice-farmbot/
+├── src/
+│   ├── growmate_voice/           ← GrowMate package (this work)
+│   │   ├── growmate_voice/
+│   │   │   ├── app.py            FastAPI web UI + voice pipeline
+│   │   │   ├── ai_core.py        LLM classifier + tree builder
+│   │   │   ├── bt_engine.py      BT executor
+│   │   │   ├── ros2_publisher.py keyboard_topic publisher
+│   │   │   ├── scheduler.py      Daily watering scheduler
+│   │   │   ├── history.py        Persistent command log
+│   │   │   ├── logger.py         Rotating file + console logger
+│   │   │   ├── stt_test.py       Voice-pipeline workbench (port 7870)
+│   │   │   └── edgespeech/       STT/TTS backends
+│   │   │       ├── stt/          faster-whisper · vosk · moonshine
+│   │   │       └── tts/          piper · kokoro
+│   │   └── config/
+│   │       └── farmbot.yaml      Garden map, schedule, safety bounds
+│   ├── farmbot_bringup/          ┐
+│   ├── farmbot_controllers/      │  Upstream AURA FarmBot ROS2.
+│   ├── farmbot_command_handler/  │  Unchanged. Read-only.
+│   ├── farmbot_interfaces/       │
+│   ├── map_handler/              │
+│   └── camera_handler/           ┘
+├── growmate-bt/                  Standalone BT evaluation suite
+│   ├── growmate/
+│   │   ├── ai_core.py            Same classifier, runs without ROS2
+│   │   └── bt_engine.py
+│   ├── evaluate_bt.py            29-utterance corpus evaluation
+│   └── config/farmbot.yaml
+├── tools/
+│   ├── build_active_map.py       Generate active_map.yaml from CSV / FarmBot API
+│   ├── calibrate.py              Capture real plant positions via the GrowMate UI
+│   └── active_map.from_pi.yaml   Snapshot of the Pi's CONF-generated map
+└── demo/
+    ├── presentation_leipzig.md   8-slide academic talk (VoiceBT framework)
+    ├── presentation_dundalk.md   10-slide elder-facing focus-group deck
+    ├── questionnaire.md          SUS + custom items + per-utterance log
+    └── demo_day_plan.md          Operational plan for 9 June 2026
 ```
 
-Alternatively, clone with the submodules (Optional -- these submodules represent experimental features done in the AURA team. Some submodules might be private and cannot be accessed until fully released)
-``` bash
-git clone --recurse-submodules git@github.com:PetriJF/FarmBot_ROS2.git
-```
-### 2. Set your bashrc (Optional)
+### Safety guarantees
 
-Open the bashrc file in your user's directory
+1. **Emergency stop never goes through the LLM.** The words `stop`, `halt`,
+   `emergency`, `freeze`, `abort` are string-matched before any LLM call.
+   The UI's red button calls `ROS2Publisher.emergency_stop()` directly.
+2. **Every robot action is preceded by safety nodes in code** — not by the LLM.
+   At minimum `check_available`; for movement also `check_bounds`; for
+   plant-targeted actions also `check_plant_found`. Adding an action without the
+   safety prefix is a research-claim violation, not just a bug.
+3. **`keyboard_topic` is the only ROS2 topic published to.** GrowMate is a
+   drop-in, not a fork of the control stack.
 
-``` bash
-cd ~
-ls -a
-nano .bashrc
-```
+### Evaluation
 
-Once open your terminal should look like a command editor. Go to the very end and add the following lines there:
+The framework was evaluated on a 29-utterance corpus covering single actions,
+multi-intent utterances, indirect speech, and safety triggers, using the
+Gugliermo et al. (2024) metric set:
 
-``` bash
-# ROS2 sourcing
-source /opt/ros/humble/setup.bash          # Replace humble with jazzy if that's the case
-source ~/FarmBot_ROS2/install/setup.bash
-```
+| Metric | Result |
+|---|---|
+| DBSR (Desired Behaviour Success Rate) | 96.6 % (28 / 29) |
+| SNSR (Single Node Success Rate) | 98.8 % (162 / 164) |
+| USC (Unsafe State Count) | 0 |
+| Mean end-to-end latency | 5,456 ms |
 
-Note, if you installed something in a different directory than the default ones, you will have to adapt the 3 sourcing commands
+The single DBSR miss was an indirect-speech utterance mapped to a wrong (but
+bounded, safe) action — USC stayed at zero because the safety prefix held.
 
-### 3. Install required packages
+---
 
-``` bash
-sudo apt update
-sudo apt upgrade
-```
+## Requirements
 
-**Install these if you are running on the Raspberry Pi 4 and ROS2 Humble (Assuming ROS2 Humble already installed)**
+### On the Pi (robot side)
+
+- Raspberry Pi 4 or 5, Ubuntu 22.04 / 24.04
+- ROS2 Humble or Jazzy (full install)
+- Python ≥ 3.10, venv
+- Ollama (`ollama serve`, model `gemma3:4b`)
+
 ```bash
-
-```
-**Install these if you are running on the Raspberry Pi 5 and ROS2 Jazzy (Assuming ROS2 Jazzy already installed)**
-``` bash
-sudo apt install python3-pip
-sudo apt install python3-rpi-lgpio          # Compatible GPIO Library
-## MCPC
-pip install depthai --break-system-packages # To pass by PEP 668 (externally-managed-environment)
-# Run these with the Luxonis Cameras unplugged
-echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' | sudo tee /etc/udev/rules.d/80-movidius.rules
-sudo udevadm control --reload-rules && sudo udevadm trigger
+pip install -r src/growmate_voice/requirements-pi.txt
 ```
 
+### On a dev machine (Windows / Linux, no robot)
 
-### 4. Test the workspace
+- Python ≥ 3.10, Anaconda recommended
+- Ollama installed and running locally
 
-Attempt to run the farmbot launch file, starting up all the nodes needed for it to run
+```bash
+pip install -r src/growmate_voice/requirements.txt
+```
 
-``` bash
+---
+
+## Quick start
+
+### Simulation (Windows / Linux, no robot)
+
+```bash
+cd src/growmate_voice
+python -m growmate_voice.app --no-ros2
+```
+
+Open `http://localhost:7860`. The mode tag in the header shows `simulation`.
+All commands are printed to the terminal instead of published to ROS2.
+
+### Real robot (Pi, ROS2 sourced)
+
+```bash
+# Terminal 1 — FarmBot stack
 ros2 launch farmbot_bringup standard.launch.py
+
+# Terminal 2 — GrowMate
+cd ~/voice-farmbot/src/growmate_voice
+python -m growmate_voice.app
+
+# Daily watering scheduler (optional, separate terminal)
+python -m growmate_voice.scheduler
 ```
 
-You can also run the keyboard controller in another terminal to test a command
+### Voice-pipeline workbench (iterate on STT/LLM without the robot)
 
-``` bash
-ros2 run farmbot_controllers keyboard_controller
+```bash
+python -m growmate_voice.stt_test   # opens at http://localhost:7870
 ```
 
-You can now check the High Level Controller Commands list to test the various functions of the Farmbot.
+Type or record an utterance. The workbench shows the raw transcript, the
+AICore-constructed behaviour tree in ASCII, and the FarmBot commands the tree
+would emit — without publishing anything to the robot.
 
-# How to run everything together (WIP - Subject to change)
+### Evaluate the framework
 
-Before anything else, ensure that you have the most recent commit, and you properly built the workspace.
-
-You will need a minimum of 2 terminals for each robot (3 if you want manual user control). All three terminals are explained below:
-
-### 1. The Farmbot Packages
-
-These packages include everything from the main controller to the imagine controller. This will run all the nodes needed to interpret and form the commands that communicate with the Farmduino. Also, imaging and plant management happen here as well.
-
-For running the launch file use:
-``` bash
-ros2 launch farmbot_bringup standard.launch.py
+```bash
+cd growmate-bt
+python evaluate_bt.py --model gemma3:4b --dump-trees bt_dump.txt
 ```
 
-### 2. Launch the Autonomous Command Controller
+---
 
-This is a node that sends commands to the farmbot controller at specific times set in the script. If you want to create a specific plan for watering or managing your plants, make sure to modify the python script to suit your needs.
+## Map calibration
 
-``` bash
-ros2 run farmbot_controllers keyboard_controller
+The map of plant positions lives in
+`install/map_handler/share/map_handler/config/active_map.yaml` on the Pi
+(runtime) and is authored with the tools in `tools/`.
+
+```bash
+# 1. Start the GrowMate app (app.py) in one terminal.
+# 2. In a second terminal, run the calibrator:
+python tools/calibrate.py --url http://localhost:7860
+
+# Jog the gantry over each plant in the browser, type the species name.
+# When done, build and deploy:
+python tools/build_active_map.py --mode csv --csv tools/placements.csv \
+       --out tools/active_map.yaml
+
+cp tools/active_map.yaml \
+   install/map_handler/share/map_handler/config/active_map.yaml
 ```
 
-### 3. User Command Handler (Optional)
+---
 
-If you want to send commands to the farmbot that are outside the plan you have created for your plants, you can turn on the keyboard controller. For a complete list of all the High Level commands, check the documentation.
+## Replicating this on a different robot
 
-``` bash
-ros2 run farmbot_controllers autonomous_controller
+VoiceBT is not FarmBot-specific. To adapt it:
+
+1. **Implement a publisher** — replace `ros2_publisher.py` with whatever your
+   robot's command interface is (MQTT, HTTP, serial, etc.).
+2. **Edit `ai_core.py` → `ACTIONS`** — the fixed action enum. Add or remove
+   actions to match your robot's capabilities.
+3. **Add tree builders** — add a `_tree_<action>` method in `AICore` for each
+   new action, following the canonical pattern:
+   ```python
+   def _tree_myaction(self, target, resp):
+       return {"type": "sequence", "label": "My action", "children": [
+           {"type": "condition", "name": "check_available"},
+           # add check_bounds / check_plant_found as needed
+           {"type": "robot_action", "name": "myaction", "params": {}},
+           {"type": "respond", "message": resp},
+       ]}
+   ```
+4. **Edit `config/farmbot.yaml`** — add your plant names, aliases, positions,
+   and workspace bounds.
+5. **Run `evaluate_bt.py`** with a corpus of utterances for your domain to
+   measure DBSR / SNSR / USC before deploying.
+
+The web UI (`app.py`) and BT executor (`bt_engine.py`) require no changes.
+
+---
+
+## Citing this work
+
+If you use VoiceBT or GrowMate in your research, please cite:
+
 ```
+Jain, R. (2026). GrowMate: Transparent Voice-Robot Interaction through
+LLM-Constructed Behaviour Trees for Accessible Agricultural Robotics.
+MSc Thesis, Maynooth University. Supervisor: Dr Majid Sorouri.
+```
+
+---
+
+## Upstream
+
+The robot control stack in `src/` (except `src/growmate_voice/`) is the
+[AURA FarmBot ROS2](https://github.com/PetriJF/FarmBot_ROS2) project,
+developed at Maynooth University. See `documentation/` for the upstream docs.
+GrowMate does not modify any upstream package.
