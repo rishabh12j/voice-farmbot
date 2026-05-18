@@ -51,6 +51,20 @@ from .history import History
 from .logger import log, log_path
 from .ros2_publisher import ROS2Publisher
 
+# V2: optional Pi-side dispatch. Lazy-import so app.py still runs when
+# growmate_pi isn't on PYTHONPATH (legacy V1 mode is unaffected).
+try:
+    from growmate_pi.pi_client import (
+        app_action_to_intent,
+        ping as pi_ping,
+        post_estop as pi_post_estop,
+        post_intent as pi_post_intent,
+        post_reset_estop as pi_post_reset_estop,
+    )
+    _PI_CLIENT_AVAILABLE = True
+except ImportError:
+    _PI_CLIENT_AVAILABLE = False
+
 
 # --------------------------------------------------------------------------- state
 @dataclass
@@ -66,6 +80,7 @@ class AppState:
     stt_cache: Dict[str, Any] = field(default_factory=dict)
     tts_cache: Dict[str, Any] = field(default_factory=dict)
     history: History = field(default_factory=History)
+    pi_url: Optional[str] = None  # V2: when set, the voice + button paths POST here
 
 
 _STATE = AppState()
@@ -188,7 +203,58 @@ def _do_emit(emissions: List[str], action: str, label: str, source: str = "butto
     return _position_payload(last_cmd=note)
 
 
+def _dispatch_via_pi(action: str, source: str) -> Optional[Dict[str, Any]]:
+    """Send the action to the Pi intent server as an Intent JSON POST.
+
+    Returns a position_payload-shaped dict on success, or None when this
+    action isn't yet mapped on the V2 side (caller falls back to local).
+    Estop and reset bypass the BT and hit their own endpoints.
+    """
+    if _STATE.pi_url is None or not _PI_CLIENT_AVAILABLE:
+        return None
+
+    base = _STATE.pi_url.rsplit("/intent", 1)[0]
+    try:
+        if action == "estop":
+            pi_post_estop(base)
+            note = "EMERGENCY STOP (via Pi)  [sent]"
+            _record(source, "estop", ["e"], "sent", note)
+            return _position_payload(last_cmd=note)
+
+        if action == "reset":
+            pi_post_reset_estop(base)
+            note = "E (reset, via Pi)  [sent]"
+            _record(source, "reset", ["E"], "sent", note)
+            return _position_payload(last_cmd=note)
+
+        intent = app_action_to_intent(action)
+        if intent is None:
+            return None
+
+        reply = pi_post_intent(
+            _STATE.pi_url,
+            [intent],
+            raw_text=f"(button) {action}",
+            client_id="growmate_voice.app",
+        )
+        status = "sent" if reply.status == "success" else reply.status
+        cmds = reply.commands_published or [intent.action]
+        note = f"{' | '.join(cmds)}  — {action} (via Pi)  [{status}]"
+        _record(source, action, cmds, status, note)
+        return _position_payload(last_cmd=note)
+    except Exception as exc:
+        log.warning("Pi dispatch failed for '%s': %s — falling back to local", action, exc)
+        return None
+
+
 def _execute_action(action: str, source: str) -> Dict[str, Any]:
+    # V2 path: if --pi-url is set and the client + action are wired, route
+    # to the Pi. Fall through to legacy local execution on any failure so the
+    # demo never strands the user.
+    routed = _dispatch_via_pi(action, source)
+    if routed is not None:
+        return routed
+
     if action == "estop":   return _do_estop(source)
     if action == "reset":   return _do_reset(source)
     if action == "home":    return _do_home(source)
@@ -1064,10 +1130,32 @@ def main(argv: Optional[List[str]] = None) -> None:
                         help="Simulation mode — commands printed, not published")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--pi-url",
+        default=None,
+        help=(
+            "V2: send actions to a running growmate_pi intent server "
+            "(e.g. http://localhost:8000/intent). When set, voice and "
+            "button actions POST to the Pi instead of executing locally."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    log.info("=== GrowMate startup ros2=%s %s:%s ===",
-             not args.no_ros2, args.host, args.port)
+    if args.pi_url:
+        if not _PI_CLIENT_AVAILABLE:
+            log.warning("--pi-url given but growmate_pi.pi_client not importable; "
+                        "running in legacy local mode")
+        else:
+            _STATE.pi_url = args.pi_url
+            log.info("V2 mode: dispatching to Pi at %s", args.pi_url)
+            status = pi_ping(args.pi_url.rsplit("/intent", 1)[0])
+            if status is None:
+                log.warning("Pi not reachable at %s — will retry per-request", args.pi_url)
+            else:
+                log.info("Pi ready: %s", status)
+
+    log.info("=== GrowMate startup ros2=%s pi_url=%s %s:%s ===",
+             not args.no_ros2, _STATE.pi_url, args.host, args.port)
     _ensure_initialised(ros2_enabled=not args.no_ros2)
 
     try:

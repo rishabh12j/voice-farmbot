@@ -1,0 +1,22 @@
+# Pi-side runtime deps for growmate_pi.
+#
+# Install on the Pi (or in WSL Ubuntu-22.04 for dev) with:
+#   python3 -m pip install --user -r src/growmate_pi/requirements.txt
+#
+# py_trees and py_trees_ros are NOT listed here — they ship with
+# ros-humble-py-trees / ros-humble-py-trees-ros (apt). rclpy and std_msgs
+# come from sourcing /opt/ros/humble/setup.bash.
+
+# Config
+pyyaml>=6.0
+
+# HTTP API (intent server + client calls)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.0
+httpx>=0.24
+
+# Optional: PlanSys2 mission controller is a separate ros2 launch. The Python
+# side talks to PlanSys2 services via rclpy and msg packages that come from
+#   sudo apt install ros-humble-plansys2-*
+# No pip dep is needed for the planner itself.
