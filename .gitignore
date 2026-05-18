@@ -23,3 +23,9 @@ demo_recordings/
 # Local scratch
 tools/_*.yaml
 tools/_*.csv
+tools/_*.py
+
+# Personal / academic artefacts — do not commit
+R_Jain_EE650_Project.zip
+demo/Interim_Report_*.pdf
+*.pdf
