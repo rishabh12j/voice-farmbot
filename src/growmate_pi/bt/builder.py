@@ -60,6 +60,18 @@ def _safety_and_target(
 
 
 def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    # Explicit coordinate move (jog from Windows app — absolute coords already computed)
+    if "x" in (intent.params or {}):
+        x = float(intent.params["x"])
+        y = float(intent.params.get("y", 0))
+        z = float(intent.params.get("z", 0))
+        return _seq(
+            f"Move to ({x:.0f}, {y:.0f}, {z:.0f})",
+            CheckAvailable(bridge),
+            MoveTo(bridge, x=x, y=y, z=z),
+            Respond(intent.response),
+        )
+    # Named target move (resolve plant/location from garden config)
     return _seq(
         f"Move to {intent.target}",
         *_safety_and_target(bridge, garden, intent.target),

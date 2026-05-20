@@ -61,6 +61,7 @@ try:
         post_intent as pi_post_intent,
         post_reset_estop as pi_post_reset_estop,
     )
+    from growmate_pi.schemas import Intent as PiIntent
     _PI_CLIENT_AVAILABLE = True
 except ImportError:
     _PI_CLIENT_AVAILABLE = False
@@ -225,6 +226,31 @@ def _dispatch_via_pi(action: str, source: str) -> Optional[Dict[str, Any]]:
             pi_post_reset_estop(base)
             note = "E (reset, via Pi)  [sent]"
             _record(source, "reset", ["E"], "sent", note)
+            return _position_payload(last_cmd=note)
+
+        # Jog: compute absolute target on Windows (where position state lives),
+        # then send explicit coords to Pi so it doesn't need to track position.
+        if action in {"x_plus", "x_minus", "y_plus", "y_minus", "z_plus", "z_minus"}:
+            axis, sign = action.split("_")
+            direction = +1 if sign == "plus" else -1
+            new_x = _clamp(_STATE.pos_x + (_VOICE_STEP_MM * direction if axis == "x" else 0), *_BOUNDS["x"])
+            new_y = _clamp(_STATE.pos_y + (_VOICE_STEP_MM * direction if axis == "y" else 0), *_BOUNDS["y"])
+            new_z = _clamp(_STATE.pos_z + (_VOICE_STEP_MM * direction if axis == "z" else 0), *_BOUNDS["z"])
+            _STATE.pos_x, _STATE.pos_y, _STATE.pos_z = new_x, new_y, new_z
+            label = {"x": ("RIGHT" if direction > 0 else "LEFT"),
+                     "y": ("FORWARD" if direction > 0 else "BACK"),
+                     "z": ("UP" if direction > 0 else "DOWN")}[axis]
+            intent = PiIntent(
+                action="move",
+                params={"x": new_x, "y": new_y, "z": new_z},
+                response=f"{label}.",
+            )
+            reply = pi_post_intent(_STATE.pi_url, [intent],
+                                   raw_text=f"(jog) {action}", client_id="growmate_voice.app")
+            status = "sent" if reply.status == "success" else reply.status
+            cmds = reply.commands_published or [f"M {new_x:.0f} {new_y:.0f} {new_z:.0f}"]
+            note = f"{cmds[0]}  — {label} (via Pi)  [{status}]"
+            _record(source, action, cmds, status, note)
             return _position_payload(last_cmd=note)
 
         intent = app_action_to_intent(action)
