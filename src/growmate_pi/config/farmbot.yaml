@@ -15,35 +15,38 @@ robot:
 # The AI uses this to resolve "the tomatoes" -> coordinates
 garden:
   plants:
-    - name: tomatoes
-      aliases: [the tomatoes, tomato bed, tomato plants, tomato section]
-      position: {x: 400, y: 200, z: -100}
-      water_quantity: 6  # seconds of water pulse
-      stage: growing
-
-    - name: herbs
-      aliases: [the herbs, herb garden, herb bed, herb section]
-      position: {x: 800, y: 200, z: -100}
-      water_quantity: 4
-      stage: growing
+    # Real Maynooth garden — 42 plants, positions from active_map.yaml
+    # Representative (central) plant used per type for voice targeting.
 
     - name: lettuce
-      aliases: [the lettuce, lettuce bed, salad, salad greens]
-      position: {x: 1200, y: 200, z: -100}
-      water_quantity: 5
-      stage: growing
+      aliases: [the lettuce, lettuce bed, little gem, salad, salad greens]
+      position: {x: 1850, y: 1100, z: 0}   # plant #12 of 8 Lettuce_little_gem
+      water_quantity: 2
+      stage: seedling
 
-    - name: carrots
-      aliases: [the carrots, carrot bed, carrot patch]
-      position: {x: 400, y: 1400, z: -100}
-      water_quantity: 4
-      stage: growing
+    - name: marigold
+      aliases: [the marigold, marigolds, marigold bed]
+      position: {x: 1150, y: 1150, z: 0}   # plant #3 of 6 Marigolds
+      water_quantity: 2
+      stage: seedling
 
-    - name: strawberries
-      aliases: [the strawberries, strawberry bed, berry patch, berries]
-      position: {x: 800, y: 1400, z: -100}
-      water_quantity: 5
-      stage: growing
+    - name: scallion
+      aliases: [the scallion, scallions, spring onion, spring onions]
+      position: {x: 2400, y: 1450, z: 0}   # plant #16 of 9 Scallions
+      water_quantity: 1
+      stage: seedling
+
+    - name: pepper
+      aliases: [the pepper, peppers, mixed pepper, mixed peppers, chilli]
+      position: {x: 2700, y: 1150, z: 0}   # plant #20 of 8 Mixed Peppers
+      water_quantity: 2
+      stage: seedling
+
+    - name: tomatoes
+      aliases: [the tomatoes, tomato bed, tomato plants, tomato section]
+      position: {x: 4250, y: 1150, z: 0}   # plant #34 of 11 Tomatoes
+      water_quantity: 2
+      stage: seedling
 
   locations:
     - name: home
