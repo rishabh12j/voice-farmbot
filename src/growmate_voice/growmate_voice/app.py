@@ -47,6 +47,7 @@ from .edgespeech.audio_utils import (
 from .edgespeech.command_map import COMMAND_MAP, get_tts_phrase, match_command
 from .edgespeech.stt import load_stt
 from .edgespeech.tts import load_tts
+from .ai_core import AICore
 from .history import History
 from .logger import log, log_path
 from .ros2_publisher import ROS2Publisher
@@ -82,6 +83,10 @@ class AppState:
     tts_cache: Dict[str, Any] = field(default_factory=dict)
     history: History = field(default_factory=History)
     pi_url: Optional[str] = None  # V2: when set, the voice + button paths POST here
+    aicore: Optional[AICore] = None       # V2: LLM intent classifier for natural-language
+    aicore_disabled: bool = False         # set true if Ollama unreachable, to skip retries
+    model: str = "gemma3:4b"
+    ollama_url: str = "http://localhost:11434"
 
 
 _STATE = AppState()
@@ -434,6 +439,121 @@ def api_history_clear() -> Dict[str, Any]:
     return {"removed": removed}
 
 
+# --------------------------------------------------------------------------- router
+_PLANT_HINTS = (
+    "tomato", "tomatoes", "lettuce", "marigold", "scallion",
+    "pepper", "peppers", "herbs", "carrot", "strawberr", "basil",
+    "the plants", "all plants", "everything",
+)
+_QUESTION_HINTS = ("when ", "why ", "how ", "what ", "should ", "tell ", "explain ")
+_EMERGENCY_HINTS = ("stop", "halt", "emergency", "freeze", "abort")
+
+
+def _route_transcript(transcript: str, matched_action: Optional[str],
+                      confidence: str) -> str:
+    """Decide whether to run the matched pattern or go to AICore.
+
+    Returns "pattern" or "aicore". Emergency always returns "pattern" so the
+    safety-critical path never waits for the LLM.
+    """
+    t = transcript.lower().strip()
+    if any(p in t for p in _EMERGENCY_HINTS):
+        return "pattern"
+    if any(p in t for p in _PLANT_HINTS):
+        return "aicore"
+    if any(t.startswith(q) or f" {q.strip()} " in f" {t} " for q in _QUESTION_HINTS):
+        return "aicore"
+    if matched_action is not None and confidence == "exact":
+        return "pattern"
+    return "aicore"
+
+
+def _get_aicore() -> Optional[AICore]:
+    """Lazy singleton — returns None if Ollama is unreachable."""
+    if _STATE.aicore_disabled:
+        return None
+    if _STATE.aicore is not None:
+        return _STATE.aicore
+    try:
+        # Use the Pi-side garden config so plant names match what Pi resolves.
+        from pathlib import Path
+        cfg = (Path(__file__).resolve().parents[3] / "growmate_pi" / "config" / "farmbot.yaml")
+        if not cfg.exists():
+            # fallback to local growmate_voice config
+            cfg = Path(__file__).resolve().parents[1] / "config" / "farmbot.yaml"
+        _STATE.aicore = AICore(config_path=str(cfg),
+                               model=_STATE.model, ollama_url=_STATE.ollama_url)
+        if not _STATE.aicore.is_available():
+            log.warning("Ollama not reachable at %s — AICore disabled", _STATE.ollama_url)
+            _STATE.aicore_disabled = True
+            _STATE.aicore = None
+            return None
+        log.info("AICore ready (model=%s, config=%s)", _STATE.model, cfg)
+        return _STATE.aicore
+    except Exception as exc:
+        log.warning("AICore init failed: %s — disabling", exc)
+        _STATE.aicore_disabled = True
+        return None
+
+
+def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
+    """Run the LLM classifier and dispatch the resulting intents to Pi.
+
+    Returns a position_payload-shaped dict. If anything fails (LLM down,
+    Pi unreachable, no intents), falls back to local sim mode with the
+    transcript as the last_cmd note.
+    """
+    ai = _get_aicore()
+    if ai is None:
+        _record(source, None, [], "ignored",
+                "AICore unavailable", transcript=transcript)
+        return _position_payload(last_cmd=f"(LLM unavailable for: {transcript})")
+
+    intents = ai._classify(transcript) or []
+    if not intents:
+        _record(source, None, [], "ignored",
+                "No intents from LLM", transcript=transcript)
+        return _position_payload(last_cmd=f"(LLM no intents: {transcript})")
+
+    # Build PiIntent objects from the raw classifier dicts
+    if not (_PI_CLIENT_AVAILABLE and _STATE.pi_url):
+        # No Pi configured — log and return; can't execute robot actions client-side
+        responses = " ".join(i.get("response", "") for i in intents)
+        _record(source, intents[0].get("action"), [], "simulated",
+                f"AICore (no Pi): {responses}", transcript=transcript)
+        return _position_payload(last_cmd=f"AICore -> {intents[0].get('action')} (no Pi)")
+
+    pi_intents = [
+        PiIntent(
+            action=i.get("action", "general_question"),
+            target=i.get("target"),
+            params=i.get("params", {}) or {},
+            response=i.get("response", "Done."),
+            question=i.get("question"),
+        )
+        for i in intents
+    ]
+
+    try:
+        reply = pi_post_intent(_STATE.pi_url, pi_intents,
+                               raw_text=transcript, client_id="growmate_voice.app")
+    except Exception as exc:
+        log.warning("AICore dispatch to Pi failed: %s", exc)
+        _record(source, intents[0].get("action"), [], "error",
+                f"Pi error: {exc}", transcript=transcript)
+        return _position_payload(last_cmd=f"(Pi error: {exc})")
+
+    status = "sent" if reply.status == "success" else reply.status
+    cmds = reply.commands_published or []
+    actions = ",".join(i.get("action", "?") for i in intents)
+    note = f"{' | '.join(cmds) or '(no cmds)'}  — {actions} (LLM via Pi)  [{status}]"
+    _record(source, intents[0].get("action"), cmds, status, note,
+            transcript=transcript)
+    payload = _position_payload(last_cmd=note)
+    payload["tts_text"] = reply.tts_text or " ".join(i.get("response", "") for i in intents)
+    return payload
+
+
 @app.post("/api/voice")
 async def api_voice(
     audio: UploadFile = File(...),
@@ -463,26 +583,31 @@ async def api_voice(
         pipeline_log.append(f"📝 '{transcript}' ({latency_ms:.1f} ms)")
 
         action, confidence = match_command(transcript)
-        pipeline_log.append(f"🔍 Matched: {action} ({confidence})")
+        route = _route_transcript(transcript, action, confidence)
+        pipeline_log.append(f"🔍 Pattern: {action} ({confidence})  ➜  Route: {route}")
 
-        if action is not None:
+        if route == "pattern" and action is not None:
+            # Fast path — pattern match drives the action (works for emergency,
+            # home, lights, photo, jog, generic water/photo).
             position_payload = _execute_action(action, source="voice")
-            # Augment the last history entry with transcript + confidence
             if _STATE.history._entries:
                 last = _STATE.history._entries[-1]
                 last.transcript = transcript
                 last.confidence = confidence
             pipeline_log.append(f"🤖 {position_payload['last_cmd']}")
         else:
-            position_payload = _position_payload()
-            _record("voice", None, [], "ignored",
-                    "No match", transcript=transcript, confidence=confidence)
-            pipeline_log.append("🤖 No action — command not recognised")
+            # Smart path — LLM classifies (plant-targeted, general questions,
+            # or anything pattern match couldn't handle). Falls back to ignored
+            # if Ollama or Pi is unavailable.
+            position_payload = _dispatch_via_aicore(transcript, source="voice")
+            pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
 
         tts_spoken = ""
         tts_audio_b64: Optional[str] = None
         if enable_tts.lower() == "true" and tts != "none":
-            phrase = get_tts_phrase(action)
+            # Prefer the LLM-generated response (richer + plant-specific) when
+            # we took the AICore path; otherwise use the canned pattern phrase.
+            phrase = (position_payload.get("tts_text") or "").strip() or get_tts_phrase(action)
             try:
                 tts_backend = _get_tts(tts)
                 if not tts_backend.is_available():
@@ -1165,7 +1290,14 @@ def main(argv: Optional[List[str]] = None) -> None:
             "button actions POST to the Pi instead of executing locally."
         ),
     )
+    parser.add_argument("--model", default="gemma3:4b",
+                        help="Ollama model tag for AICore (default: gemma3:4b)")
+    parser.add_argument("--ollama-url", default="http://localhost:11434",
+                        help="Ollama server URL (default: http://localhost:11434)")
     args = parser.parse_args(argv)
+
+    _STATE.model = args.model
+    _STATE.ollama_url = args.ollama_url
 
     if args.pi_url:
         if not _PI_CLIENT_AVAILABLE:
