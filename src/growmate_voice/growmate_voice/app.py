@@ -295,8 +295,10 @@ def _execute_action(action: str, source: str) -> Dict[str, Any]:
     if action == "y_minus": return _do_jog("y", -1, _VOICE_STEP_MM, source)
     if action == "z_plus":  return _do_jog("z", +1, _VOICE_STEP_MM, source)
     if action == "z_minus": return _do_jog("z", -1, _VOICE_STEP_MM, source)
-    if action == "water":   return _do_emit(["P_4"], "water", "water", source)
-    if action == "photo":   return _do_emit(["I_1"], "photo", "photo", source)
+    if action == "water":     return _do_emit(["P_4"], "water", "water", source)
+    if action == "photo":     return _do_emit(["I_1"], "photo", "photo", source)
+    if action == "light_on":  return _do_emit(["D_L_1"], "light_on", "lights on", source)
+    if action == "light_off": return _do_emit(["D_L_0"], "light_off", "lights off", source)
     return _position_payload(last_cmd=f"(unhandled action: {action})")
 
 
@@ -371,6 +373,12 @@ def index() -> str:
 def api_status() -> Dict[str, Any]:
     return {
         "ready": _STATE.ready,
+        # Top-level x/y/z for the new UI's status poll
+        "x": _STATE.pos_x,
+        "y": _STATE.pos_y,
+        "z": _STATE.pos_z,
+        "connected": _STATE.ready,
+        # Nested for the legacy UI
         "position": _position_payload(),
         "farmbot": _farmbot_status_text(),
         "ros2_enabled": _STATE.ros2_enabled,
@@ -383,7 +391,12 @@ def api_commands() -> List[Dict[str, Any]]:
 
 
 @app.post("/api/farmbot/power")
-def api_farmbot_power(action: str = Form(...)) -> Dict[str, Any]:
+def api_farmbot_power(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Accept either {action: 'on'|'off'} (legacy) or {on: true|false} (new UI)."""
+    if "on" in body:
+        action = "on" if body["on"] else "off"
+    else:
+        action = body.get("action", "")
     if action == "on":
         msg = _launch_farmbot()
         _STATE.ready = True
@@ -394,24 +407,59 @@ def api_farmbot_power(action: str = Form(...)) -> Dict[str, Any]:
         log.info("App state -> NOT READY")
     else:
         msg = _farmbot_status_text()
-    return {"farmbot": msg, "ready": _STATE.ready}
+    return {"farmbot": msg, "ready": _STATE.ready, "on": _STATE.ready, "ok": True}
+
+
+# Map the new UI's compact jog directions ("x+", "y-", ...) to (axis, sign).
+_JOG_DIR_MAP = {
+    "x+": ("x", +1), "x-": ("x", -1),
+    "y+": ("y", +1), "y-": ("y", -1),
+    "z+": ("z", +1), "z-": ("z", -1),
+}
 
 
 @app.post("/api/jog")
-def api_jog(
-    axis: str = Form(...),
-    direction: int = Form(...),
-    step: float = Form(100.0),
-) -> Dict[str, Any]:
+def api_jog(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Accept {dir: 'x+', step: 100} (new UI) or {axis, direction, step} (legacy)."""
+    if "dir" in body:
+        m = _JOG_DIR_MAP.get(body["dir"])
+        if not m:
+            return JSONResponse(status_code=400, content={"error": f"bad dir '{body['dir']}'"})
+        axis, sign = m
+        step = float(body.get("step", 100))
+    else:
+        axis = body.get("axis", "")
+        sign = 1 if int(body.get("direction", 1)) > 0 else -1
+        step = float(body.get("step", 100))
     if axis not in _BOUNDS:
         return JSONResponse(status_code=400, content={"error": f"bad axis '{axis}'"})
-    return _do_jog(axis, 1 if direction > 0 else -1, step, source="button")
+    payload = _do_jog(axis, sign, step, source="button")
+    # Hoist x/y/z to the top of the response for the new UI's renderState()
+    return {**payload, "x": _STATE.pos_x, "y": _STATE.pos_y, "z": _STATE.pos_z, "ok": True}
+
+
+# Map new UI action names to the existing _execute_action vocabulary.
+_ACTION_ALIASES = {
+    "water_all": "water",
+    "lights": "lights_toggle",  # handled below
+}
 
 
 @app.post("/api/action")
-def api_action(action: str = Form(...)) -> Dict[str, Any]:
-    """Execute a high-level action by name (home, water, photo, reset, estop)."""
-    allowed = {"home", "water", "photo", "reset", "estop"}
+def api_action(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a high-level action. Accepts JSON {action: '...'}."""
+    raw = body.get("action", "")
+    action = _ACTION_ALIASES.get(raw, raw)
+
+    if action == "lights_toggle":
+        # Track on/off locally so the UI label updates; flip state, then dispatch
+        current_on = body.get("currently_on", False)
+        next_action = "light_off" if current_on else "light_on"
+        payload = _execute_action(next_action, source="button")
+        payload["lightsOn"] = (next_action == "light_on")
+        return payload
+
+    allowed = {"home", "water", "photo", "reset", "estop", "light_on", "light_off"}
     if action not in allowed:
         return JSONResponse(status_code=400, content={"error": f"bad action '{action}'"})
     return _execute_action(action, source="button")
@@ -429,7 +477,8 @@ def api_reset() -> Dict[str, Any]:
 
 @app.get("/api/history")
 def api_history(limit: int = 50) -> Dict[str, Any]:
-    return {"entries": _STATE.history.recent(limit=limit)}
+    entries = _STATE.history.recent(limit=limit)
+    return {"entries": entries, "history": entries}
 
 
 @app.post("/api/history/clear")
