@@ -33,6 +33,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -388,6 +389,90 @@ def api_status() -> Dict[str, Any]:
 @app.get("/api/commands")
 def api_commands() -> List[Dict[str, Any]]:
     return [{"variants": v, "action": a} for v, a in COMMAND_MAP]
+
+
+# Map upstream plant_name strings to the UI's plant type keys (which control colour).
+_PLANT_TYPE_MAP = {
+    "tomato": "tomato",
+    "lettuce_little_gem": "lettuce",
+    "lettuce": "lettuce",
+    "marigold": "marigold",
+    "scallion": "scallion",
+    "spring_onion": "scallion",
+    "mixed pepper": "pepper",
+    "mixed_pepper": "pepper",
+    "pepper": "pepper",
+}
+
+
+def _active_map_path() -> Optional[Path]:
+    """Locate active_map.yaml in the repo, preferring the upstream map_handler
+    config (the canonical 42-plant layout) and falling back to the Pi copy."""
+    here = Path(__file__).resolve()
+    src_dir = here.parents[2]   # .../src/
+    candidates = [
+        src_dir / "map_handler" / "map_handler" / "config" / "active_map.yaml",
+        src_dir / "growmate_pi" / "config" / "active_map.yaml",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+@app.get("/api/plants")
+def api_plants() -> Dict[str, Any]:
+    """Return the real garden layout for the UI map.
+
+    Reads ``map_handler/config/active_map.yaml`` (the AURA-managed map with all
+    42 plants and their actual coordinates) and projects each plant into the
+    flat ``{type, x, y, name, water_quantity}`` shape the UI's renderPlants()
+    expects.
+    """
+    import yaml as _yaml
+    path = _active_map_path()
+    if path is None:
+        return {"plants": [], "source": None, "error": "active_map.yaml not found"}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _yaml.safe_load(f) or {}
+    except Exception as exc:
+        return {"plants": [], "source": str(path), "error": str(exc)}
+
+    ref = data.get("map_reference", {}) or {}
+    x_len = ref.get("x_len", 5691.2)
+    y_len = ref.get("y_len", 2734.0)
+
+    plants_raw = (data.get("plant_details", {}) or {}).get("plants", {}) or {}
+    plants_out: List[Dict[str, Any]] = []
+    for _, p in plants_raw.items():
+        idents = p.get("identifiers", {}) or {}
+        details = p.get("plant_details", {}) or {}
+        pos = p.get("position", {}) or {}
+        status = p.get("status", {}) or {}
+
+        raw_name = str(idents.get("plant_name", "Unknown"))
+        ptype = _PLANT_TYPE_MAP.get(raw_name.lower(), "lettuce")
+        # human-friendly name for the tooltip / aria-label
+        display = raw_name.replace("_", " ").title()
+        idx = idents.get("index", len(plants_out) + 1)
+
+        plants_out.append({
+            "type": ptype,
+            "x": float(pos.get("x", 0)),
+            "y": float(pos.get("y", 0)),
+            "name": f"{display} #{idx}",
+            "water_quantity": float(details.get("water_quantity", 2.0)),
+            "stage": status.get("growth_stage", ""),
+        })
+
+    plants_out.sort(key=lambda p: (p["x"], p["y"]))
+    return {
+        "plants": plants_out,
+        "count": len(plants_out),
+        "workspace": {"x_len": x_len, "y_len": y_len},
+        "source": str(path),
+    }
 
 
 @app.post("/api/farmbot/power")
@@ -1173,6 +1258,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   border-radius: 999px;
   border: 2px solid var(--moss);
   opacity: 0;
+  pointer-events: none;   /* decorative — never capture clicks from the mic */
 }
 .mic[data-state="recording"] ~ .ring,
 .mic-wrap[data-state="recording"] .ring{
@@ -2431,7 +2517,29 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     mx.forEach((x,i)=> plants.push({type:'marigold', x, y:2300, name:`Marigold ${i+1}`}));
     return plants.slice(0, 42);
   }
-  const PLANTS = buildPlants();
+  // Default to the generated 42-plant grid; replaced at runtime by
+  // fetchPlantsFromBackend() if /api/plants returns real data.
+  let PLANTS = buildPlants();
+
+  async function fetchPlantsFromBackend(){
+    try {
+      const r = await fetch('/api/plants');
+      if (!r.ok) return;
+      const data = await r.json();
+      if (Array.isArray(data?.plants) && data.plants.length > 0) {
+        PLANTS = data.plants;
+        if (data.workspace) {
+          // Resize the SVG viewBox to match the real bed (y_len wide, x_len tall — portrait)
+          const ws = data.workspace;
+          const svg = document.getElementById('mapSvg');
+          if (svg && ws.x_len && ws.y_len) {
+            svg.setAttribute('viewBox', `0 0 ${ws.y_len} ${ws.x_len}`);
+          }
+        }
+        renderPlants();
+      }
+    } catch (_) { /* keep mock data */ }
+  }
 
   const mapSvg     = $('mapSvg');
   const plantsLayer= $('plantsLayer');
@@ -2685,26 +2793,44 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
                    chunks: [], startedAt: 0, recording: false };
 
   async function startRecording() {
+    console.log('[mic] startRecording: requesting mic permission');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.error('[mic] getUserMedia not supported in this browser');
+      showToast('Mic not supported in this browser', 'warn');
+      textRow.classList.add('show');
+      textInput.focus();
+      return;
+    }
     try {
       recState.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+      console.log('[mic] permission granted');
     } catch (e) {
+      console.error('[mic] permission denied:', e);
       showToast('Microphone unavailable — try typing instead', 'warn');
       textRow.classList.add('show');
       textInput.focus();
       return;
     }
-    recState.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SR });
-    recState.source = recState.audioCtx.createMediaStreamSource(recState.stream);
-    recState.processor = recState.audioCtx.createScriptProcessor(4096, 1, 1);
-    recState.chunks = [];
-    recState.processor.onaudioprocess = (e) => {
-      recState.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    };
-    recState.source.connect(recState.processor);
-    recState.processor.connect(recState.audioCtx.destination);
-    recState.recording = true;
-    recState.startedAt = Date.now();
-    setMic('recording');
+    try {
+      recState.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SR });
+      recState.source = recState.audioCtx.createMediaStreamSource(recState.stream);
+      recState.processor = recState.audioCtx.createScriptProcessor(4096, 1, 1);
+      recState.chunks = [];
+      recState.processor.onaudioprocess = (e) => {
+        recState.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      recState.source.connect(recState.processor);
+      recState.processor.connect(recState.audioCtx.destination);
+      recState.recording = true;
+      recState.startedAt = Date.now();
+      setMic('recording');
+      console.log('[mic] recording started');
+    } catch (e) {
+      console.error('[mic] audio context setup failed:', e);
+      showToast('Audio setup failed: ' + e.message, 'warn');
+      try { recState.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      setMic('idle');
+    }
   }
 
   async function stopRecording(cancelled) {
@@ -2795,6 +2921,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   }
 
   micBtn.addEventListener('click', () => {
+    console.log('[mic] click; current state:', state.micState);
     if (state.micState === 'idle')       startRecording();
     else if (state.micState === 'recording') stopRecording();
   });
@@ -2900,6 +3027,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       state.lastAction = `Jogged ${human} 100 mm`;
       state.lastResponse = `Moved ${human}.`;
       renderState();
+      pushHistory({ said: `Jog ${human}`, did: state.lastAction, success: true });
     });
   });
 
@@ -2973,6 +3101,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   renderPlants();
   renderState();
   renderHistory();
+  fetchPlantsFromBackend();   // override with active_map.yaml plants if available
 })();
 </script>
 </body>

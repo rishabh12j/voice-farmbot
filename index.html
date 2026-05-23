@@ -410,6 +410,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   border-radius: 999px;
   border: 2px solid var(--moss);
   opacity: 0;
+  pointer-events: none;   /* decorative — never capture clicks from the mic */
 }
 .mic[data-state="recording"] ~ .ring,
 .mic-wrap[data-state="recording"] .ring{
@@ -1668,7 +1669,29 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     mx.forEach((x,i)=> plants.push({type:'marigold', x, y:2300, name:`Marigold ${i+1}`}));
     return plants.slice(0, 42);
   }
-  const PLANTS = buildPlants();
+  // Default to the generated 42-plant grid; replaced at runtime by
+  // fetchPlantsFromBackend() if /api/plants returns real data.
+  let PLANTS = buildPlants();
+
+  async function fetchPlantsFromBackend(){
+    try {
+      const r = await fetch('/api/plants');
+      if (!r.ok) return;
+      const data = await r.json();
+      if (Array.isArray(data?.plants) && data.plants.length > 0) {
+        PLANTS = data.plants;
+        if (data.workspace) {
+          // Resize the SVG viewBox to match the real bed (y_len wide, x_len tall — portrait)
+          const ws = data.workspace;
+          const svg = document.getElementById('mapSvg');
+          if (svg && ws.x_len && ws.y_len) {
+            svg.setAttribute('viewBox', `0 0 ${ws.y_len} ${ws.x_len}`);
+          }
+        }
+        renderPlants();
+      }
+    } catch (_) { /* keep mock data */ }
+  }
 
   const mapSvg     = $('mapSvg');
   const plantsLayer= $('plantsLayer');
@@ -1922,26 +1945,44 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
                    chunks: [], startedAt: 0, recording: false };
 
   async function startRecording() {
+    console.log('[mic] startRecording: requesting mic permission');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.error('[mic] getUserMedia not supported in this browser');
+      showToast('Mic not supported in this browser', 'warn');
+      textRow.classList.add('show');
+      textInput.focus();
+      return;
+    }
     try {
       recState.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+      console.log('[mic] permission granted');
     } catch (e) {
+      console.error('[mic] permission denied:', e);
       showToast('Microphone unavailable — try typing instead', 'warn');
       textRow.classList.add('show');
       textInput.focus();
       return;
     }
-    recState.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SR });
-    recState.source = recState.audioCtx.createMediaStreamSource(recState.stream);
-    recState.processor = recState.audioCtx.createScriptProcessor(4096, 1, 1);
-    recState.chunks = [];
-    recState.processor.onaudioprocess = (e) => {
-      recState.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    };
-    recState.source.connect(recState.processor);
-    recState.processor.connect(recState.audioCtx.destination);
-    recState.recording = true;
-    recState.startedAt = Date.now();
-    setMic('recording');
+    try {
+      recState.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SR });
+      recState.source = recState.audioCtx.createMediaStreamSource(recState.stream);
+      recState.processor = recState.audioCtx.createScriptProcessor(4096, 1, 1);
+      recState.chunks = [];
+      recState.processor.onaudioprocess = (e) => {
+        recState.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      recState.source.connect(recState.processor);
+      recState.processor.connect(recState.audioCtx.destination);
+      recState.recording = true;
+      recState.startedAt = Date.now();
+      setMic('recording');
+      console.log('[mic] recording started');
+    } catch (e) {
+      console.error('[mic] audio context setup failed:', e);
+      showToast('Audio setup failed: ' + e.message, 'warn');
+      try { recState.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      setMic('idle');
+    }
   }
 
   async function stopRecording(cancelled) {
@@ -2032,6 +2073,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   }
 
   micBtn.addEventListener('click', () => {
+    console.log('[mic] click; current state:', state.micState);
     if (state.micState === 'idle')       startRecording();
     else if (state.micState === 'recording') stopRecording();
   });
@@ -2137,6 +2179,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       state.lastAction = `Jogged ${human} 100 mm`;
       state.lastResponse = `Moved ${human}.`;
       renderState();
+      pushHistory({ said: `Jog ${human}`, did: state.lastAction, success: true });
     });
   });
 
@@ -2210,6 +2253,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   renderPlants();
   renderState();
   renderHistory();
+  fetchPlantsFromBackend();   // override with active_map.yaml plants if available
 })();
 </script>
 </body>
