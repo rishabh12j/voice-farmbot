@@ -54,15 +54,23 @@ import yaml
 # The defaults below match the canopy/water values found in the AURA stack's
 # CONF-generated active_map.yaml on the Pi (see tools/active_map.from_pi.yaml).
 SPECIES: Dict[str, Dict[str, float]] = {
-    # Currently planted on the demo bed (workflow C, calibrated live):
-    "Tomato":             {"canopy_radius": 30.0, "max_height": 100.0, "plant_radius": 30.0, "water_quantity": 2.0, "z": -290.0},
-    "Lettuce_little_gem": {"canopy_radius": 12.5, "max_height":  25.0, "plant_radius":  2.5, "water_quantity": 2.0, "z": -290.0},
-    "Scallion":           {"canopy_radius":  7.5, "max_height":  30.0, "plant_radius":  2.5, "water_quantity": 1.0, "z": -290.0},
+    # ── Edibles ────────────────────────────────────────────────────────────
+    "Tomato":             {"canopy_radius": 30.0, "max_height": 100.0, "plant_radius": 30.0, "water_quantity": 5.0, "z": -290.0},
+    "Lettuce_little_gem": {"canopy_radius": 12.5, "max_height":  25.0, "plant_radius":  2.5, "water_quantity": 5.0, "z": -290.0},
+    "Scallion":           {"canopy_radius":  7.5, "max_height":  30.0, "plant_radius":  2.5, "water_quantity": 2.0, "z": -290.0},
+    "Mixed Pepper":       {"canopy_radius": 22.5, "max_height":  75.0, "plant_radius":  2.5, "water_quantity": 3.0, "z": -290.0},
+    # ── Herbs ──────────────────────────────────────────────────────────────
+    "Basil":              {"canopy_radius": 12.0, "max_height":  35.0, "plant_radius":  3.0, "water_quantity": 2.0, "z": -290.0},
+    "Spearmint":          {"canopy_radius": 15.0, "max_height":  50.0, "plant_radius":  3.0, "water_quantity": 2.0, "z": -290.0},
+    # ── Companion + ornamental flowers ────────────────────────────────────
     "Marigold":           {"canopy_radius": 12.5, "max_height":  20.0, "plant_radius":  2.5, "water_quantity": 2.0, "z": -290.0},
-    "Mixed Pepper":       {"canopy_radius": 22.5, "max_height":  75.0, "plant_radius":  2.5, "water_quantity": 2.0, "z": -290.0},
-    # Other species kept around for reference / past plantings:
-    "Cucumber":           {"canopy_radius": 30.0, "max_height": 100.0, "plant_radius": 30.0, "water_quantity": 4.0, "z": -290.0},
-    "Snack Pepper":       {"canopy_radius": 22.5, "max_height":  75.0, "plant_radius":  2.5, "water_quantity": 2.0, "z": -250.0},
+    "Lily":               {"canopy_radius": 20.0, "max_height":  80.0, "plant_radius":  3.0, "water_quantity": 3.0, "z": -290.0},
+    "Geranium":           {"canopy_radius": 25.0, "max_height":  40.0, "plant_radius":  4.0, "water_quantity": 2.0, "z": -290.0},
+    "Cardinal Flower":    {"canopy_radius": 15.0, "max_height":  80.0, "plant_radius":  3.0, "water_quantity": 4.0, "z": -290.0},
+    "Dianthus":           {"canopy_radius": 15.0, "max_height":  20.0, "plant_radius":  2.5, "water_quantity": 2.0, "z": -290.0},
+    "Euonymus":           {"canopy_radius": 40.0, "max_height": 100.0, "plant_radius": 10.0, "water_quantity": 4.0, "z": -290.0},
+    "Petunia":            {"canopy_radius": 20.0, "max_height":  25.0, "plant_radius":  3.0, "water_quantity": 2.0, "z": -290.0},
+    "Begonia":            {"canopy_radius": 20.0, "max_height":  30.0, "plant_radius":  3.0, "water_quantity": 2.0, "z": -290.0},
 }
 
 
@@ -80,14 +88,33 @@ PLACEMENTS: List[Tuple] = [
 # For FarmBot pull: translate openfarm_slug → species name used in SPECIES.
 # Anything not in this map is skipped.
 SLUG_TO_SPECIES: Dict[str, str] = {
+    # Edibles
     "scallion":           "Scallion",
     "green-onion":        "Scallion",
+    "spring-onion":       "Scallion",
     "lettuce-little-gem": "Lettuce_little_gem",
     "lettuce":            "Lettuce_little_gem",
-    "pepper-snack":       "Snack Pepper",
-    "snack-pepper":       "Snack Pepper",
     "tomato":             "Tomato",
+    "pepper":             "Mixed Pepper",
+    "mixed-pepper":       "Mixed Pepper",
+    # Herbs
+    "basil":              "Basil",
+    "spearmint":          "Spearmint",
+    "mint":               "Spearmint",
+    # Flowers
     "marigold":           "Marigold",
+    "lily":               "Lily",
+    "asiatic-lily":       "Lily",
+    "geranium":           "Geranium",
+    "pelargonium":        "Geranium",
+    "cardinal-flower":    "Cardinal Flower",
+    "lobelia-cardinalis": "Cardinal Flower",
+    "dianthus":           "Dianthus",
+    "carnation":          "Dianthus",
+    "sweet-william":      "Dianthus",
+    "euonymus":           "Euonymus",
+    "petunia":            "Petunia",
+    "begonia":            "Begonia",
 }
 
 

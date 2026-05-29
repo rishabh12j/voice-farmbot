@@ -48,6 +48,62 @@ garden:
       water_quantity: 2
       stage: seedling
 
+    # Herbs — placeholders, refine x/y once they're planted
+    - name: basil
+      aliases: [the basil, basil pot, basil patch]
+      position: {x: 1500, y: 800, z: 0}
+      water_quantity: 2
+      stage: seedling
+
+    - name: spearmint
+      aliases: [the spearmint, spearmint, mint, the mint]
+      position: {x: 1500, y: 1200, z: 0}
+      water_quantity: 2
+      stage: seedling
+
+    # Ornamental flowers — placeholders, update after planting
+    - name: lily
+      aliases: [the lily, lilies, the lilies, asiatic lily]
+      position: {x: 3500, y: 400, z: 0}
+      water_quantity: 3
+      stage: seedling
+
+    - name: geranium
+      aliases: [the geranium, geraniums, the geraniums, pelargonium]
+      position: {x: 3500, y: 800, z: 0}
+      water_quantity: 2
+      stage: seedling
+
+    - name: cardinal flower
+      aliases: [cardinal flowers, the cardinal flower, cardinal, lobelia]
+      position: {x: 3500, y: 1200, z: 0}
+      water_quantity: 4
+      stage: seedling
+
+    - name: dianthus
+      aliases: [the dianthus, dianthuses, carnation, sweet william]
+      position: {x: 3500, y: 1600, z: 0}
+      water_quantity: 2
+      stage: seedling
+
+    - name: euonymus
+      aliases: [the euonymus, euonymus shrub, the shrub]
+      position: {x: 5200, y: 2400, z: 0}
+      water_quantity: 4
+      stage: seedling
+
+    - name: petunia
+      aliases: [the petunia, petunias, the petunias]
+      position: {x: 3500, y: 2000, z: 0}
+      water_quantity: 2
+      stage: seedling
+
+    - name: begonia
+      aliases: [the begonia, begonias, the begonias]
+      position: {x: 3500, y: 2400, z: 0}
+      water_quantity: 2
+      stage: seedling
+
   locations:
     - name: home
       aliases: [home position, start, origin, starting position]

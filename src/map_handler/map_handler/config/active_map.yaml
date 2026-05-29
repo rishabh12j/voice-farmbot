@@ -11,21 +11,21 @@ map_reference:
   y_len: 2734.0
   z_len: 380.08
 plant_details:
-  plant_count: 42
+  plant_count: 54
   plants:
     1:
       identifiers:
         index: 1
-        plant_name: Lettuce_little_gem
+        plant_name: Spearmint
       plant_details:
-        canopy_radius: 12.5
-        max_height: 25.0
-        plant_radius: 2.5
+        canopy_radius: 15.0
+        max_height: 50.0
+        plant_radius: 3.0
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1100.0
-        y: 400.0
+        x: 650.0
+        y: 470.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -36,15 +36,15 @@ plant_details:
     2:
       identifiers:
         index: 2
-        plant_name: Marigold
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 12.5
-        max_height: 20.0
+        canopy_radius: 7.5
+        max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1150.0
+        x: 650.0
         y: 750.0
         z: 0.0
       status:
@@ -56,16 +56,16 @@ plant_details:
     3:
       identifiers:
         index: 3
-        plant_name: Marigold
+        plant_name: Spearmint
       plant_details:
-        canopy_radius: 12.5
-        max_height: 20.0
-        plant_radius: 2.5
+        canopy_radius: 15.0
+        max_height: 50.0
+        plant_radius: 3.0
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1150.0
-        y: 1150.0
+        x: 650.0
+        y: 1050.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -76,16 +76,16 @@ plant_details:
     4:
       identifiers:
         index: 4
-        plant_name: Marigold
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 12.5
-        max_height: 20.0
+        canopy_radius: 7.5
+        max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1150.0
-        y: 1600.0
+        x: 650.0
+        y: 1450.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -96,15 +96,15 @@ plant_details:
     5:
       identifiers:
         index: 5
-        plant_name: Marigold
+        plant_name: Spearmint
       plant_details:
-        canopy_radius: 12.5
-        max_height: 20.0
-        plant_radius: 2.5
+        canopy_radius: 15.0
+        max_height: 50.0
+        plant_radius: 3.0
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1150.0
+        x: 650.0
         y: 1850.0
         z: 0.0
       status:
@@ -116,16 +116,16 @@ plant_details:
     6:
       identifiers:
         index: 6
-        plant_name: Marigold
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 12.5
-        max_height: 20.0
+        canopy_radius: 7.5
+        max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1150.0
-        y: 2050.0
+        x: 650.0
+        y: 2350.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -144,8 +144,8 @@ plant_details:
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1100.0
-        y: 2400.0
+        x: 1150.0
+        y: 2340.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -156,16 +156,16 @@ plant_details:
     8:
       identifiers:
         index: 8
-        plant_name: Lettuce_little_gem
+        plant_name: Marigold
       plant_details:
         canopy_radius: 12.5
-        max_height: 25.0
+        max_height: 20.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1850.0
-        y: 2400.0
+        x: 1150.0
+        y: 2120.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -176,16 +176,16 @@ plant_details:
     9:
       identifiers:
         index: 9
-        plant_name: Lettuce_little_gem
+        plant_name: Marigold
       plant_details:
         canopy_radius: 12.5
-        max_height: 25.0
+        max_height: 20.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1850.0
-        y: 2050.0
+        x: 1150.0
+        y: 1870.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -196,16 +196,16 @@ plant_details:
     10:
       identifiers:
         index: 10
-        plant_name: Lettuce_little_gem
+        plant_name: Marigold
       plant_details:
         canopy_radius: 12.5
-        max_height: 25.0
+        max_height: 20.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1850.0
-        y: 1750.0
+        x: 1150.0
+        y: 1470.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -216,16 +216,16 @@ plant_details:
     11:
       identifiers:
         index: 11
-        plant_name: Lettuce_little_gem
+        plant_name: Marigold
       plant_details:
         canopy_radius: 12.5
-        max_height: 25.0
+        max_height: 20.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1850.0
-        y: 1400.0
+        x: 1150.0
+        y: 1140.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -236,16 +236,16 @@ plant_details:
     12:
       identifiers:
         index: 12
-        plant_name: Lettuce_little_gem
+        plant_name: Marigold
       plant_details:
         canopy_radius: 12.5
-        max_height: 25.0
+        max_height: 20.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 1850.0
-        y: 1100.0
+        x: 1150.0
+        y: 790.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -262,10 +262,10 @@ plant_details:
         max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 5.0
       position:
-        x: 1850.0
-        y: 800.0
+        x: 1150.0
+        y: 420.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -282,10 +282,10 @@ plant_details:
         max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 5.0
       position:
-        x: 1850.0
-        y: 550.0
+        x: 1800.0
+        y: 520.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -296,16 +296,16 @@ plant_details:
     15:
       identifiers:
         index: 15
-        plant_name: Scallion
+        plant_name: Lettuce_little_gem
       plant_details:
-        canopy_radius: 7.5
-        max_height: 30.0
+        canopy_radius: 12.5
+        max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 5.0
       position:
-        x: 2450.0
-        y: 800.0
+        x: 1800.0
+        y: 820.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -316,16 +316,16 @@ plant_details:
     16:
       identifiers:
         index: 16
-        plant_name: Scallion
+        plant_name: Lettuce_little_gem
       plant_details:
-        canopy_radius: 7.5
-        max_height: 30.0
+        canopy_radius: 12.5
+        max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 5.0
       position:
-        x: 2400.0
-        y: 1450.0
+        x: 1800.0
+        y: 1120.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -336,16 +336,16 @@ plant_details:
     17:
       identifiers:
         index: 17
-        plant_name: Scallion
+        plant_name: Lettuce_little_gem
       plant_details:
-        canopy_radius: 7.5
-        max_height: 30.0
+        canopy_radius: 12.5
+        max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 5.0
       position:
-        x: 2350.0
-        y: 2100.0
+        x: 1800.0
+        y: 1420.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -356,16 +356,16 @@ plant_details:
     18:
       identifiers:
         index: 18
-        plant_name: Mixed Pepper
+        plant_name: Lettuce_little_gem
       plant_details:
-        canopy_radius: 22.5
-        max_height: 75.0
+        canopy_radius: 12.5
+        max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 5.0
       position:
-        x: 2700.0
-        y: 2350.0
+        x: 1800.0
+        y: 1770.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -376,16 +376,16 @@ plant_details:
     19:
       identifiers:
         index: 19
-        plant_name: Mixed Pepper
+        plant_name: Lettuce_little_gem
       plant_details:
-        canopy_radius: 22.5
-        max_height: 75.0
+        canopy_radius: 12.5
+        max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 5.0
       position:
-        x: 2700.0
-        y: 1750.0
+        x: 1800.0
+        y: 2020.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -396,16 +396,16 @@ plant_details:
     20:
       identifiers:
         index: 20
-        plant_name: Mixed Pepper
+        plant_name: Lettuce_little_gem
       plant_details:
-        canopy_radius: 22.5
-        max_height: 75.0
+        canopy_radius: 12.5
+        max_height: 25.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 5.0
       position:
-        x: 2700.0
-        y: 1150.0
+        x: 1800.0
+        y: 2370.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -416,16 +416,16 @@ plant_details:
     21:
       identifiers:
         index: 21
-        plant_name: Mixed Pepper
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 22.5
-        max_height: 75.0
+        canopy_radius: 7.5
+        max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 2700.0
-        y: 450.0
+        x: 2300.0
+        y: 2550.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -442,10 +442,10 @@ plant_details:
         max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 2.0
       position:
-        x: 3100.0
-        y: 800.0
+        x: 2300.0
+        y: 2140.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -462,10 +462,10 @@ plant_details:
         max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 2.0
       position:
-        x: 3100.0
-        y: 1350.0
+        x: 2300.0
+        y: 1440.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -482,10 +482,10 @@ plant_details:
         max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 2.0
       position:
-        x: 3100.0
-        y: 2050.0
+        x: 2450.0
+        y: 740.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -496,16 +496,16 @@ plant_details:
     25:
       identifiers:
         index: 25
-        plant_name: Mixed Pepper
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 22.5
-        max_height: 75.0
+        canopy_radius: 7.5
+        max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 3450.0
-        y: 2350.0
+        x: 2420.0
+        y: 300.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -522,10 +522,10 @@ plant_details:
         max_height: 75.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 3450.0
-        y: 1750.0
+        x: 2720.0
+        y: 500.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -542,10 +542,10 @@ plant_details:
         max_height: 75.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 3450.0
-        y: 1150.0
+        x: 2720.0
+        y: 1200.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -562,10 +562,10 @@ plant_details:
         max_height: 75.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 3450.0
-        y: 450.0
+        x: 2720.0
+        y: 1750.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -576,16 +576,16 @@ plant_details:
     29:
       identifiers:
         index: 29
-        plant_name: Scallion
+        plant_name: Mixed Pepper
       plant_details:
-        canopy_radius: 7.5
-        max_height: 30.0
+        canopy_radius: 22.5
+        max_height: 75.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 3.0
       position:
-        x: 3850.0
-        y: 950.0
+        x: 2720.0
+        y: 2350.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -602,10 +602,10 @@ plant_details:
         max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 2.0
       position:
-        x: 3850.0
-        y: 1450.0
+        x: 3120.0
+        y: 2650.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -622,10 +622,10 @@ plant_details:
         max_height: 30.0
         plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 1.0
+        water_quantity: 2.0
       position:
-        x: 3850.0
-        y: 2100.0
+        x: 3120.0
+        y: 2050.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -636,16 +636,16 @@ plant_details:
     32:
       identifiers:
         index: 32
-        plant_name: Tomato
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 4300.0
-        y: 2350.0
+        x: 3120.0
+        y: 1350.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -656,16 +656,16 @@ plant_details:
     33:
       identifiers:
         index: 33
-        plant_name: Tomato
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 4250.0
-        y: 1850.0
+        x: 3120.0
+        y: 800.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -676,16 +676,16 @@ plant_details:
     34:
       identifiers:
         index: 34
-        plant_name: Tomato
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 4250.0
-        y: 1150.0
+        x: 3100.0
+        y: 270.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -696,16 +696,16 @@ plant_details:
     35:
       identifiers:
         index: 35
-        plant_name: Tomato
+        plant_name: Mixed Pepper
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 22.5
+        max_height: 75.0
+        plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 4250.0
-        y: 550.0
+        x: 3550.0
+        y: 500.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -716,16 +716,16 @@ plant_details:
     36:
       identifiers:
         index: 36
-        plant_name: Tomato
+        plant_name: Mixed Pepper
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 22.5
+        max_height: 75.0
+        plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 4750.0
-        y: 950.0
+        x: 3500.0
+        y: 1120.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -736,16 +736,16 @@ plant_details:
     37:
       identifiers:
         index: 37
-        plant_name: Tomato
+        plant_name: Mixed Pepper
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 22.5
+        max_height: 75.0
+        plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 4700.0
-        y: 1550.0
+        x: 3500.0
+        y: 1770.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -756,16 +756,16 @@ plant_details:
     38:
       identifiers:
         index: 38
-        plant_name: Tomato
+        plant_name: Mixed Pepper
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 22.5
+        max_height: 75.0
+        plant_radius: 2.5
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 3.0
       position:
-        x: 4700.0
-        y: 2150.0
+        x: 3500.0
+        y: 2330.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -776,16 +776,16 @@ plant_details:
     39:
       identifiers:
         index: 39
-        plant_name: Tomato
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 5050.0
-        y: 2300.0
+        x: 3800.0
+        y: 2620.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -796,16 +796,16 @@ plant_details:
     40:
       identifiers:
         index: 40
-        plant_name: Tomato
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 5050.0
-        y: 1750.0
+        x: 3800.0
+        y: 2120.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -816,16 +816,16 @@ plant_details:
     41:
       identifiers:
         index: 41
-        plant_name: Tomato
+        plant_name: Scallion
       plant_details:
-        canopy_radius: 30.0
-        max_height: 100.0
-        plant_radius: 30.0
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
         soil_moisture: 0.0
         water_quantity: 2.0
       position:
-        x: 5100.0
-        y: 1150.0
+        x: 3890.0
+        y: 1470.0
         z: 0.0
       status:
         growth_stage: Seedling
@@ -836,16 +836,256 @@ plant_details:
     42:
       identifiers:
         index: 42
+        plant_name: Scallion
+      plant_details:
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 3890.0
+        y: 1470.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    43:
+      identifiers:
+        index: 43
+        plant_name: Scallion
+      plant_details:
+        canopy_radius: 7.5
+        max_height: 30.0
+        plant_radius: 2.5
+        soil_moisture: 0.0
+        water_quantity: 2.0
+      position:
+        x: 3890.0
+        y: 340.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    44:
+      identifiers:
+        index: 44
         plant_name: Tomato
       plant_details:
         canopy_radius: 30.0
         max_height: 100.0
         plant_radius: 30.0
         soil_moisture: 0.0
-        water_quantity: 2.0
+        water_quantity: 5.0
       position:
-        x: 5050.0
-        y: 550.0
+        x: 4340.0
+        y: 540.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    45:
+      identifiers:
+        index: 45
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 4340.0
+        y: 1170.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    46:
+      identifiers:
+        index: 46
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 4240.0
+        y: 1810.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    47:
+      identifiers:
+        index: 47
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 4240.0
+        y: 2360.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    48:
+      identifiers:
+        index: 48
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 4690.0
+        y: 2130.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    49:
+      identifiers:
+        index: 49
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 4690.0
+        y: 1530.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    50:
+      identifiers:
+        index: 50
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 4690.0
+        y: 900.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    51:
+      identifiers:
+        index: 51
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 5090.0
+        y: 520.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    52:
+      identifiers:
+        index: 52
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 5090.0
+        y: 1150.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    53:
+      identifiers:
+        index: 53
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 5090.0
+        y: 1750.0
+        z: 0.0
+      status:
+        growth_stage: Seedling
+        plant_date:
+          day: 0
+          month: 0
+          year: 0
+    54:
+      identifiers:
+        index: 54
+        plant_name: Tomato
+      plant_details:
+        canopy_radius: 30.0
+        max_height: 100.0
+        plant_radius: 30.0
+        soil_moisture: 0.0
+        water_quantity: 5.0
+      position:
+        x: 5090.0
+        y: 2310.0
         z: 0.0
       status:
         growth_stage: Seedling
