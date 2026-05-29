@@ -591,12 +591,13 @@ def api_action(body: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.post("/api/estop")
 def api_estop() -> Dict[str, Any]:
-    return _do_estop(source="button")
+    # Route through _execute_action so /estop on the Pi gets hit when --pi-url is set
+    return _execute_action("estop", source="button")
 
 
 @app.post("/api/reset")
 def api_reset() -> Dict[str, Any]:
-    return _do_reset(source="button")
+    return _execute_action("reset", source="button")
 
 
 @app.get("/api/history")
