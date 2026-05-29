@@ -88,6 +88,7 @@ class AppState:
     aicore_disabled: bool = False         # set true if Ollama unreachable, to skip retries
     model: str = "gemma3:4b"
     ollama_url: str = "http://localhost:11434"
+    lights_on: bool = False               # tracked so the "lights" toggle flips correctly
 
 
 _STATE = AppState()
@@ -567,12 +568,20 @@ def api_action(body: Dict[str, Any]) -> Dict[str, Any]:
     action = _ACTION_ALIASES.get(raw, raw)
 
     if action == "lights_toggle":
-        # Track on/off locally so the UI label updates; flip state, then dispatch
-        current_on = body.get("currently_on", False)
-        next_action = "light_off" if current_on else "light_on"
+        # Toggle server-side state — the UI doesn't have to know what was last.
+        # Allow override via {currently_on: bool} if the client knows better
+        # (e.g. after a manual D_L_0/D_L_1 from keyboard_controller).
+        if "currently_on" in body:
+            _STATE.lights_on = bool(body["currently_on"])
+        next_action = "light_off" if _STATE.lights_on else "light_on"
         payload = _execute_action(next_action, source="button")
-        payload["lightsOn"] = (next_action == "light_on")
+        _STATE.lights_on = (next_action == "light_on")
+        payload["lightsOn"] = _STATE.lights_on
         return payload
+
+    # Keep server state in sync when the UI uses explicit light_on / light_off
+    if action == "light_on":  _STATE.lights_on = True
+    if action == "light_off": _STATE.lights_on = False
 
     allowed = {"home", "water", "photo", "reset", "estop", "light_on", "light_off"}
     if action not in allowed:
