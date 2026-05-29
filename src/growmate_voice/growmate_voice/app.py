@@ -393,15 +393,34 @@ def api_commands() -> List[Dict[str, Any]]:
 
 # Map upstream plant_name strings to the UI's plant type keys (which control colour).
 _PLANT_TYPE_MAP = {
-    "tomato": "tomato",
+    # Edibles
+    "tomato":             "tomato",
     "lettuce_little_gem": "lettuce",
-    "lettuce": "lettuce",
-    "marigold": "marigold",
-    "scallion": "scallion",
-    "spring_onion": "scallion",
-    "mixed pepper": "pepper",
-    "mixed_pepper": "pepper",
-    "pepper": "pepper",
+    "lettuce":            "lettuce",
+    "scallion":           "scallion",
+    "spring_onion":       "scallion",
+    "green_onion":        "scallion",
+    "mixed pepper":       "pepper",
+    "mixed_pepper":       "pepper",
+    "pepper":             "pepper",
+    # Herbs
+    "basil":              "basil",
+    "spearmint":          "spearmint",
+    "mint":               "spearmint",
+    # Flowers
+    "marigold":           "marigold",
+    "lily":               "lily",
+    "asiatic_lily":       "lily",
+    "geranium":           "geranium",
+    "pelargonium":        "geranium",
+    "cardinal flower":    "cardinal",
+    "cardinal_flower":    "cardinal",
+    "dianthus":           "dianthus",
+    "carnation":          "dianthus",
+    "sweet_william":      "dianthus",
+    "euonymus":           "euonymus",
+    "petunia":            "petunia",
+    "begonia":            "begonia",
 }
 
 
@@ -505,21 +524,23 @@ _JOG_DIR_MAP = {
 
 @app.post("/api/jog")
 def api_jog(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Accept {dir: 'x+', step: 100} (new UI) or {axis, direction, step} (legacy)."""
+    """Accept {dir: 'x+', step: 100} (new UI) or {axis, direction, step} (legacy).
+
+    Routes through _execute_action so the same Pi-dispatch path is used for
+    voice + buttons + jog. Custom step is ignored (uses _VOICE_STEP_MM).
+    """
     if "dir" in body:
         m = _JOG_DIR_MAP.get(body["dir"])
         if not m:
             return JSONResponse(status_code=400, content={"error": f"bad dir '{body['dir']}'"})
         axis, sign = m
-        step = float(body.get("step", 100))
     else:
         axis = body.get("axis", "")
         sign = 1 if int(body.get("direction", 1)) > 0 else -1
-        step = float(body.get("step", 100))
     if axis not in _BOUNDS:
         return JSONResponse(status_code=400, content={"error": f"bad axis '{axis}'"})
-    payload = _do_jog(axis, sign, step, source="button")
-    # Hoist x/y/z to the top of the response for the new UI's renderState()
+    action_name = f"{axis}_{'plus' if sign > 0 else 'minus'}"
+    payload = _execute_action(action_name, source="button")
     return {**payload, "x": _STATE.pos_x, "y": _STATE.pos_y, "z": _STATE.pos_z, "ok": True}
 
 
@@ -2492,11 +2513,23 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   // ----- Garden map -----
   // FarmBot Genesis XL bed: 5700 mm × 2700 mm. 42 plants.
   const PLANT_COLORS = {
-    tomato:   '#c1392b',
-    lettuce:  '#88b04b',
-    scallion: '#4a7c59',
-    pepper:   '#e08e3a',
-    marigold: '#f0b323',
+    // Edibles
+    tomato:    '#c1392b',
+    lettuce:   '#88b04b',
+    scallion:  '#4a7c59',
+    pepper:    '#e08e3a',
+    // Herbs
+    basil:     '#3f7d44',
+    spearmint: '#5fa66b',
+    // Flowers
+    marigold:  '#f0b323',
+    lily:      '#f4e2d8',
+    geranium:  '#d34a5e',
+    cardinal:  '#b71c1c',
+    dianthus:  '#e882a4',
+    euonymus:  '#6b8e23',
+    petunia:   '#8e4585',
+    begonia:   '#e85d4a',
   };
   // Generate 42 plant positions. Padding from edges, 5 rows x ~varying cols.
   function buildPlants(){

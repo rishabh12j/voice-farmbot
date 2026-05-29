@@ -58,6 +58,10 @@ def app_action_to_intent(action: str) -> Optional[Intent]:
         return Intent(action="water_all", response="Watering all plants.")
     if action == "photo":
         return Intent(action="photo", response="Taking a photo.")
+    if action == "light_on":
+        return Intent(action="light_on", response="Lights on.")
+    if action == "light_off":
+        return Intent(action="light_off", response="Lights off.")
     if action in {"x_plus", "x_minus", "y_plus", "y_minus", "z_plus", "z_minus"}:
         axis, sign = action.split("_")
         return Intent(
