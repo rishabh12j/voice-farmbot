@@ -757,6 +757,41 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 }
 @media (max-width: 480px){ .jog-wrap{ grid-template-columns: 1fr; }}
 
+.step-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.step-row .step-label{
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-right: 4px;
+}
+.step-btn{
+  min-height: var(--tap);
+  padding: 0 16px;
+  border-radius: var(--radius-m);
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .12s ease;
+}
+.step-btn:hover{ background: var(--cream-deep); }
+.step-btn[aria-checked="true"]{
+  background: var(--moss);
+  color: #fff;
+  border-color: var(--moss-deep);
+  box-shadow: var(--shadow-s);
+}
+.step-btn:focus-visible{ outline: none; box-shadow: var(--focus); }
+
 .dpad{
   display: grid;
   grid-template-columns: repeat(3, 64px);
@@ -1339,6 +1374,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
         <!-- Manual view -->
         <div class="qa-view qa-view-manual" hidden>
+          <div class="step-row" role="radiogroup" aria-label="Step size for each move">
+            <span class="step-label">Step:</span>
+            <button class="step-btn" data-step="10"  role="radio" aria-checked="false">10 mm</button>
+            <button class="step-btn" data-step="50"  role="radio" aria-checked="false">50 mm</button>
+            <button class="step-btn" data-step="100" role="radio" aria-checked="true">100 mm</button>
+            <button class="step-btn" data-step="500" role="radio" aria-checked="false">500 mm</button>
+          </div>
           <div class="jog-wrap">
             <div class="dpad" role="group" aria-label="Move robot along the bed">
               <button class="jog-btn up" data-jog="y+" aria-label="Move forward (y plus)">
@@ -1468,6 +1510,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     micState: 'idle',          // idle | recording | processing
     history: [],
     chimeEnabled: true,
+    jogStep: 100,             // mm — selected step size for manual moves
   };
 
   // ----- dom refs -----
@@ -1644,11 +1687,23 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   // ----- Garden map -----
   // FarmBot Genesis XL bed: 5700 mm × 2700 mm. 42 plants.
   const PLANT_COLORS = {
-    tomato:   '#c1392b',
-    lettuce:  '#88b04b',
-    scallion: '#4a7c59',
-    pepper:   '#e08e3a',
-    marigold: '#f0b323',
+    // Edibles
+    tomato:    '#c1392b',
+    lettuce:   '#88b04b',
+    scallion:  '#4a7c59',
+    pepper:    '#e08e3a',
+    // Herbs
+    basil:     '#3f7d44',
+    spearmint: '#5fa66b',
+    // Flowers
+    marigold:  '#f0b323',
+    lily:      '#f4e2d8',
+    geranium:  '#d34a5e',
+    cardinal:  '#b71c1c',
+    dianthus:  '#e882a4',
+    euonymus:  '#6b8e23',
+    petunia:   '#8e4585',
+    begonia:   '#e85d4a',
   };
   // Generate 42 plant positions. Padding from edges, 5 rows x ~varying cols.
   function buildPlants(){
@@ -2166,20 +2221,31 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     })[a] || a;
   }
 
+  // ----- Step-size selector -----
+  document.querySelectorAll('.step-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      state.jogStep = parseInt(b.dataset.step, 10) || 100;
+      document.querySelectorAll('.step-btn').forEach(other => {
+        other.setAttribute('aria-checked', other === b ? 'true' : 'false');
+      });
+    });
+  });
+
   // ----- Jog -----
   document.querySelectorAll('[data-jog]').forEach(b => {
     b.addEventListener('click', async () => {
       const dir = b.dataset.jog;
-      const res = await api('/api/jog', { method: 'POST', body: { dir, step: 100 } });
+      const step = state.jogStep;
+      const res = await api('/api/jog', { method: 'POST', body: { dir, step } });
       if (res?.x !== undefined) state.pos = { x: res.x, y: res.y, z: res.z };
       const human = ({
         'x+': 'right', 'x-': 'left', 'y+': 'forward', 'y-': 'backward',
         'z+': 'up', 'z-': 'down',
       })[dir] || dir;
-      state.lastAction = `Jogged ${human} 100 mm`;
-      state.lastResponse = `Moved ${human}.`;
+      state.lastAction = `Jogged ${human} ${step} mm`;
+      state.lastResponse = `Moved ${human} ${step} mm.`;
       renderState();
-      pushHistory({ said: `Jog ${human}`, did: state.lastAction, success: true });
+      pushHistory({ said: `Jog ${human} ${step} mm`, did: state.lastAction, success: true });
     });
   });
 

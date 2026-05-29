@@ -210,12 +210,16 @@ def _do_emit(emissions: List[str], action: str, label: str, source: str = "butto
     return _position_payload(last_cmd=note)
 
 
-def _dispatch_via_pi(action: str, source: str) -> Optional[Dict[str, Any]]:
+def _dispatch_via_pi(action: str, source: str,
+                     step_mm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Send the action to the Pi intent server as an Intent JSON POST.
 
     Returns a position_payload-shaped dict on success, or None when this
     action isn't yet mapped on the V2 side (caller falls back to local).
     Estop and reset bypass the BT and hit their own endpoints.
+
+    ``step_mm`` overrides the default jog step (used by /api/jog so the user
+    can pick 10/50/100/500 mm). Voice jog still uses _VOICE_STEP_MM.
     """
     if _STATE.pi_url is None or not _PI_CLIENT_AVAILABLE:
         return None
@@ -239,9 +243,10 @@ def _dispatch_via_pi(action: str, source: str) -> Optional[Dict[str, Any]]:
         if action in {"x_plus", "x_minus", "y_plus", "y_minus", "z_plus", "z_minus"}:
             axis, sign = action.split("_")
             direction = +1 if sign == "plus" else -1
-            new_x = _clamp(_STATE.pos_x + (_VOICE_STEP_MM * direction if axis == "x" else 0), *_BOUNDS["x"])
-            new_y = _clamp(_STATE.pos_y + (_VOICE_STEP_MM * direction if axis == "y" else 0), *_BOUNDS["y"])
-            new_z = _clamp(_STATE.pos_z + (_VOICE_STEP_MM * direction if axis == "z" else 0), *_BOUNDS["z"])
+            step = float(step_mm) if step_mm is not None else _VOICE_STEP_MM
+            new_x = _clamp(_STATE.pos_x + (step * direction if axis == "x" else 0), *_BOUNDS["x"])
+            new_y = _clamp(_STATE.pos_y + (step * direction if axis == "y" else 0), *_BOUNDS["y"])
+            new_z = _clamp(_STATE.pos_z + (step * direction if axis == "z" else 0), *_BOUNDS["z"])
             _STATE.pos_x, _STATE.pos_y, _STATE.pos_z = new_x, new_y, new_z
             label = {"x": ("RIGHT" if direction > 0 else "LEFT"),
                      "y": ("FORWARD" if direction > 0 else "BACK"),
@@ -252,10 +257,11 @@ def _dispatch_via_pi(action: str, source: str) -> Optional[Dict[str, Any]]:
                 response=f"{label}.",
             )
             reply = pi_post_intent(_STATE.pi_url, [intent],
-                                   raw_text=f"(jog) {action}", client_id="growmate_voice.app")
+                                   raw_text=f"(jog {step:.0f}mm) {action}",
+                                   client_id="growmate_voice.app")
             status = "sent" if reply.status == "success" else reply.status
             cmds = reply.commands_published or [f"M {new_x:.0f} {new_y:.0f} {new_z:.0f}"]
-            note = f"{cmds[0]}  — {label} (via Pi)  [{status}]"
+            note = f"{cmds[0]}  — {label} {step:.0f}mm (via Pi)  [{status}]"
             _record(source, action, cmds, status, note)
             return _position_payload(last_cmd=note)
 
@@ -279,23 +285,29 @@ def _dispatch_via_pi(action: str, source: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _execute_action(action: str, source: str) -> Dict[str, Any]:
-    # V2 path: if --pi-url is set and the client + action are wired, route
-    # to the Pi. Fall through to legacy local execution on any failure so the
-    # demo never strands the user.
-    routed = _dispatch_via_pi(action, source)
+def _execute_action(action: str, source: str,
+                    step_mm: Optional[float] = None) -> Dict[str, Any]:
+    """Dispatch an action.
+
+    ``step_mm`` only matters for the six jog actions (``x_plus`` etc.). When
+    omitted, falls back to ``_VOICE_STEP_MM`` (the default for voice jogs).
+    """
+    # V2 path: if --pi-url is set and the action is wired, route to the Pi.
+    routed = _dispatch_via_pi(action, source, step_mm=step_mm)
     if routed is not None:
         return routed
+
+    step = float(step_mm) if step_mm is not None else _VOICE_STEP_MM
 
     if action == "estop":   return _do_estop(source)
     if action == "reset":   return _do_reset(source)
     if action == "home":    return _do_home(source)
-    if action == "x_plus":  return _do_jog("x", +1, _VOICE_STEP_MM, source)
-    if action == "x_minus": return _do_jog("x", -1, _VOICE_STEP_MM, source)
-    if action == "y_plus":  return _do_jog("y", +1, _VOICE_STEP_MM, source)
-    if action == "y_minus": return _do_jog("y", -1, _VOICE_STEP_MM, source)
-    if action == "z_plus":  return _do_jog("z", +1, _VOICE_STEP_MM, source)
-    if action == "z_minus": return _do_jog("z", -1, _VOICE_STEP_MM, source)
+    if action == "x_plus":  return _do_jog("x", +1, step, source)
+    if action == "x_minus": return _do_jog("x", -1, step, source)
+    if action == "y_plus":  return _do_jog("y", +1, step, source)
+    if action == "y_minus": return _do_jog("y", -1, step, source)
+    if action == "z_plus":  return _do_jog("z", +1, step, source)
+    if action == "z_minus": return _do_jog("z", -1, step, source)
     if action == "water":     return _do_emit(["P_4"], "water", "water", source)
     if action == "photo":     return _do_emit(["I_1"], "photo", "photo", source)
     if action == "light_on":  return _do_emit(["D_L_1"], "light_on", "lights on", source)
@@ -524,11 +536,7 @@ _JOG_DIR_MAP = {
 
 @app.post("/api/jog")
 def api_jog(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Accept {dir: 'x+', step: 100} (new UI) or {axis, direction, step} (legacy).
-
-    Routes through _execute_action so the same Pi-dispatch path is used for
-    voice + buttons + jog. Custom step is ignored (uses _VOICE_STEP_MM).
-    """
+    """Accept {dir: 'x+', step: 100} (new UI) or {axis, direction, step} (legacy)."""
     if "dir" in body:
         m = _JOG_DIR_MAP.get(body["dir"])
         if not m:
@@ -539,8 +547,9 @@ def api_jog(body: Dict[str, Any]) -> Dict[str, Any]:
         sign = 1 if int(body.get("direction", 1)) > 0 else -1
     if axis not in _BOUNDS:
         return JSONResponse(status_code=400, content={"error": f"bad axis '{axis}'"})
+    step = float(body.get("step", _VOICE_STEP_MM))
     action_name = f"{axis}_{'plus' if sign > 0 else 'minus'}"
-    payload = _execute_action(action_name, source="button")
+    payload = _execute_action(action_name, source="button", step_mm=step)
     return {**payload, "x": _STATE.pos_x, "y": _STATE.pos_y, "z": _STATE.pos_z, "ok": True}
 
 
@@ -1626,6 +1635,41 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 }
 @media (max-width: 480px){ .jog-wrap{ grid-template-columns: 1fr; }}
 
+.step-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.step-row .step-label{
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-right: 4px;
+}
+.step-btn{
+  min-height: var(--tap);
+  padding: 0 16px;
+  border-radius: var(--radius-m);
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .12s ease;
+}
+.step-btn:hover{ background: var(--cream-deep); }
+.step-btn[aria-checked="true"]{
+  background: var(--moss);
+  color: #fff;
+  border-color: var(--moss-deep);
+  box-shadow: var(--shadow-s);
+}
+.step-btn:focus-visible{ outline: none; box-shadow: var(--focus); }
+
 .dpad{
   display: grid;
   grid-template-columns: repeat(3, 64px);
@@ -2208,6 +2252,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
         <!-- Manual view -->
         <div class="qa-view qa-view-manual" hidden>
+          <div class="step-row" role="radiogroup" aria-label="Step size for each move">
+            <span class="step-label">Step:</span>
+            <button class="step-btn" data-step="10"  role="radio" aria-checked="false">10 mm</button>
+            <button class="step-btn" data-step="50"  role="radio" aria-checked="false">50 mm</button>
+            <button class="step-btn" data-step="100" role="radio" aria-checked="true">100 mm</button>
+            <button class="step-btn" data-step="500" role="radio" aria-checked="false">500 mm</button>
+          </div>
           <div class="jog-wrap">
             <div class="dpad" role="group" aria-label="Move robot along the bed">
               <button class="jog-btn up" data-jog="y+" aria-label="Move forward (y plus)">
@@ -2337,6 +2388,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     micState: 'idle',          // idle | recording | processing
     history: [],
     chimeEnabled: true,
+    jogStep: 100,             // mm — selected step size for manual moves
   };
 
   // ----- dom refs -----
@@ -3047,20 +3099,31 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     })[a] || a;
   }
 
+  // ----- Step-size selector -----
+  document.querySelectorAll('.step-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      state.jogStep = parseInt(b.dataset.step, 10) || 100;
+      document.querySelectorAll('.step-btn').forEach(other => {
+        other.setAttribute('aria-checked', other === b ? 'true' : 'false');
+      });
+    });
+  });
+
   // ----- Jog -----
   document.querySelectorAll('[data-jog]').forEach(b => {
     b.addEventListener('click', async () => {
       const dir = b.dataset.jog;
-      const res = await api('/api/jog', { method: 'POST', body: { dir, step: 100 } });
+      const step = state.jogStep;
+      const res = await api('/api/jog', { method: 'POST', body: { dir, step } });
       if (res?.x !== undefined) state.pos = { x: res.x, y: res.y, z: res.z };
       const human = ({
         'x+': 'right', 'x-': 'left', 'y+': 'forward', 'y-': 'backward',
         'z+': 'up', 'z-': 'down',
       })[dir] || dir;
-      state.lastAction = `Jogged ${human} 100 mm`;
-      state.lastResponse = `Moved ${human}.`;
+      state.lastAction = `Jogged ${human} ${step} mm`;
+      state.lastResponse = `Moved ${human} ${step} mm.`;
       renderState();
-      pushHistory({ said: `Jog ${human}`, did: state.lastAction, success: true });
+      pushHistory({ said: `Jog ${human} ${step} mm`, did: state.lastAction, success: true });
     });
   });
 
