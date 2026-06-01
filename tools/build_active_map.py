@@ -270,8 +270,11 @@ def load_yaml(path: str | Path) -> Dict[str, Any]:
 # ────────────────────────────────────────────────────────────────────────────
 # Visualise
 # ────────────────────────────────────────────────────────────────────────────
-def visualize(active_map: Dict[str, Any]) -> None:
+def visualize(active_map: Dict[str, Any], save_to: Optional[str] = None) -> None:
     import matplotlib
+    if save_to:
+        # Headless backend so this works over SSH without a display
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     plants = active_map["plant_details"]["plants"]
@@ -311,7 +314,11 @@ def visualize(active_map: Dict[str, Any]) -> None:
     ax.grid(True, alpha=0.3)
     ax.legend(title="Species", loc="upper left", fontsize=9)
     plt.tight_layout()
-    plt.show()
+    if save_to:
+        plt.savefig(save_to, dpi=120, bbox_inches="tight")
+        print(f"Wrote {save_to}")
+    else:
+        plt.show()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -334,6 +341,9 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
                     help="skip the scatter plot after building")
     ap.add_argument("--visualize", metavar="YAML",
                     help="load this map and just visualise it (no build)")
+    ap.add_argument("--save", metavar="PNG",
+                    help="when used with --visualize, write a PNG instead of "
+                         "opening a window (works over SSH / headless)")
     return ap.parse_args(argv)
 
 
@@ -341,7 +351,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_args(argv)
 
     if args.visualize:
-        visualize(load_yaml(args.visualize))
+        visualize(load_yaml(args.visualize), save_to=args.save)
         return 0
 
     if args.mode == "explicit":
