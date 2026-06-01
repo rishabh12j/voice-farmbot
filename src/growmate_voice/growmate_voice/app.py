@@ -456,11 +456,29 @@ def _active_map_path() -> Optional[Path]:
 def api_plants() -> Dict[str, Any]:
     """Return the real garden layout for the UI map.
 
-    Reads ``map_handler/config/active_map.yaml`` (the AURA-managed map with all
-    42 plants and their actual coordinates) and projects each plant into the
-    flat ``{type, x, y, name, water_quantity}`` shape the UI's renderPlants()
-    expects.
+    Preference order:
+      1. If --pi-url is set, ask the Pi for its installed map (so the UI
+         always reflects the actual loaded garden — different Pis can have
+         different gardens).
+      2. Otherwise, read the repo's ``map_handler/config/active_map.yaml``
+         as a fallback (sim mode / dev without a Pi).
     """
+    # 1. Try the Pi first
+    if _STATE.pi_url and _PI_CLIENT_AVAILABLE:
+        try:
+            import httpx
+            base = _STATE.pi_url.rsplit("/intent", 1)[0]
+            with httpx.Client(timeout=4.0) as client:
+                r = client.get(base + "/plants")
+                r.raise_for_status()
+                body = r.json()
+            if body.get("plants"):
+                body["from_pi"] = True
+                return body
+        except Exception as exc:
+            log.warning("Pi /plants fetch failed (%s) — falling back to local map", exc)
+
+    # 2. Fall back to the local repo copy
     import yaml as _yaml
     path = _active_map_path()
     if path is None:

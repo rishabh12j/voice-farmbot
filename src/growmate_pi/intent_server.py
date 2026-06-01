@@ -24,8 +24,9 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
+import yaml as _yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -43,6 +44,88 @@ from growmate_pi.schemas import (
 DEFAULT_CONFIG = (
     Path(__file__).parent / "config" / "farmbot.yaml"
 ).resolve()
+
+
+# Map upstream plant_name strings to the UI's plant type keys (which control colour).
+# Keep in sync with growmate_voice.app:_PLANT_TYPE_MAP — both layers want the same
+# colour palette regardless of which one reads the map.
+_PLANT_TYPE_MAP: Dict[str, str] = {
+    # Edibles
+    "tomato": "tomato",
+    "lettuce_little_gem": "lettuce", "lettuce": "lettuce",
+    "scallion": "scallion", "spring_onion": "scallion", "green_onion": "scallion",
+    "mixed pepper": "pepper", "mixed_pepper": "pepper", "pepper": "pepper",
+    # Herbs
+    "basil": "basil",
+    "spearmint": "spearmint", "mint": "spearmint",
+    # Flowers
+    "marigold": "marigold",
+    "lily": "lily", "asiatic_lily": "lily",
+    "geranium": "geranium", "pelargonium": "geranium",
+    "cardinal flower": "cardinal", "cardinal_flower": "cardinal",
+    "dianthus": "dianthus", "carnation": "dianthus", "sweet_william": "dianthus",
+    "euonymus": "euonymus",
+    "petunia": "petunia",
+    "begonia": "begonia",
+}
+
+
+def _installed_map_path() -> Optional[Path]:
+    """Locate the active_map.yaml the running map_handler is actually using."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = Path(get_package_share_directory("map_handler")) / "config"
+    except Exception:
+        return None
+    for name in ("active_map.yaml", "map_references.yaml"):
+        candidate = share / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_plants_from_map_handler() -> Dict[str, Any]:
+    """Read the AURA active_map.yaml and project it into the UI's plant shape."""
+    path = _installed_map_path()
+    if path is None:
+        return {"plants": [], "count": 0, "source": None,
+                "error": "map_handler share directory not found"}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _yaml.safe_load(f) or {}
+    except Exception as exc:
+        return {"plants": [], "count": 0, "source": str(path), "error": str(exc)}
+
+    ref = data.get("map_reference", {}) or {}
+    plants_raw = (data.get("plant_details", {}) or {}).get("plants", {}) or {}
+    plants_out: List[Dict[str, Any]] = []
+    for _, p in plants_raw.items():
+        idents = p.get("identifiers", {}) or {}
+        details = p.get("plant_details", {}) or {}
+        pos = p.get("position", {}) or {}
+        status = p.get("status", {}) or {}
+        raw_name = str(idents.get("plant_name", "Unknown"))
+        ptype = _PLANT_TYPE_MAP.get(raw_name.lower(), "lettuce")
+        display = raw_name.replace("_", " ").title()
+        idx = idents.get("index", len(plants_out) + 1)
+        plants_out.append({
+            "type": ptype,
+            "x": float(pos.get("x", 0)),
+            "y": float(pos.get("y", 0)),
+            "name": f"{display} #{idx}",
+            "water_quantity": float(details.get("water_quantity", 2.0)),
+            "stage": status.get("growth_stage", ""),
+        })
+    plants_out.sort(key=lambda p: (p["x"], p["y"]))
+    return {
+        "plants": plants_out,
+        "count": len(plants_out),
+        "workspace": {
+            "x_len": ref.get("x_len", 5691.2),
+            "y_len": ref.get("y_len", 2734.0),
+        },
+        "source": str(path),
+    }
 
 
 # ---------- Module-level singletons (populated by ``build_app``) -------------
@@ -99,6 +182,17 @@ def build_app(
             "topic": _bridge.topic,
             "config": str((config_path or DEFAULT_CONFIG)),
         }
+
+    @app.get("/plants")
+    def plants():
+        """Return the real garden layout this Pi has currently loaded.
+
+        Reads the AURA-installed ``active_map.yaml`` via
+        ``ament_index_python`` so the answer always reflects what
+        map_handler is actually using — not the repo's source-tree copy.
+        Falls back to ``map_references.yaml`` if no active_map is present.
+        """
+        return _load_plants_from_map_handler()
 
     @app.post("/intent", response_model=IntentResponse)
     def intent(req: IntentRequest) -> IntentResponse:
