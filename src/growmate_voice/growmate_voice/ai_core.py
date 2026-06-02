@@ -24,6 +24,8 @@ class GardenConfig:
         self.location_name = loc.get('name', 'default')
         self.location_country = loc.get('country', '')
         self.location_context = f"{self.location_name}, {self.location_country}" if self.location_country else self.location_name
+        self.latitude = loc.get('latitude')
+        self.longitude = loc.get('longitude')
         self._lookup = {}
         for p in self.plants:
             self._lookup[p['name'].lower()] = p
@@ -339,8 +341,35 @@ Return JSON only. No explanations. Classify:"""
         return None
 
     def reason(self, context, question):
-        prompt = f"Context:\n{json.dumps(context, indent=2, default=str)}\n\nQuestion: {question}\n\nBrief friendly answer:"
-        r = self.llm.chat("You are a friendly gardening expert.", prompt, temperature=0.3, max_tokens=150)
+        # Day 2: auto-fetch real weather so answers like "should I water?"
+        # use actual rain forecasts instead of being hallucinated.
+        if isinstance(context, dict) and "weather" not in context and \
+                self.garden.latitude is not None and self.garden.longitude is not None:
+            try:
+                from .weather import get_weather
+                weather = get_weather(self.garden.latitude, self.garden.longitude)
+                if weather:
+                    context = {**context, "weather": weather}
+            except Exception as exc:  # network/parsing — never block the answer
+                print(f"  weather fetch failed: {exc}")
+
+        system = (
+            "You are a calm, knowledgeable gardening advisor speaking to an "
+            "elderly person who wants clear, complete information. "
+            "Rules: Do NOT use emojis. Do NOT use exclamation marks. Do NOT "
+            "start with greetings like 'Hi there' or 'Hello'. Do NOT ask "
+            "follow-up questions or invite further conversation. Get straight "
+            "to the point. Give a comprehensive answer in 3 to 5 sentences "
+            "that covers what they asked plus the practical detail they need "
+            "to act on it. Use plain English, no jargon. "
+            "When the context includes weather, base any weather-related "
+            "claim on those numbers — never invent temperatures or rainfall."
+        )
+        prompt = (
+            f"Context:\n{json.dumps(context, indent=2, default=str)}\n\n"
+            f"Question: {question}\n\nAnswer:"
+        )
+        r = self.llm.chat(system, prompt, temperature=0.3, max_tokens=350)
         return r if r else "I'm not sure about that."
 
     def is_available(self):

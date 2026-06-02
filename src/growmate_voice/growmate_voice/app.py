@@ -707,13 +707,43 @@ def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
                 "No intents from LLM", transcript=transcript)
         return _position_payload(last_cmd=f"(LLM no intents: {transcript})")
 
+    # Day 1 fix: any general_question intent needs a real answer, not the
+    # LLM's pre-baked "let me look that up" filler. Run AICore.reason() with
+    # a minimal context (the question itself plus plant info if targeted).
+    # Future phases will add weather (day 2) and live plant state (day 3).
+    for i in intents:
+        if i.get("action") != "general_question":
+            continue
+        question = (i.get("question") or "").strip() or transcript
+        context: Dict[str, Any] = {
+            "location": ai.garden.location_context,
+        }
+        target = (i.get("target") or "").strip()
+        if target:
+            plant = ai.garden.find(target)
+            if plant:
+                context["plant"] = {
+                    "name": plant.get("name"),
+                    "stage": plant.get("stage"),
+                    "water_quantity_seconds": plant.get("water_quantity"),
+                }
+        try:
+            answer = ai.reason(context, question)
+        except Exception as exc:
+            log.warning("AICore.reason failed: %s", exc)
+            answer = i.get("response") or "I'm not sure about that."
+        i["response"] = (answer or "").strip() or "I'm not sure about that."
+
     # Build PiIntent objects from the raw classifier dicts
     if not (_PI_CLIENT_AVAILABLE and _STATE.pi_url):
         # No Pi configured — log and return; can't execute robot actions client-side
         responses = " ".join(i.get("response", "") for i in intents)
         _record(source, intents[0].get("action"), [], "simulated",
                 f"AICore (no Pi): {responses}", transcript=transcript)
-        return _position_payload(last_cmd=f"AICore -> {intents[0].get('action')} (no Pi)")
+        # When the only intents are general_question, expose the answer for TTS
+        payload = _position_payload(last_cmd=f"AICore -> {intents[0].get('action')} (no Pi)")
+        payload["tts_text"] = responses.strip()
+        return payload
 
     pi_intents = [
         PiIntent(
@@ -910,6 +940,7 @@ INDEX_HTML = r"""<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>GrowMate — your garden companion</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='15' fill='%23faf6ee'/><path d='M16 24 Q16 14 22 10 Q18 17 16 24 Q16 14 10 10 Q14 17 16 24 Z' fill='%234a7c59'/><rect x='15' y='22' width='2' height='6' fill='%234a7c59'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
