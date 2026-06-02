@@ -688,6 +688,66 @@ def _get_aicore() -> Optional[AICore]:
         return None
 
 
+def _summarise_plants_for_target(target: str) -> Optional[Dict[str, Any]]:
+    """Build an LLM-ready summary of plants matching ``target``.
+
+    Reuses ``api_plants()``'s Pi-first / local-fallback chain so we always
+    pick the most live data available. Filters the full plant list by
+    matching the target against type or name (singular/plural-tolerant),
+    then aggregates count, growth stage, water needs, and position range.
+
+    Returns None when no match — caller falls back to the single-plant
+    entry in ``garden.find(target)``.
+    """
+    if not target:
+        return None
+    try:
+        all_data = api_plants()
+    except Exception as exc:
+        log.warning("_summarise_plants_for_target: api_plants failed: %s", exc)
+        return None
+    plants = all_data.get("plants", []) if isinstance(all_data, dict) else []
+    if not plants:
+        return None
+
+    target_lc = target.lower().strip()
+    # Tolerate common plural forms — "tomatoes" -> "tomato", "lilies" -> "lily",
+    # "begonias" -> "begonia". Each form is matched as a substring against the
+    # plant's type and name fields.
+    forms = {target_lc}
+    if target_lc.endswith("ies") and len(target_lc) > 3:
+        forms.add(target_lc[:-3] + "y")
+    if target_lc.endswith("es") and len(target_lc) > 3:
+        forms.add(target_lc[:-2])
+    if target_lc.endswith("s") and len(target_lc) > 1:
+        forms.add(target_lc[:-1])
+
+    matching = []
+    for p in plants:
+        ptype = (p.get("type") or "").lower()
+        pname = (p.get("name") or "").lower()
+        if any(f == ptype or f in ptype or f in pname for f in forms):
+            matching.append(p)
+    if not matching:
+        return None
+
+    xs = [float(p["x"]) for p in matching]
+    ys = [float(p["y"]) for p in matching]
+    stages = sorted({(p.get("stage") or "").strip() for p in matching if p.get("stage")})
+    waters = sorted({p.get("water_quantity") for p in matching if p.get("water_quantity") is not None})
+
+    return {
+        "type": matching[0].get("type"),
+        "count": len(matching),
+        "growth_stage": stages[0] if len(stages) == 1 else stages,
+        "water_seconds_per_plant": waters[0] if len(waters) == 1 else waters,
+        "position_x_mm": [int(min(xs)), int(max(xs))] if len(xs) > 1 else [int(xs[0])],
+        "position_y_mm": [int(min(ys)), int(max(ys))] if len(ys) > 1 else [int(ys[0])],
+        "sample_names": [p["name"] for p in matching[:3]],
+        "total_plants_in_garden": all_data.get("count"),
+    }
+
+
 def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
     """Run the LLM classifier and dispatch the resulting intents to Pi.
 
@@ -720,13 +780,20 @@ def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
         }
         target = (i.get("target") or "").strip()
         if target:
-            plant = ai.garden.find(target)
-            if plant:
-                context["plant"] = {
-                    "name": plant.get("name"),
-                    "stage": plant.get("stage"),
-                    "water_quantity_seconds": plant.get("water_quantity"),
-                }
+            # Prefer the live plant summary (Pi or local map) which has
+            # count, position range, and aggregated stage. Fall back to the
+            # single-plant entry in farmbot.yaml when no map data is available.
+            summary = _summarise_plants_for_target(target)
+            if summary:
+                context["plant"] = summary
+            else:
+                plant = ai.garden.find(target)
+                if plant:
+                    context["plant"] = {
+                        "name": plant.get("name"),
+                        "stage": plant.get("stage"),
+                        "water_quantity_seconds": plant.get("water_quantity"),
+                    }
         try:
             answer = ai.reason(context, question)
         except Exception as exc:
