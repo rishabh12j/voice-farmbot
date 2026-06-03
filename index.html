@@ -1057,6 +1057,73 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 .toast.show{ opacity: 1; transform: translateY(0); }
 .toast[data-tone="warn"]{ background: var(--tomato); }
 
+/* ---------- Day 5: confirm modal ---------- */
+.confirm-overlay{
+  position: fixed; inset: 0;
+  background: rgba(43,42,38,.55);
+  display: grid; place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 90;
+}
+.confirm-overlay.show{ opacity: 1; pointer-events: auto; }
+.confirm-card{
+  background: var(--paper);
+  border-radius: var(--radius-l);
+  padding: 32px 28px 24px;
+  width: min(520px, 92vw);
+  box-shadow: var(--shadow-l);
+  text-align: center;
+  border: 2px solid var(--clay);
+}
+.confirm-text{
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 24px;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.confirm-actions{
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.confirm-yes, .confirm-no{
+  min-height: 64px;
+  min-width: 140px;
+  border-radius: var(--radius-m);
+  border: none;
+  font-family: inherit;
+  font-size: 22px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .1s ease, background .15s ease;
+}
+.confirm-yes{
+  background: var(--moss);
+  color: #fff;
+  box-shadow: 0 6px 0 var(--moss-deep);
+}
+.confirm-yes:hover{ background: #557f63; }
+.confirm-yes:active{ transform: translateY(3px); box-shadow: 0 3px 0 var(--moss-deep); }
+.confirm-no{
+  background: var(--cream-deep);
+  color: var(--ink);
+  box-shadow: 0 6px 0 #d4cdb8;
+}
+.confirm-no:hover{ background: #e8dec5; }
+.confirm-no:active{ transform: translateY(3px); box-shadow: 0 3px 0 #d4cdb8; }
+.confirm-yes:focus-visible, .confirm-no:focus-visible{
+  outline: none; box-shadow: var(--focus);
+}
+.confirm-hint{
+  font-size: 14px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
 /* ---------- settings drawer ---------- */
 .drawer-back{
   position: fixed; inset: 0;
@@ -1490,6 +1557,19 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 <!-- ============ Toast ============ -->
 <div class="toast-wrap" aria-live="polite" aria-atomic="true">
   <div class="toast" id="toast"></div>
+</div>
+
+<!-- ============ Day 5: Confirm modal ============ -->
+<div class="confirm-overlay" id="confirmModal" role="dialog"
+     aria-modal="true" aria-labelledby="confirmText" aria-hidden="true">
+  <div class="confirm-card">
+    <p class="confirm-text" id="confirmText">Should I do that?</p>
+    <div class="confirm-actions">
+      <button class="confirm-no" id="confirmNo" aria-label="Cancel">No</button>
+      <button class="confirm-yes" id="confirmYes" aria-label="Yes, go ahead">Yes</button>
+    </div>
+    <p class="confirm-hint">Tap Yes to proceed or No to cancel. Auto-cancels in 10 seconds.</p>
+  </div>
 </div>
 
 <script>
@@ -2100,7 +2180,70 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     const did  = pos.last_cmd || result.matched_action || 'Done';
     const say  = result.tts_spoken || data.tts_text || '';
     if (typeof pos.x === 'number') state.pos = { x: pos.x, y: pos.y, z: pos.z };
-    return { said, did, say, success: !data.error };
+    // Day 5: propagate confirm state if present (lifted to result or in position)
+    const requiresConfirm = result.requires_confirm === true || pos.requires_confirm === true;
+    return {
+      said,
+      did,
+      say,
+      success: !data.error,
+      requiresConfirm,
+      confirmId: result.confirm_id || pos.confirm_id || null,
+      confirmQuestion: result.confirm_question || pos.confirm_question || null,
+      confirmTimeoutS: result.confirm_timeout_s || pos.confirm_timeout_s || 10,
+    };
+  }
+
+  // --- Day 5: confirmation modal ---------------------------------------
+  let _confirmTimer = null;
+  let _confirmActiveId = null;
+  let _confirmTtsBackend = 'kokoro';
+
+  function showConfirmModal(question, confirmId, timeoutS) {
+    _confirmActiveId = confirmId;
+    const modal = document.getElementById('confirmModal');
+    document.getElementById('confirmText').textContent = question || 'Should I do that?';
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    document.getElementById('confirmYes').focus();
+    clearTimeout(_confirmTimer);
+    _confirmTimer = setTimeout(() => {
+      if (_confirmActiveId === confirmId) {
+        respondConfirm(false);
+        showToast('Cancelled (no response)', 'warn');
+      }
+    }, (timeoutS || 10) * 1000);
+  }
+
+  function hideConfirmModal() {
+    const modal = document.getElementById('confirmModal');
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    _confirmActiveId = null;
+    clearTimeout(_confirmTimer);
+  }
+
+  async function respondConfirm(yes) {
+    const cid = _confirmActiveId;
+    hideConfirmModal();
+    if (!cid) return;
+    setMic('processing');
+    try {
+      const r = await fetch('/api/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_id: cid, confirmed: yes, tts: _confirmTtsBackend, enable_tts: 'true' }),
+      });
+      const data = await r.json();
+      if (data.tts_audio_b64) {
+        try { new Audio('data:audio/wav;base64,' + data.tts_audio_b64).play().catch(() => {}); } catch (_) {}
+      }
+      const norm = adaptVoiceResponse(data);
+      finishCommand(norm, yes ? null : 'Cancelled');
+    } catch (e) {
+      showToast('Confirm failed: ' + e.message, 'warn');
+      setMic('idle');
+    }
   }
 
   function encodeWAV(samples, sampleRate) {
@@ -2132,6 +2275,17 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     console.log('[mic] click; current state:', state.micState);
     if (state.micState === 'idle')       startRecording();
     else if (state.micState === 'recording') stopRecording();
+  });
+
+  // ----- Day 5: confirm modal buttons -----
+  document.getElementById('confirmYes').addEventListener('click', () => respondConfirm(true));
+  document.getElementById('confirmNo').addEventListener('click', () => respondConfirm(false));
+  // Esc / outside-click cancels the confirm too
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _confirmActiveId) respondConfirm(false);
+  });
+  document.getElementById('confirmModal').addEventListener('click', (e) => {
+    if (e.target.id === 'confirmModal') respondConfirm(false);
   });
 
   // ----- Text fallback -----
@@ -2182,6 +2336,14 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     await sleep(600);
     removeTypingBubble();
     const said = override || res?.said || 'Voice command';
+    // Day 5: intercept confirm-required responses BEFORE rendering as a normal action.
+    if (res?.requiresConfirm && res?.confirmId) {
+      if (!override) addChatBubble('you', 'You said', said);
+      addChatBubble('bot', 'GrowMate', res.confirmQuestion || 'Should I proceed?');
+      showConfirmModal(res.confirmQuestion, res.confirmId, res.confirmTimeoutS);
+      setMic('idle');
+      return;
+    }
     state.lastAction = res?.did || 'Done';
     state.lastResponse = res?.say || 'Done.';
     if (typeof res?.lightsOn === 'boolean') state.lightsOn = res.lightsOn;

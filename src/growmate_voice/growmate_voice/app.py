@@ -91,6 +91,7 @@ class AppState:
     lights_on: bool = False               # tracked so the "lights" toggle flips correctly
     whisper_model: str = "small.en"       # Day 4: bumped from tiny.en for elderly accuracy
     whisper_prompt: Optional[str] = None  # plant-name biasing, built at first STT call
+    pending_confirms: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Day 5
 
 
 _STATE = AppState()
@@ -98,6 +99,16 @@ _STATE = AppState()
 _BOUNDS = {"x": (0.0, 5691.2), "y": (0.0, 2734.0), "z": (-500.0, 0.0)}
 _BRINGUP_NODES = ["farmbotcontroller", "mapcontroller", "devicecmdhandler"]
 _VOICE_STEP_MM = 100
+
+# Day 5: soft-confirm layer for destructive actions.
+# Actions that need confirmation when triggered by voice / text / button.
+# Pattern-side action keys (from edgespeech command_map) → "water" = P_4.
+_CONFIRM_PATTERN_ACTIONS = {"water"}
+# AICore intent action keys (from schemas.Action) needing confirm.
+_CONFIRM_AICORE_ACTIONS = {"water_all"}
+# Anything in this set ALWAYS bypasses confirm — emergency is instant.
+_NEVER_CONFIRM = {"estop", "reset", "emergency_stop"}
+_PENDING_TTL_S = 10.0
 
 
 # --------------------------------------------------------------------------- init
@@ -705,6 +716,143 @@ def api_history_clear() -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- router
+# --------------------------------------------------------------------------- soft-confirm (Day 5)
+import uuid as _uuid
+
+
+def _cleanup_expired_confirms() -> None:
+    now = time.monotonic()
+    expired = [k for k, v in _STATE.pending_confirms.items() if v.get("expires_at", 0) < now]
+    for k in expired:
+        _STATE.pending_confirms.pop(k, None)
+
+
+def _store_pending(payload: Dict[str, Any]) -> str:
+    """Stash a deferred action; return its confirmation ID."""
+    _cleanup_expired_confirms()
+    cid = _uuid.uuid4().hex[:8]
+    payload["expires_at"] = time.monotonic() + _PENDING_TTL_S
+    _STATE.pending_confirms[cid] = payload
+    return cid
+
+
+def _pop_pending(cid: str) -> Optional[Dict[str, Any]]:
+    _cleanup_expired_confirms()
+    item = _STATE.pending_confirms.pop(cid, None)
+    if item is None or item.get("expires_at", 0) < time.monotonic():
+        return None
+    return item
+
+
+def _pattern_action_needs_confirm(action: Optional[str]) -> bool:
+    if not action or action in _NEVER_CONFIRM:
+        return False
+    return action in _CONFIRM_PATTERN_ACTIONS
+
+
+def _aicore_intents_need_confirm(intents: List[Dict[str, Any]]) -> bool:
+    if not intents:
+        return False
+    actions = {(i or {}).get("action") for i in intents}
+    if actions & _NEVER_CONFIRM:
+        return False
+    return bool(actions & _CONFIRM_AICORE_ACTIONS)
+
+
+def _confirm_question(transcript: str, action_desc: str) -> str:
+    """Phrasing that re-states what was heard, then asks for confirmation."""
+    t = (transcript or "").strip()
+    if t:
+        return f"I heard you say: {t}. Should I {action_desc}?"
+    return f"Should I {action_desc}?"
+
+
+def _synthesise_tts_b64(text: str, backend_name: str = "kokoro") -> Optional[str]:
+    """Synthesise ``text`` and return base64-encoded WAV, or None on failure."""
+    if not text or backend_name == "none":
+        return None
+    try:
+        backend = _get_tts(backend_name)
+        if not backend.is_available():
+            return None
+        tts_np, tts_sr = backend.synthesise(text)
+        wav_bytes = audio_to_wav_bytes(tts_np, sample_rate=tts_sr)
+        return base64.b64encode(wav_bytes).decode("ascii")
+    except Exception as exc:
+        log.warning("TTS synth failed for '%s...': %s", text[:30], exc)
+        return None
+
+
+def _maybe_defer_for_confirm(
+    transcript: str,
+    pattern_action: Optional[str],
+    route: str,
+    source: str,
+) -> Optional[Dict[str, Any]]:
+    """Return a pending response if the input triggers a destructive action.
+
+    Heuristic gate — keeps the path cheap by avoiding re-classification:
+      - Pattern route + ``water`` action (= P_4, water all) → confirm.
+      - AICore route + transcript contains "everything" / "all plants" / etc.
+        AND isn't phrased as a question → confirm.
+    Anything matching ``_NEVER_CONFIRM`` (estop, etc.) is allowed straight
+    through by the upstream router.
+    """
+    t = (transcript or "").lower().strip()
+    if not t:
+        return None
+
+    if route == "pattern" and _pattern_action_needs_confirm(pattern_action):
+        cid = _store_pending({
+            "type": "pattern",
+            "action": pattern_action,
+            "source": source,
+            "transcript": transcript,
+        })
+        return _build_pending_response(cid, transcript, "water all the plants")
+
+    if route == "aicore":
+        confirm_phrases = (
+            "everything", "all the plants", "all plants", "the whole garden",
+            "every plant", "all my plants", "all of them",
+        )
+        question_starters = (
+            "when ", "why ", "how ", "what ", "should ", "could ",
+            "is ", "are ", "do ", "does ", "tell ", "explain ",
+        )
+        is_question = (
+            "?" in t
+            or any(t.startswith(q) for q in question_starters)
+            or any(f" {q.strip()} " in f" {t} " for q in question_starters)
+        )
+        if any(p in t for p in confirm_phrases) and not is_question:
+            cid = _store_pending({
+                "type": "aicore_transcript",
+                "transcript": transcript,
+                "source": source,
+            })
+            return _build_pending_response(cid, transcript, "water all the plants")
+
+    return None
+
+
+def _build_pending_response(
+    cid: str,
+    transcript: str,
+    action_desc: str,
+    tts_backend: str = "kokoro",
+) -> Dict[str, Any]:
+    """Build the full /api/voice-shaped response for a deferred action."""
+    question = _confirm_question(transcript, action_desc)
+    payload = _position_payload(last_cmd=f"(awaiting confirmation: {action_desc})")
+    payload["requires_confirm"] = True
+    payload["confirm_id"] = cid
+    payload["confirm_question"] = question
+    payload["confirm_timeout_s"] = _PENDING_TTL_S
+    payload["tts_text"] = question
+    return payload
+
+
 _PLANT_HINTS = (
     "tomato", "tomatoes", "lettuce", "marigold", "scallion",
     "pepper", "peppers", "herbs", "carrot", "strawberr", "basil",
@@ -936,7 +1084,11 @@ async def api_text(body: Dict[str, Any]) -> Any:
         route = _route_transcript(text, action, confidence)
         pipeline_log.append(f"🔍 Pattern: {action} ({confidence})  ➜  Route: {route}")
 
-        if route == "pattern" and action is not None:
+        pending = _maybe_defer_for_confirm(text, action, route, source="text")
+        if pending:
+            pipeline_log.append(f"❓ Awaiting confirm: {pending['confirm_id']}")
+            position_payload = pending
+        elif route == "pattern" and action is not None:
             position_payload = _execute_action(action, source="text")
             if _STATE.history._entries:
                 last = _STATE.history._entries[-1]
@@ -962,14 +1114,20 @@ async def api_text(body: Dict[str, Any]) -> Any:
                 pipeline_log.append(f"⚠ TTS error: {exc}")
 
         pipeline_log.append("✅ Done")
+        result_block: Dict[str, Any] = {
+            "raw_transcript": text,
+            "matched_action": action,
+            "confidence": confidence,
+            "tts_spoken": tts_spoken,
+            "position": position_payload,
+        }
+        if position_payload.get("requires_confirm"):
+            result_block["requires_confirm"] = True
+            result_block["confirm_id"] = position_payload.get("confirm_id")
+            result_block["confirm_question"] = position_payload.get("confirm_question")
+            result_block["confirm_timeout_s"] = position_payload.get("confirm_timeout_s")
         return JSONResponse({
-            "result": {
-                "raw_transcript": text,
-                "matched_action": action,
-                "confidence": confidence,
-                "tts_spoken": tts_spoken,
-                "position": position_payload,
-            },
+            "result": result_block,
             "log": "\n".join(pipeline_log),
             "tts_audio_b64": tts_audio_b64,
         })
@@ -980,6 +1138,87 @@ async def api_text(body: Dict[str, Any]) -> Any:
             "log": "\n".join(pipeline_log),
             "trace": traceback.format_exc(),
         })
+
+
+@app.post("/api/confirm")
+def api_confirm(body: Dict[str, Any]) -> Any:
+    """Resolve a pending action stashed by ``_maybe_defer_for_confirm``.
+
+    Body: ``{confirm_id: str, confirmed: bool, tts: str?, enable_tts: str?}``.
+    On YES: dispatches the deferred action through the same path that would
+    have run if the gate weren't there. On NO (or unknown id): returns a
+    cancellation payload with a friendly TTS "Cancelled.".
+    """
+    cid = (body or {}).get("confirm_id", "")
+    confirmed = bool((body or {}).get("confirmed", False))
+    tts = (body or {}).get("tts", "kokoro")
+    enable_tts = str((body or {}).get("enable_tts", "true")).lower()
+
+    item = _pop_pending(cid)
+    pipeline_log: List[str] = [f"❓ confirm id={cid} → {'YES' if confirmed else 'NO'}"]
+
+    if item is None:
+        msg = "That request expired. Please ask again."
+        pipeline_log.append("⚠ unknown or expired confirm id")
+        return JSONResponse({
+            "cancelled": True,
+            "expired": True,
+            "result": {
+                "tts_spoken": msg,
+                "position": _position_payload(last_cmd=f"(confirm id {cid} expired)"),
+            },
+            "log": "\n".join(pipeline_log),
+            "tts_audio_b64": _synthesise_tts_b64(msg, tts) if enable_tts == "true" else None,
+        })
+
+    if not confirmed:
+        msg = "Cancelled."
+        pipeline_log.append("🛑 user said NO")
+        _record(item.get("source", "voice"), None, [], "cancelled",
+                f"User cancelled: {item.get('transcript', '')}",
+                transcript=item.get("transcript", ""))
+        return JSONResponse({
+            "cancelled": True,
+            "result": {
+                "tts_spoken": msg,
+                "position": _position_payload(last_cmd=f"(cancelled: {item.get('transcript', '')})"),
+            },
+            "log": "\n".join(pipeline_log),
+            "tts_audio_b64": _synthesise_tts_b64(msg, tts) if enable_tts == "true" else None,
+        })
+
+    # User confirmed — execute the deferred action.
+    source = item.get("source", "voice")
+    transcript = item.get("transcript", "")
+    try:
+        if item["type"] == "pattern":
+            payload = _execute_action(item["action"], source=source)
+            pipeline_log.append(f"🤖 {payload.get('last_cmd', '')}")
+        elif item["type"] == "aicore_transcript":
+            payload = _dispatch_via_aicore(transcript, source=source)
+            pipeline_log.append(f"🧠 {payload.get('last_cmd', '')}")
+        else:
+            payload = _position_payload(last_cmd=f"(unknown pending type: {item['type']})")
+    except Exception as exc:
+        log.exception("Confirmed dispatch failed")
+        pipeline_log.append(f"❌ Error: {exc}")
+        payload = _position_payload(last_cmd=f"(error: {exc})")
+
+    tts_audio_b64: Optional[str] = None
+    phrase = (payload.get("tts_text") or "").strip()
+    if enable_tts == "true" and tts != "none" and phrase:
+        tts_audio_b64 = _synthesise_tts_b64(phrase, tts)
+
+    return JSONResponse({
+        "cancelled": False,
+        "result": {
+            "raw_transcript": transcript,
+            "tts_spoken": phrase,
+            "position": payload,
+        },
+        "log": "\n".join(pipeline_log),
+        "tts_audio_b64": tts_audio_b64,
+    })
 
 
 @app.post("/api/voice")
@@ -1014,7 +1253,13 @@ async def api_voice(
         route = _route_transcript(transcript, action, confidence)
         pipeline_log.append(f"🔍 Pattern: {action} ({confidence})  ➜  Route: {route}")
 
-        if route == "pattern" and action is not None:
+        # Day 5: soft-confirm gate — destructive commands like "water everything"
+        # pause for a YES/NO before firing. Emergency phrases pass through.
+        pending = _maybe_defer_for_confirm(transcript, action, route, source="voice")
+        if pending:
+            pipeline_log.append(f"❓ Awaiting confirm: {pending['confirm_id']}")
+            position_payload = pending
+        elif route == "pattern" and action is not None:
             # Fast path — pattern match drives the action (works for emergency,
             # home, lights, photo, jog, generic water/photo).
             position_payload = _execute_action(action, source="voice")
@@ -1050,16 +1295,24 @@ async def api_voice(
                 pipeline_log.append(f"⚠ TTS error: {exc}")
 
         pipeline_log.append("✅ Done")
+        result_block: Dict[str, Any] = {
+            "raw_transcript": transcript,
+            "matched_action": action,
+            "confidence": confidence,
+            "stt_latency_ms": round(latency_ms, 1),
+            "stt_backend": stt_backend.name,
+            "tts_spoken": tts_spoken,
+            "position": position_payload,
+        }
+        # Day 5: lift confirm fields to the top of `result` so the UI
+        # doesn't need to dig into result.position for them.
+        if position_payload.get("requires_confirm"):
+            result_block["requires_confirm"] = True
+            result_block["confirm_id"] = position_payload.get("confirm_id")
+            result_block["confirm_question"] = position_payload.get("confirm_question")
+            result_block["confirm_timeout_s"] = position_payload.get("confirm_timeout_s")
         return JSONResponse({
-            "result": {
-                "raw_transcript": transcript,
-                "matched_action": action,
-                "confidence": confidence,
-                "stt_latency_ms": round(latency_ms, 1),
-                "stt_backend": stt_backend.name,
-                "tts_spoken": tts_spoken,
-                "position": position_payload,
-            },
+            "result": result_block,
             "log": "\n".join(pipeline_log),
             "tts_audio_b64": tts_audio_b64,
         })
@@ -2133,6 +2386,73 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 .toast.show{ opacity: 1; transform: translateY(0); }
 .toast[data-tone="warn"]{ background: var(--tomato); }
 
+/* ---------- Day 5: confirm modal ---------- */
+.confirm-overlay{
+  position: fixed; inset: 0;
+  background: rgba(43,42,38,.55);
+  display: grid; place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 90;
+}
+.confirm-overlay.show{ opacity: 1; pointer-events: auto; }
+.confirm-card{
+  background: var(--paper);
+  border-radius: var(--radius-l);
+  padding: 32px 28px 24px;
+  width: min(520px, 92vw);
+  box-shadow: var(--shadow-l);
+  text-align: center;
+  border: 2px solid var(--clay);
+}
+.confirm-text{
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 24px;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.confirm-actions{
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.confirm-yes, .confirm-no{
+  min-height: 64px;
+  min-width: 140px;
+  border-radius: var(--radius-m);
+  border: none;
+  font-family: inherit;
+  font-size: 22px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .1s ease, background .15s ease;
+}
+.confirm-yes{
+  background: var(--moss);
+  color: #fff;
+  box-shadow: 0 6px 0 var(--moss-deep);
+}
+.confirm-yes:hover{ background: #557f63; }
+.confirm-yes:active{ transform: translateY(3px); box-shadow: 0 3px 0 var(--moss-deep); }
+.confirm-no{
+  background: var(--cream-deep);
+  color: var(--ink);
+  box-shadow: 0 6px 0 #d4cdb8;
+}
+.confirm-no:hover{ background: #e8dec5; }
+.confirm-no:active{ transform: translateY(3px); box-shadow: 0 3px 0 #d4cdb8; }
+.confirm-yes:focus-visible, .confirm-no:focus-visible{
+  outline: none; box-shadow: var(--focus);
+}
+.confirm-hint{
+  font-size: 14px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
 /* ---------- settings drawer ---------- */
 .drawer-back{
   position: fixed; inset: 0;
@@ -2566,6 +2886,19 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 <!-- ============ Toast ============ -->
 <div class="toast-wrap" aria-live="polite" aria-atomic="true">
   <div class="toast" id="toast"></div>
+</div>
+
+<!-- ============ Day 5: Confirm modal ============ -->
+<div class="confirm-overlay" id="confirmModal" role="dialog"
+     aria-modal="true" aria-labelledby="confirmText" aria-hidden="true">
+  <div class="confirm-card">
+    <p class="confirm-text" id="confirmText">Should I do that?</p>
+    <div class="confirm-actions">
+      <button class="confirm-no" id="confirmNo" aria-label="Cancel">No</button>
+      <button class="confirm-yes" id="confirmYes" aria-label="Yes, go ahead">Yes</button>
+    </div>
+    <p class="confirm-hint">Tap Yes to proceed or No to cancel. Auto-cancels in 10 seconds.</p>
+  </div>
 </div>
 
 <script>
@@ -3176,7 +3509,70 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     const did  = pos.last_cmd || result.matched_action || 'Done';
     const say  = result.tts_spoken || data.tts_text || '';
     if (typeof pos.x === 'number') state.pos = { x: pos.x, y: pos.y, z: pos.z };
-    return { said, did, say, success: !data.error };
+    // Day 5: propagate confirm state if present (lifted to result or in position)
+    const requiresConfirm = result.requires_confirm === true || pos.requires_confirm === true;
+    return {
+      said,
+      did,
+      say,
+      success: !data.error,
+      requiresConfirm,
+      confirmId: result.confirm_id || pos.confirm_id || null,
+      confirmQuestion: result.confirm_question || pos.confirm_question || null,
+      confirmTimeoutS: result.confirm_timeout_s || pos.confirm_timeout_s || 10,
+    };
+  }
+
+  // --- Day 5: confirmation modal ---------------------------------------
+  let _confirmTimer = null;
+  let _confirmActiveId = null;
+  let _confirmTtsBackend = 'kokoro';
+
+  function showConfirmModal(question, confirmId, timeoutS) {
+    _confirmActiveId = confirmId;
+    const modal = document.getElementById('confirmModal');
+    document.getElementById('confirmText').textContent = question || 'Should I do that?';
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    document.getElementById('confirmYes').focus();
+    clearTimeout(_confirmTimer);
+    _confirmTimer = setTimeout(() => {
+      if (_confirmActiveId === confirmId) {
+        respondConfirm(false);
+        showToast('Cancelled (no response)', 'warn');
+      }
+    }, (timeoutS || 10) * 1000);
+  }
+
+  function hideConfirmModal() {
+    const modal = document.getElementById('confirmModal');
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    _confirmActiveId = null;
+    clearTimeout(_confirmTimer);
+  }
+
+  async function respondConfirm(yes) {
+    const cid = _confirmActiveId;
+    hideConfirmModal();
+    if (!cid) return;
+    setMic('processing');
+    try {
+      const r = await fetch('/api/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_id: cid, confirmed: yes, tts: _confirmTtsBackend, enable_tts: 'true' }),
+      });
+      const data = await r.json();
+      if (data.tts_audio_b64) {
+        try { new Audio('data:audio/wav;base64,' + data.tts_audio_b64).play().catch(() => {}); } catch (_) {}
+      }
+      const norm = adaptVoiceResponse(data);
+      finishCommand(norm, yes ? null : 'Cancelled');
+    } catch (e) {
+      showToast('Confirm failed: ' + e.message, 'warn');
+      setMic('idle');
+    }
   }
 
   function encodeWAV(samples, sampleRate) {
@@ -3208,6 +3604,17 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     console.log('[mic] click; current state:', state.micState);
     if (state.micState === 'idle')       startRecording();
     else if (state.micState === 'recording') stopRecording();
+  });
+
+  // ----- Day 5: confirm modal buttons -----
+  document.getElementById('confirmYes').addEventListener('click', () => respondConfirm(true));
+  document.getElementById('confirmNo').addEventListener('click', () => respondConfirm(false));
+  // Esc / outside-click cancels the confirm too
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _confirmActiveId) respondConfirm(false);
+  });
+  document.getElementById('confirmModal').addEventListener('click', (e) => {
+    if (e.target.id === 'confirmModal') respondConfirm(false);
   });
 
   // ----- Text fallback -----
@@ -3258,6 +3665,14 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     await sleep(600);
     removeTypingBubble();
     const said = override || res?.said || 'Voice command';
+    // Day 5: intercept confirm-required responses BEFORE rendering as a normal action.
+    if (res?.requiresConfirm && res?.confirmId) {
+      if (!override) addChatBubble('you', 'You said', said);
+      addChatBubble('bot', 'GrowMate', res.confirmQuestion || 'Should I proceed?');
+      showConfirmModal(res.confirmQuestion, res.confirmId, res.confirmTimeoutS);
+      setMic('idle');
+      return;
+    }
     state.lastAction = res?.did || 'Done';
     state.lastResponse = res?.say || 'Done.';
     if (typeof res?.lightsOn === 'boolean') state.lightsOn = res.lightsOn;
