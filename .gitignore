@@ -29,3 +29,16 @@ tools/_*.py
 R_Jain_EE650_Project.zip
 demo/Interim_Report_*.pdf
 *.pdf
+
+# Virtual environments
+venv/
+venv-*/
+.venv/
+
+# Curl-downloaded API docs (regenerate with build_docs script)
+src/growmate_voice/intent_server_docs*.html
+src/growmate_voice/intent_server_openapi.json
+
+# Loose root data files (real maps live in tools/maps/)
+/map.yaml
+/a.yaml
