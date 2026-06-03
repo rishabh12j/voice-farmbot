@@ -118,17 +118,14 @@ voice-farmbot/
 │   ├── farmbot_interfaces/       │
 │   ├── map_handler/              │
 │   └── camera_handler/           ┘
-├── growmate-bt/                  Standalone BT evaluation suite
-│   ├── growmate/
-│   │   ├── ai_core.py            Same classifier, runs without ROS2
-│   │   └── bt_engine.py
-│   ├── evaluate_bt.py            29-utterance corpus evaluation
-│   └── config/farmbot.yaml
 ├── tools/
 │   ├── build_active_map.py       Generate active_map.yaml from CSV / FarmBot API
 │   ├── calibrate.py              Capture real plant positions via the GrowMate UI
-│   └── active_map.from_pi.yaml   Snapshot of the Pi's CONF-generated map
+│   ├── evaluate_v2.py            29-utterance corpus eval against the Pi intent server
+│   ├── placements.csv            Current garden's plant list (species, x, y, z)
+│   └── maps/                     Saved garden snapshots
 └── demo/
+    ├── INTEGRATION_GUIDE.md      How to drive the FarmBot from your own code
     ├── presentation_leipzig.md   8-slide academic talk (VoiceBT framework)
     ├── presentation_dundalk.md   10-slide elder-facing focus-group deck
     ├── questionnaire.md          SUS + custom items + per-utterance log
@@ -227,9 +224,10 @@ would emit — without publishing anything to the robot.
 
 ### Evaluate the framework
 
+Against the V2 Pi intent server (29-utterance corpus, Gugliermo metrics):
+
 ```bash
-cd growmate-bt
-python evaluate_bt.py --model gemma3:4b --dump-trees bt_dump.txt
+python tools/evaluate_v2.py --pi-url http://<pi>:8000/intent
 ```
 
 ---
