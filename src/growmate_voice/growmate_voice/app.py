@@ -89,6 +89,8 @@ class AppState:
     model: str = "gemma3:4b"
     ollama_url: str = "http://localhost:11434"
     lights_on: bool = False               # tracked so the "lights" toggle flips correctly
+    whisper_model: str = "small.en"       # Day 4: bumped from tiny.en for elderly accuracy
+    whisper_prompt: Optional[str] = None  # plant-name biasing, built at first STT call
 
 
 _STATE = AppState()
@@ -109,9 +111,80 @@ def _ensure_initialised(ros2_enabled: bool) -> None:
         log.info("GrowMate backend ready.  Log: %s", log_path())
 
 
+def _build_whisper_prompt() -> str:
+    """Day 4: bias Whisper toward the plant names this garden actually has.
+
+    The prompt is intentionally short and casual — Whisper uses it as a
+    soft prior; longer prompts get truncated. We include:
+      - all plant names + aliases from the garden config
+      - the location name (for weather questions)
+      - common garden actions the user might say
+
+    We load the garden config directly from disk so prompt biasing works
+    even when Ollama isn't reachable (degraded modes shouldn't degrade STT).
+    """
+    parts: list[str] = []
+
+    # Load garden config from disk — independent of AICore / Ollama
+    try:
+        from .ai_core import GardenConfig
+        # repo_root/src/growmate_pi/config/farmbot.yaml is the V2 config with
+        # the full plant list. parents[2] = ../../.. = src/
+        here = Path(__file__).resolve()
+        cfg = here.parents[2] / "growmate_pi" / "config" / "farmbot.yaml"
+        if not cfg.exists():
+            cfg = here.parents[1] / "config" / "farmbot.yaml"
+        garden = GardenConfig(str(cfg))
+        for p in garden.plants:
+            parts.append(str(p.get("name", "")))
+            for a in p.get("aliases", []) or []:
+                parts.append(str(a))
+        for loc in garden.locations:
+            parts.append(str(loc.get("name", "")))
+        if garden.location_name:
+            parts.append(str(garden.location_name))
+    except Exception as exc:
+        log.warning("Whisper prompt: garden config load failed (%s) — action vocab only", exc)
+
+    # Action vocab — primes Whisper for the words it'll hear most often
+    parts.extend([
+        "water", "watering", "move", "go home", "lights on", "lights off",
+        "photo", "check", "moisture", "stop", "halt", "emergency",
+    ])
+
+    # Dedupe while preserving order; cap length so Whisper doesn't truncate
+    seen: set = set()
+    deduped = []
+    for w in parts:
+        w = w.strip()
+        if not w or w.lower() in seen:
+            continue
+        seen.add(w.lower())
+        deduped.append(w)
+    sentence = "Garden assistant vocabulary: " + ", ".join(deduped) + "."
+    return sentence[:800]  # ~200 tokens cap
+
+
 def _get_stt(name: str) -> Any:
     if name not in _STATE.stt_cache:
-        _STATE.stt_cache[name] = load_stt(name)
+        _STATE.stt_cache[name] = load_stt(name, model_size=_STATE.whisper_model)
+    backend = _STATE.stt_cache[name]
+    # Apply prompt biasing on first use (after AICore + garden are loaded)
+    if name in ("whisper", "faster-whisper", "fw") and _STATE.whisper_prompt is None:
+        try:
+            prompt = _build_whisper_prompt()
+            if prompt:
+                _STATE.whisper_prompt = prompt
+                if hasattr(backend, "set_initial_prompt"):
+                    backend.set_initial_prompt(prompt)
+                log.info("Whisper prompt biased with %d chars", len(prompt))
+        except Exception as exc:
+            log.warning("Whisper prompt build failed: %s", exc)
+    elif name in ("whisper", "faster-whisper", "fw") and _STATE.whisper_prompt:
+        # Already built; ensure backend has it (in case cache was warmed before prompt was ready)
+        if hasattr(backend, "set_initial_prompt") and not getattr(backend, "initial_prompt", None):
+            backend.set_initial_prompt(_STATE.whisper_prompt)
+    return backend
     return _STATE.stt_cache[name]
 
 
@@ -3351,10 +3424,18 @@ def main(argv: Optional[List[str]] = None) -> None:
                         help="Ollama model tag for AICore (default: gemma3:4b)")
     parser.add_argument("--ollama-url", default="http://localhost:11434",
                         help="Ollama server URL (default: http://localhost:11434)")
+    parser.add_argument(
+        "--whisper-model",
+        default="small.en",
+        help=("Whisper model size: tiny.en (fastest) | base.en | small.en "
+              "(default, recommended for elderly speech) | medium.en | "
+              "large-v3 (most accurate, slowest)"),
+    )
     args = parser.parse_args(argv)
 
     _STATE.model = args.model
     _STATE.ollama_url = args.ollama_url
+    _STATE.whisper_model = args.whisper_model
 
     if args.pi_url:
         if not _PI_CLIENT_AVAILABLE:
