@@ -2,7 +2,10 @@
 
 | File | Audience | Slides/Pages | Status |
 |---|---|---|---|
-| [presentation_dundalk.md](presentation_dundalk.md) | 10 elderly participants, Dundalk focus group, 9 Jun 2026 | 10 slides, large print | Draft 1 |
+| [RUN_GUIDE.md](RUN_GUIDE.md)                        | **Researcher — single operational reference** for Pi bringup, intent server, Windows app, test order, V2 eval | Runbook | Current |
+| [eval_v2_results.md](eval_v2_results.md)            | Researcher — V2 evaluation results log | Run log + V1 baseline | Day 12 |
+| [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)        | External collaborators integrating their own code | Reference | Stable |
+| [presentation_dundalk.md](presentation_dundalk.md)  | 10 elderly participants, Dundalk focus group, 9 Jun 2026 | 10 slides, large print | Draft 1 |
 | [presentation_leipzig.md](presentation_leipzig.md)  | Leipzig University research audience | 8 slides, academic | Draft 1 |
 | [questionnaire.md](questionnaire.md)                | Focus-group participants (Dundalk) | A4, printable | Draft 1 |
 | [demo_day_plan.md](demo_day_plan.md)                | Researcher — operational plan for 9 Jun | Run-of-show, checklist | Draft 1 |
