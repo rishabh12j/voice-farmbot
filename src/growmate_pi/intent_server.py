@@ -73,16 +73,31 @@ _PLANT_TYPE_MAP: Dict[str, str] = {
 
 
 def _installed_map_path() -> Optional[Path]:
-    """Locate the active_map.yaml the running map_handler is actually using."""
+    """Locate the active_map.yaml the running map_handler is actually using.
+
+    Preferred location is the AURA install share directory (what's actually
+    loaded by the running map_controller). Falls back to the repo's source
+    copy so this also works when ament_index_python isn't available (tests
+    on Windows / WSL without colcon build).
+    """
     try:
         from ament_index_python.packages import get_package_share_directory
         share = Path(get_package_share_directory("map_handler")) / "config"
+        for name in ("active_map.yaml", "map_references.yaml"):
+            candidate = share / name
+            if candidate.exists():
+                return candidate
     except Exception:
-        return None
-    for name in ("active_map.yaml", "map_references.yaml"):
-        candidate = share / name
-        if candidate.exists():
-            return candidate
+        pass
+    # Fallback: walk up from this file to repo root, then into the source tree
+    here = Path(__file__).resolve()
+    repo_src = here.parents[1]  # src/
+    for sub in (
+        repo_src / "map_handler" / "map_handler" / "config" / "active_map.yaml",
+        repo_src / "map_handler" / "map_handler" / "config" / "map_references.yaml",
+    ):
+        if sub.exists():
+            return sub
     return None
 
 
@@ -111,7 +126,9 @@ def _load_plants_from_map_handler() -> Dict[str, Any]:
         display = raw_name.replace("_", " ").title()
         idx = idents.get("index", len(plants_out) + 1)
         plants_out.append({
+            "index": int(idx),
             "type": ptype,
+            "species": raw_name,
             "x": float(pos.get("x", 0)),
             "y": float(pos.get("y", 0)),
             "name": f"{display} #{idx}",
@@ -184,6 +201,128 @@ _INTENT_EVENT_MAP: Dict[str, str] = {
     "light_on":       "lights_on",
     "light_off":      "lights_off",
 }
+
+
+# Day 8: per-species "watering overdue" threshold, in days. Tweak per the
+# Maynooth garden's actual needs — these are starting points.
+_WATER_THRESHOLD_DAYS: Dict[str, float] = {
+    "tomato":             2.0,
+    "lettuce":            2.0,
+    "lettuce_little_gem": 2.0,
+    "marigold":           4.0,
+    "scallion":           3.0,
+    "spring_onion":       3.0,
+    "mixed pepper":       3.0,
+    "mixed_pepper":       3.0,
+    "pepper":             3.0,
+    "basil":              3.0,
+    "spearmint":          3.0,
+    "mint":               3.0,
+    "lily":               3.0,
+    "geranium":           3.0,
+    "pelargonium":        3.0,
+    "cardinal flower":    2.0,
+    "cardinal_flower":    2.0,
+    "dianthus":           4.0,
+    "carnation":          4.0,
+    "euonymus":           4.0,
+    "petunia":            3.0,
+    "begonia":            3.0,
+}
+_DEFAULT_WATER_THRESHOLD_DAYS = 3.0
+
+
+def _humanise_ts(ts_ms: Optional[int]) -> Optional[str]:
+    """Render a unix-epoch-ms timestamp as 'X ago' for elderly-friendly output."""
+    if not ts_ms:
+        return None
+    delta_s = max(0, (time.time() * 1000 - ts_ms) / 1000.0)
+    if delta_s < 45:
+        return "just now"
+    if delta_s < 3600:
+        m = int(round(delta_s / 60))
+        return f"{m} minute{'s' if m != 1 else ''} ago"
+    if delta_s < 86400:
+        h = int(round(delta_s / 3600))
+        return f"{h} hour{'s' if h != 1 else ''} ago"
+    if delta_s < 7 * 86400:
+        d = int(round(delta_s / 86400))
+        return f"{d} day{'s' if d != 1 else ''} ago"
+    if delta_s < 30 * 86400:
+        w = int(round(delta_s / (7 * 86400)))
+        return f"{w} week{'s' if w != 1 else ''} ago"
+    months = int(round(delta_s / (30 * 86400)))
+    return f"{months} month{'s' if months != 1 else ''} ago"
+
+
+def _days_since(ts_ms: Optional[int]) -> Optional[float]:
+    if not ts_ms:
+        return None
+    delta_s = max(0, time.time() * 1000 - ts_ms) / 1000.0
+    return round(delta_s / 86400.0, 2)
+
+
+def _derive_plant_state(plant: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute derived care state for one plant by mining the event log.
+
+    Per-plant 'watered' events take priority over global 'watered_all'
+    fallbacks. Both are checked so a plant that was last covered by a
+    water_all run isn't flagged as 'never watered'.
+    """
+    plant_index = plant.get("index")
+    species_key = (plant.get("species") or plant.get("type") or "").lower().strip()
+    threshold = _WATER_THRESHOLD_DAYS.get(species_key, _DEFAULT_WATER_THRESHOLD_DAYS)
+
+    last_watered_ts: Optional[int] = None
+    last_watered_source: Optional[str] = None
+    last_photo_ts: Optional[int] = None
+    last_sensed: Optional[Dict[str, Any]] = None
+
+    if _event_log is not None and plant_index is not None:
+        targeted = _event_log.last_for_plant(plant_index, "watered")
+        if targeted:
+            last_watered_ts = targeted["ts"]
+            last_watered_source = "targeted"
+
+        # If no targeted water, consider the most recent water_all event.
+        if last_watered_ts is None:
+            recent_all = _event_log.recent(1, event_types=["watered_all"])
+            if recent_all:
+                last_watered_ts = recent_all[0]["ts"]
+                last_watered_source = "water_all"
+
+        photo = _event_log.last_for_plant(plant_index, "photographed")
+        if photo:
+            last_photo_ts = photo["ts"]
+
+        sensed = _event_log.last_for_plant(plant_index, "sensed")
+        if sensed:
+            last_sensed = sensed.get("payload", {}) or {}
+
+    days_since_watered = _days_since(last_watered_ts)
+    attention_flag = False
+    attention_reason: Optional[str] = None
+    if days_since_watered is None:
+        attention_flag = True
+        attention_reason = "Never watered."
+    elif days_since_watered > threshold:
+        attention_flag = True
+        rounded = max(1, int(round(days_since_watered)))
+        attention_reason = f"Not watered in {rounded} day{'s' if rounded != 1 else ''}."
+
+    return {
+        "last_watered_ts": last_watered_ts,
+        "last_watered_human": _humanise_ts(last_watered_ts),
+        "last_watered_source": last_watered_source,  # 'targeted' | 'water_all' | None
+        "days_since_watered": days_since_watered,
+        "water_threshold_days": threshold,
+        "last_photo_ts": last_photo_ts,
+        "last_photo_human": _humanise_ts(last_photo_ts),
+        "last_sensed_moisture": (last_sensed or {}).get("moisture"),
+        "last_sensed_payload": last_sensed,
+        "attention_flag": attention_flag,
+        "attention_reason": attention_reason,
+    }
 
 
 def _log_intent_outcome(intent: Intent, tree_status: str) -> None:
@@ -264,6 +403,88 @@ def build_app(
         Falls back to ``map_references.yaml`` if no active_map is present.
         """
         return _load_plants_from_map_handler()
+
+    # --- Day 8: per-plant detail + needs-attention list ----------------
+    # Route order matters in FastAPI: more specific literal paths
+    # ("/plants/needs_attention") must be declared BEFORE path-parameter
+    # routes ("/plants/{idx}") or the parameter route will swallow them.
+
+    @app.get("/plants/needs_attention")
+    def plants_needs_attention(limit: int = 200):
+        """List plants whose ``attention_flag`` is true, sorted by urgency.
+
+        Used by the UI's "Today's tasks" panel (Day 10) and by voice queries
+        like "what needs my attention?". Plants that have never been watered
+        come first; otherwise sorted by days_since_watered descending.
+        """
+        data = _load_plants_from_map_handler()
+        plants_list = data.get("plants") or []
+        flagged: List[Dict[str, Any]] = []
+        for p in plants_list:
+            state = _derive_plant_state(p)
+            if state.get("attention_flag"):
+                flagged.append({
+                    **p,
+                    "state": state,
+                })
+        # Never-watered (None days_since) ranks above "10 days overdue".
+        flagged.sort(
+            key=lambda r: (
+                0 if r["state"].get("days_since_watered") is None else 1,
+                -(r["state"].get("days_since_watered") or 0),
+            )
+        )
+        return {
+            "plants": flagged[:limit],
+            "count": min(len(flagged), limit),
+            "total_in_garden": len(plants_list),
+        }
+
+    @app.get("/plants/{idx}/history")
+    def plant_history(idx: int, limit: int = 100,
+                      event_type: Optional[str] = None):
+        """Just the event timeline for one plant.
+
+        Lighter than ``/plants/{idx}`` — skips the map lookup. Used by the
+        care card's history scroller (Day 9).
+        """
+        if _event_log is None:
+            raise HTTPException(503, "event log not initialised")
+        types = [event_type] if event_type else None
+        rows = _event_log.for_plant(idx, limit=max(1, min(500, int(limit))),
+                                    event_types=types)
+        return {
+            "plant_index": idx,
+            "events": rows,
+            "count": len(rows),
+        }
+
+    @app.get("/plants/{idx}")
+    def plant_detail(idx: int, history_limit: int = 30):
+        """Full per-plant view: map data + derived state + recent events.
+
+        Returns 404 if the index isn't in the currently loaded map.
+        """
+        data = _load_plants_from_map_handler()
+        plants_list = data.get("plants") or []
+        match: Optional[Dict[str, Any]] = None
+        for p in plants_list:
+            if p.get("index") == idx:
+                match = p
+                break
+        if match is None:
+            raise HTTPException(404, f"plant index {idx} not in current map")
+        state = _derive_plant_state(match)
+        history: List[Dict[str, Any]] = []
+        if _event_log is not None:
+            history = _event_log.for_plant(idx,
+                                           limit=max(1, min(500, int(history_limit))))
+        return {
+            **match,
+            "state": state,
+            "recent_events": history,
+            "history_count": len(history),
+        }
 
     @app.post("/intent", response_model=IntentResponse)
     def intent(req: IntentRequest) -> IntentResponse:
