@@ -12,7 +12,9 @@ action without the right preceding ``CheckAvailable`` / ``CheckBounds`` /
 
 from __future__ import annotations
 
-from typing import List, Optional
+import time as _time
+import uuid as _uuid
+from typing import Any, Callable, Dict, List, Optional
 
 import py_trees
 
@@ -21,11 +23,15 @@ from growmate_pi.garden_config import GardenConfig
 from growmate_pi.schemas import Intent
 
 from growmate_pi.bt.action_nodes import (
+    CheckEstop,
     EmergencyStop,
+    LogPlantEvent,
     MoveTo,
     PublishCmd,
     ReadSensor,
     Respond,
+    StepNotify,
+    TaskBoundary,
     Wait,
 )
 from growmate_pi.bt.condition_nodes import (
@@ -81,22 +87,110 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
 
 
 def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
-    resolved = garden.resolve_target(intent.target) if intent.target else None
-    duration = int(
-        intent.params.get(
-            "duration_s",
-            resolved.water_quantity if resolved else 6,
+    """Tier B: water all plants in the active map matching ``intent.target``.
+
+    Three branches:
+      1. No target supplied  -> error subtree (LLM should have given one).
+      2. Target supplied but the active_map has zero matches -> a tiny
+         failure tree with a clear "I don't see any X in this garden" TTS.
+         This was the begonia bug from the WSL test: the LLM emitted
+         water target=begonia, but the active_map has none, so before this
+         we silently fell back to a placeholder coord from farmbot.yaml.
+      3. Target supplied with N >= 1 matches -> a TaskBoundary("start") +
+         N x (CheckEstop -> StepNotify -> MoveTo -> Pump on -> Wait ->
+         Pump off -> LogPlantEvent) + TaskBoundary("end") sequence.
+
+    The CheckEstop leaves between plants are belt-and-braces: the Wait
+    inside each pulse is already tick-aware, but a checkpoint at every
+    plant boundary makes the abort behaviour predictable to demo on
+    stage ("press Stop now, robot halts on the next plant").
+    """
+    # Local import to dodge a circular: intent_server imports builder,
+    # but find_plants_by_species lives in intent_server.
+    from growmate_pi.intent_server import find_plants_by_species
+
+    target = (intent.target or "").strip()
+    if not target:
+        return _seq(
+            "Water (no target)",
+            Respond("I need to know which plant to water. "
+                    "Try saying 'water the tomatoes'."),
         )
+
+    matches = find_plants_by_species(target)
+    if not matches:
+        # Q-design: refuse cleanly rather than fall back to water_all or
+        # to a placeholder coordinate.
+        return _seq(
+            f"Water {target} (no match)",
+            Respond(f"I don't see any {target} in this garden. "
+                    "Tell me a different plant."),
+        )
+
+    # Build the per-plant duration once. Active_map carries water_quantity
+    # in seconds; default to 6 s if the row is malformed.
+    def _plant_duration(p: Dict[str, Any]) -> int:
+        try:
+            return int(float(p.get("water_quantity") or 6.0))
+        except Exception:
+            return 6
+
+    task_id = _uuid.uuid4().hex[:8]
+    total = len(matches)
+    label = f"Watering {total} {target}" if total > 1 else f"Watering one {target}"
+
+    children: List[py_trees.behaviour.Behaviour] = [
+        TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
+                     name=f"BeginTask({total})"),
+        CheckAvailable(bridge),
+    ]
+
+    for i, plant in enumerate(matches, start=1):
+        x = float(plant["x"])
+        y = float(plant["y"])
+        z = 0.0
+        duration = _plant_duration(plant)
+        plant_name = str(plant.get("name") or f"plant {plant.get('index', '?')}")
+        plant_index = int(plant.get("index", 0))
+        step_label = f"{plant_name} ({i}/{total})"
+
+        # Per-leaf event-log writer — bound to this specific plant. Runs
+        # AFTER the pump-off so the row only exists if the cycle truly
+        # completed; that's the Tier B "honest log" payoff.
+        def _make_log_fn(p_idx: int, p_name: str) -> Callable[[], None]:
+            def _fn() -> None:
+                # Local import for the same circular-avoidance reason as above.
+                from growmate_pi.intent_server import _event_log
+                if _event_log is None:
+                    return
+                _event_log.log(
+                    event_type="watered",
+                    plant_index=p_idx,
+                    plant_name=p_name,
+                    payload={"source": "multi_plant_water", "task_id": task_id},
+                )
+            return _fn
+
+        children.extend([
+            CheckEstop(name=f"CheckEstop({i})"),
+            StepNotify(i, step_label, name=f"Step({i}/{total})"),
+            MoveTo(bridge, x=x, y=y, z=z, name=f"MoveTo({plant_name})"),
+            PublishCmd("D_W_1", bridge, name=f"PumpOn({i})"),
+            Wait(duration, name=f"Pulse({duration}s, {i})"),
+            PublishCmd("D_W_0", bridge, name=f"PumpOff({i})"),
+            LogPlantEvent(_make_log_fn(plant_index, plant_name),
+                          name=f"LogWatered({i})"),
+        ])
+
+    # Friendly summary to TTS — honest about the count.
+    summary = (intent.response.strip() if intent.response else "") or (
+        f"Watered {total} {target}." if total > 1
+        else f"Watered the {target}."
     )
-    return _seq(
-        f"Water {intent.target}",
-        *_safety_and_target(bridge, garden, intent.target),
-        MoveTo(bridge),
-        PublishCmd("D_W_1", bridge, name="WaterPumpOn"),
-        Wait(duration, name=f"Pulse({duration}s)"),
-        PublishCmd("D_W_0", bridge, name="WaterPumpOff"),
-        Respond(intent.response),
-    )
+    children.append(Respond(summary, name="Summarise"))
+    children.append(TaskBoundary("end", name="EndTask"))
+
+    return _seq(label, *children)
 
 
 def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:

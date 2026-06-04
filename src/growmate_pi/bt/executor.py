@@ -22,7 +22,11 @@ from growmate_pi.schemas import NodeResult, TreeResult
 
 
 TICK_HZ = 10.0
-DEFAULT_TIMEOUT_S = 60.0
+# Tier B: 30-minute ceiling. Long enough for a full-bed water sequence
+# (18 scallions x 30 s = 9 min, doubled for safety + jog time) while
+# still being a backstop against a genuinely runaway tree. Estop is the
+# fast path; this timeout is the slow guardrail.
+DEFAULT_TIMEOUT_S = 1800.0
 
 
 # Blackboard keys this executor clears between requests so state doesn't leak.

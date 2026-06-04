@@ -41,6 +41,7 @@ from growmate_pi.schemas import (
     IntentRequest,
     IntentResponse,
 )
+from growmate_pi.task_state import get_task_state
 
 
 DEFAULT_CONFIG = (
@@ -145,6 +146,61 @@ def _load_plants_from_map_handler() -> Dict[str, Any]:
         },
         "source": str(path),
     }
+
+
+# --- Tier B: species-resolution helpers for the multi-plant water tree -------
+# Used by build_tree / _tree_water so "water the lettuces" can walk all 8
+# instances in the active map. Plural / alias / case folding is done once here
+# so the BT side stays a thin "give me the plants" caller.
+
+
+def _species_forms(target: str) -> set:
+    """All lowercase forms of a target string a plant entry might match.
+
+    Mirrors the Day 11 / fast-path normalisation: 'tomatoes' -> {'tomatoes',
+    'tomato', 'tomatoe'}, 'lilies' -> {'lilies', 'lily', 'lili', 'lilie'}.
+    The active_map stores species like 'Lettuce_little_gem' or 'Mixed Pepper'
+    so we match by substring against both the raw species name and the
+    UI-projected type slug.
+    """
+    t = (target or "").lower().strip().rstrip("?.,").strip()
+    if not t:
+        return set()
+    forms = {t}
+    if t.endswith("ies") and len(t) > 3:
+        forms.add(t[:-3] + "y")
+    if t.endswith("es") and len(t) > 3:
+        forms.add(t[:-2])
+    if t.endswith("s") and len(t) > 1:
+        forms.add(t[:-1])
+    # Common LLM phrasings — "the lettuce", "lettuce bed" etc. shouldn't
+    # match here but we tolerate a trailing word the LLM might emit.
+    return forms
+
+
+def find_plants_by_species(target: str) -> List[Dict[str, Any]]:
+    """Return all active_map plants whose species/type/name matches ``target``.
+
+    Sorted row-by-row (primary Y, secondary X) so the gantry sweeps along
+    the long X axis within each Y band — that's the most efficient pattern
+    for the FarmBot Genesis XL and the most visually obvious on a demo
+    video. Empty list if no plants match (caller decides whether that's a
+    no-match failure tree or a different fallback).
+    """
+    forms = _species_forms(target)
+    if not forms:
+        return []
+    data = _load_plants_from_map_handler()
+    plants = data.get("plants") or []
+    matches: List[Dict[str, Any]] = []
+    for p in plants:
+        species = (p.get("species") or "").lower()
+        ptype = (p.get("type") or "").lower()
+        pname = (p.get("name") or "").lower()
+        if any(f in species or f in ptype or f in pname for f in forms):
+            matches.append(p)
+    matches.sort(key=lambda p: (p["y"], p["x"]))
+    return matches
 
 
 # ---------- Module-level singletons (populated by ``build_app``) -------------
@@ -384,6 +440,9 @@ def build_app(
 
     @app.get("/status")
     def status():
+        # Tier B: include task_state so the Windows UI can poll this
+        # endpoint at 1 Hz and show the blocking overlay during long
+        # multi-plant waters.
         return {
             "ok": True,
             "schema_version": SCHEMA_VERSION,
@@ -391,6 +450,21 @@ def build_app(
             "bridge_ready": _bridge.is_ready(),
             "topic": _bridge.topic,
             "config": str((config_path or DEFAULT_CONFIG)),
+            "task": get_task_state().snapshot(),
+        }
+
+    @app.get("/plants/by_species/{target}")
+    def plants_by_species(target: str):
+        """Tier B helper: how many plants of this species are in the
+        active map? Windows side calls this AFTER LLM classification but
+        BEFORE building the intent payload, so the soft-confirm gate can
+        fire on Q2 (N >= 5). Also returns the matched plant rows so the
+        UI can preview "Tomato #34, Tomato #18, …" if it wants to."""
+        matches = find_plants_by_species(target)
+        return {
+            "target": target,
+            "count": len(matches),
+            "plants": matches,
         }
 
     @app.get("/plants")
@@ -534,6 +608,11 @@ def build_app(
     @app.post("/estop")
     def estop():
         bridge = _require_bridge()
+        # Tier B: flip the task-state flag FIRST so any in-flight Wait
+        # node sees it on its next tick (~100 ms) and short-circuits to
+        # FAILURE — the bridge publish below halts the firmware, and the
+        # blackboard flag halts the BT.
+        get_task_state().request_estop()
         # Publish 'e' twice with a short gap. A single publish was sometimes
         # missed on hardware (race with panel_controller / sequencer state).
         record = bridge.emergency_stop()
@@ -557,6 +636,10 @@ def build_app(
             statuses.append(rec.status)
             if i < 2:
                 time.sleep(0.18)
+        # Tier B: clear the task-state estop flag so the next /intent
+        # can run a Wait node again. Any in-flight tree has already
+        # short-circuited and will report partial in its response.
+        get_task_state().clear_estop()
         print(f"[growmate_pi] /reset_estop -> published 'E' x3 (statuses: {statuses})",
               flush=True)
         return {"status": statuses[-1], "command": "E", "repeated": 3,

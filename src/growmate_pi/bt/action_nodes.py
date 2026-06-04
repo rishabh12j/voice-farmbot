@@ -19,9 +19,11 @@ before any action that needs them.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import py_trees
+
+from growmate_pi.task_state import get_task_state
 
 
 # ---------- Generic command publisher -----------------------------------------
@@ -96,19 +98,29 @@ class MoveTo(py_trees.behaviour.Behaviour):
 class Wait(py_trees.behaviour.Behaviour):
     """Non-blocking wait. Returns RUNNING for ``seconds`` then SUCCESS.
 
-    Uses ``monotonic`` so wall-clock changes don't trip it.
+    Tier B: also checks ``task_state.estop_requested`` every tick and
+    returns FAILURE within one tick (~100 ms) when the operator presses
+    the stop button. Without this, a 30-second pump pulse would hold the
+    tree hostage even though /estop has already published 'e' to the
+    bridge.
+
+    Uses ``monotonic`` so wall-clock changes don't trip the timer.
     """
 
     def __init__(self, seconds: float, name: Optional[str] = None):
         super().__init__(name or f"Wait({seconds}s)")
         self._duration = float(seconds)
         self._start: Optional[float] = None
+        self._task_state = get_task_state()
 
     def initialise(self):
         self._start = time.monotonic()
         self.feedback_message = f"waiting {self._duration}s"
 
     def update(self):
+        if self._task_state.estop_requested():
+            self.feedback_message = "estop requested mid-wait"
+            return py_trees.common.Status.FAILURE
         if self._start is None:
             self._start = time.monotonic()
         elapsed = time.monotonic() - self._start
@@ -118,6 +130,119 @@ class Wait(py_trees.behaviour.Behaviour):
 
     def terminate(self, new_status):
         self._start = None
+
+
+# ---------- Estop-checkpoint (use between leaves in long sequences) ----------
+
+
+class CheckEstop(py_trees.behaviour.Behaviour):
+    """A leaf that fails fast if the operator has pressed Stop.
+
+    Drop one of these between every plant in a multi-plant sequence so a
+    Stop press doesn't have to wait for the current plant's Wait node to
+    next-tick — it can short-circuit at the boundary instead. SUCCESS if
+    nothing's been requested, FAILURE the moment the flag flips.
+    """
+
+    def __init__(self, name: str = "CheckEstop"):
+        super().__init__(name)
+        self._task_state = get_task_state()
+
+    def update(self):
+        if self._task_state.estop_requested():
+            self.feedback_message = "operator pressed stop"
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.SUCCESS
+
+
+# ---------- Task-state progress notifier --------------------------------------
+
+
+class StepNotify(py_trees.behaviour.Behaviour):
+    """Bump task_state to advertise which step is now starting.
+
+    Used as the first leaf inside each plant's sub-sequence in the
+    multi-plant water tree so the /status poller can render "Plant 3 of
+    8 — Lettuce_little_gem #12" to the blocking overlay. Always SUCCESS.
+    """
+
+    def __init__(self, step_index: int, step_label: str,
+                 name: Optional[str] = None):
+        super().__init__(name or f"Step({step_index})")
+        self._step_index = int(step_index)
+        self._step_label = step_label
+        self._task_state = get_task_state()
+
+    def update(self):
+        self._task_state.step(self._step_index, self._step_label)
+        self.feedback_message = f"step {self._step_index}: {self._step_label}"
+        return py_trees.common.Status.SUCCESS
+
+
+# ---------- Task-state lifecycle markers --------------------------------------
+
+
+class TaskBoundary(py_trees.behaviour.Behaviour):
+    """Mark task start (``start``) or end (``end``) on the task-state
+    singleton.
+
+    Wrap a long-running sequence with ``TaskBoundary("start", ...)`` at
+    the front and ``TaskBoundary("end")`` at the back so the /status
+    poller knows when to show the blocking overlay and when to hide it.
+    Always SUCCESS — the marker itself can never fail.
+    """
+
+    def __init__(self, mode: str, task_id: Optional[str] = None,
+                 label: str = "", total_steps: int = 0,
+                 name: Optional[str] = None):
+        super().__init__(name or f"Task({mode})")
+        if mode not in ("start", "end"):
+            raise ValueError(f"TaskBoundary mode must be 'start' or 'end' (got {mode!r})")
+        self._mode = mode
+        self._task_id = task_id or ""
+        self._label = label
+        self._total_steps = int(total_steps)
+        self._task_state = get_task_state()
+
+    def update(self):
+        if self._mode == "start":
+            self._task_state.start(self._task_id, self._label, self._total_steps)
+            self.feedback_message = f"task started: {self._label}"
+        else:
+            self._task_state.end()
+            self.feedback_message = "task ended"
+        return py_trees.common.Status.SUCCESS
+
+
+# ---------- Per-leaf event-log writer -----------------------------------------
+
+
+class LogPlantEvent(py_trees.behaviour.Behaviour):
+    """Append one row to the per-plant event log after a leaf completes.
+
+    Tier B's "honest log" piece. Instead of writing one tree-summary row
+    at the end of /intent (which lied when the tree was only partial),
+    each watered plant gets its own row at the moment it finishes —
+    so the future ``last_watered_ts`` query is grounded in real ticks.
+
+    The actual write is delegated to a callable passed in by the
+    builder, so this node stays decoupled from the event_log module's
+    import surface.
+    """
+
+    def __init__(self, log_fn: Callable[[], None], name: str = "LogEvent"):
+        super().__init__(name)
+        self._log_fn = log_fn
+
+    def update(self):
+        try:
+            self._log_fn()
+            self.feedback_message = "event logged"
+        except Exception as exc:
+            # Logging is best-effort — never let a logging hiccup fail
+            # a successful action.
+            self.feedback_message = f"log failed: {exc}"
+        return py_trees.common.Status.SUCCESS
 
 
 # ---------- Reply / TTS aggregator -------------------------------------------

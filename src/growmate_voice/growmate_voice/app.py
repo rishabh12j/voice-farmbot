@@ -637,6 +637,41 @@ def api_plant_detail(idx: int, history_limit: int = 30) -> Dict[str, Any]:
     return body
 
 
+# --- Tier B Windows-side proxies ---------------------------------------------
+
+@app.get("/api/pi_status")
+def api_pi_status() -> Dict[str, Any]:
+    """Forward the Pi's /status (which now includes task_state).
+
+    The browser polls this at 1 Hz so the blocking overlay can render
+    "Plant 3 of 8" in real time during multi-plant waters. Returns a
+    benign body when no Pi is configured so the UI can keep polling
+    harmlessly in sim/dev mode without a flood of console errors.
+    """
+    body = _pi_get("/status")
+    if body is None:
+        return {"ok": False, "task": {"task_active": False},
+                "error": "Pi not configured or unreachable"}
+    return body
+
+
+@app.get("/api/plants/by_species/{target}")
+def api_plants_by_species(target: str) -> Dict[str, Any]:
+    """Proxy the Pi's /plants/by_species/{target} count + match list.
+
+    Used by ``_dispatch_via_aicore`` to decide whether N >= 5 and the
+    confirm gate should fire, but also exposed to the browser in case
+    the UI wants to show a "this will water 8 plants" preview before
+    the user confirms.
+    """
+    from urllib.parse import quote
+    body = _pi_get(f"/plants/by_species/{quote(target)}")
+    if body is None:
+        return {"target": target, "count": 0, "plants": [],
+                "error": "Pi not configured or unreachable"}
+    return body
+
+
 @app.get("/api/plants")
 def api_plants() -> Dict[str, Any]:
     """Return the real garden layout for the UI map.
@@ -1313,12 +1348,27 @@ def _fast_path_plant_query(transcript: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
+_MULTI_PLANT_CONFIRM_THRESHOLD = 5
+
+
+def _dispatch_via_aicore(
+    transcript: str, source: str,
+    skip_multi_plant_gate: bool = False,
+) -> Dict[str, Any]:
     """Run the LLM classifier and dispatch the resulting intents to Pi.
 
     Returns a position_payload-shaped dict. If anything fails (LLM down,
     Pi unreachable, no intents), falls back to local sim mode with the
     transcript as the last_cmd note.
+
+    Tier B / Q2: when the LLM classifies a ``water`` intent with a target
+    and the Pi reports N >= ``_MULTI_PLANT_CONFIRM_THRESHOLD`` matching
+    plants in the active map, this defers via the existing soft-confirm
+    modal (same mechanism as water_all) so the user gets a "That's 8
+    lettuces. Shall I water them all?" prompt before the gantry starts
+    a 4-minute sequence. ``skip_multi_plant_gate`` is set True by
+    /api/confirm after the user already accepted — without it, the
+    re-dispatch would loop.
     """
     ai = _get_aicore()
     if ai is None:
@@ -1331,6 +1381,36 @@ def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
         _record(source, None, [], "ignored",
                 "No intents from LLM", transcript=transcript)
         return _position_payload(last_cmd=f"(LLM no intents: {transcript})")
+
+    # Tier B Q2: pre-check multi-plant water for the confirm gate.
+    if not skip_multi_plant_gate:
+        for i in intents:
+            if i.get("action") != "water":
+                continue
+            target = (i.get("target") or "").strip()
+            if not target:
+                continue
+            try:
+                body = api_plants_by_species(target)
+            except Exception as exc:
+                log.warning("by_species lookup failed for %s: %s", target, exc)
+                continue
+            n = int(body.get("count") or 0)
+            if n < _MULTI_PLANT_CONFIRM_THRESHOLD:
+                continue
+            # Defer via the same modal mechanism as water_all. We stash the
+            # transcript and let /api/confirm re-run _dispatch_via_aicore
+            # with skip_multi_plant_gate=True.
+            action_desc = f"water all {n} {target}"
+            cid = _store_pending({
+                "type": "aicore_transcript",
+                "transcript": transcript,
+                "source": source,
+                "skip_multi_plant_gate": True,
+            })
+            log.info("multi-plant gate: %s -> %d plants, deferring (cid=%s)",
+                     target, n, cid)
+            return _build_pending_response(cid, transcript, action_desc)
 
     # Day 1 fix: any general_question intent needs a real answer, not the
     # LLM's pre-baked "let me look that up" filler. Run AICore.reason() with
@@ -1575,12 +1655,19 @@ def api_confirm(body: Dict[str, Any]) -> Any:
     # User confirmed — execute the deferred action.
     source = item.get("source", "voice")
     transcript = item.get("transcript", "")
+    # Tier B Q2: if this pending was a multi-plant gate deferral, tell the
+    # re-dispatcher to skip the gate check so it doesn't loop right back to
+    # another modal.
+    skip_multi_plant_gate = bool(item.get("skip_multi_plant_gate", False))
     try:
         if item["type"] == "pattern":
             payload = _execute_action(item["action"], source=source)
             pipeline_log.append(f"🤖 {payload.get('last_cmd', '')}")
         elif item["type"] == "aicore_transcript":
-            payload = _dispatch_via_aicore(transcript, source=source)
+            payload = _dispatch_via_aicore(
+                transcript, source=source,
+                skip_multi_plant_gate=skip_multi_plant_gate,
+            )
             pipeline_log.append(f"🧠 {payload.get('last_cmd', '')}")
         else:
             payload = _position_payload(last_cmd=f"(unknown pending type: {item['type']})")
@@ -3136,6 +3223,112 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     transition-duration: .001ms !important;
   }
 }
+
+/* ============ Tier B: blocking task overlay ============ */
+.task-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(53, 90, 64, .92);   /* moss-deep, near-opaque */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: taskFadeIn .25s ease-out;
+}
+.task-overlay.is-open{ display: flex; }
+@keyframes taskFadeIn { from { opacity: 0 } to { opacity: 1 } }
+.task-card{
+  width: min(640px, 100%);
+  background: var(--paper);
+  border-radius: var(--radius-l);
+  padding: 36px 32px 28px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.35);
+  text-align: center;
+  color: var(--ink);
+}
+.task-card .task-label{
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  color: var(--moss-deep);
+  margin: 0 0 6px;
+  line-height: 1.2;
+}
+.task-card .task-progress-text{
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--moss);
+  margin: 0 0 18px;
+}
+.task-card .task-bar{
+  width: 100%;
+  height: 16px;
+  border-radius: 10px;
+  background: var(--cream-deep);
+  overflow: hidden;
+  margin: 0 0 8px;
+}
+.task-card .task-bar-fill{
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--moss-soft), var(--moss));
+  transition: width .3s ease-out;
+}
+.task-card .task-current{
+  font-size: 18px;
+  color: var(--ink);
+  opacity: .75;
+  margin: 4px 0 28px;
+  min-height: 1.2em;
+}
+.task-card .task-abort{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  padding: 26px 24px;
+  border: none;
+  border-radius: var(--radius-m);
+  background: var(--tomato);
+  color: white;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: .5px;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(193,57,43,.35);
+  transition: transform .12s ease, box-shadow .2s ease, background .2s ease;
+  font-family: inherit;
+}
+.task-card .task-abort:hover{ background: #b13629; }
+.task-card .task-abort:active{ transform: scale(.97); box-shadow: 0 4px 12px rgba(193,57,43,.25); }
+.task-card .task-abort-icon{
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: white;
+  position: relative;
+}
+.task-card .task-abort-icon::after{
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 4px;
+  background: var(--tomato);
+}
+.task-card .task-foot{
+  margin-top: 14px;
+  font-size: 16px;
+  color: var(--moss-deep);
+  opacity: .8;
+}
+@media (max-width: 600px){
+  .task-card{ padding: 28px 22px 22px; }
+  .task-card .task-label{ font-size: 24px; }
+  .task-card .task-abort{ padding: 22px 18px; font-size: 24px; }
+}
 </style>
 </head>
 <body>
@@ -3424,6 +3617,27 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   </footer>
 
 </main>
+
+<!-- ============ Tier B: blocking task overlay ============ -->
+<!-- Sits on top of everything while a long-running action (multi-plant
+     water) is in progress. Polled into existence by refreshPiStatus(). -->
+<div class="task-overlay" id="taskOverlay" role="dialog" aria-modal="true"
+     aria-labelledby="taskLabel" aria-live="polite">
+  <div class="task-card">
+    <h2 class="task-label" id="taskLabel">Working on it…</h2>
+    <p class="task-progress-text" id="taskProgressText">Plant 1 of 1</p>
+    <div class="task-bar" aria-hidden="true">
+      <div class="task-bar-fill" id="taskBarFill"></div>
+    </div>
+    <p class="task-current" id="taskCurrent"></p>
+    <button class="task-abort" id="taskAbortBtn"
+            aria-label="Emergency stop — halt this task now">
+      <span class="task-abort-icon" aria-hidden="true"></span>
+      EMERGENCY STOP
+    </button>
+    <p class="task-foot">The robot will stop within a second.</p>
+  </div>
+</div>
 
 <!-- ============ Settings drawer ============ -->
 <div class="drawer-back" id="drawerBack" aria-hidden="true"></div>
@@ -4525,6 +4739,75 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   // Don't poll the (non-existent) backend in the standalone preview — keep "Connected" green by default.
   // In the real FastAPI deployment, the line below should be uncommented:
   // setInterval(pollStatus, 4000);
+
+  // ============ Tier B: blocking task overlay ============
+  // Polls /api/pi_status at 1 Hz so the user sees "Plant 3 of 8" updating
+  // in real time during a multi-plant water. The overlay's EMERGENCY STOP
+  // button is the only interactable element while a task is running.
+  const taskOverlay      = $('taskOverlay');
+  const taskLabelEl      = $('taskLabel');
+  const taskProgressText = $('taskProgressText');
+  const taskBarFill      = $('taskBarFill');
+  const taskCurrent      = $('taskCurrent');
+  const taskAbortBtn     = $('taskAbortBtn');
+
+  let _taskLastRevision = -1;
+  function _renderTaskOverlay(task) {
+    if (!task || !task.task_active) {
+      if (taskOverlay.classList.contains('is-open')) {
+        taskOverlay.classList.remove('is-open');
+        if (typeof app !== 'undefined') app.setAttribute('aria-hidden', 'false');
+      }
+      return;
+    }
+    const cur = task.current_step || 0;
+    const tot = task.total_steps || 0;
+    const pct = tot > 0 ? Math.min(100, Math.max(0, Math.round((cur / tot) * 100))) : 0;
+    taskLabelEl.textContent      = task.task_label || 'Working on it…';
+    taskProgressText.textContent = tot > 0 ? `Plant ${cur} of ${tot}` : 'Starting…';
+    taskBarFill.style.width      = pct + '%';
+    taskCurrent.textContent      = task.current_label || '';
+    if (!taskOverlay.classList.contains('is-open')) {
+      taskOverlay.classList.add('is-open');
+      if (typeof app !== 'undefined') app.setAttribute('aria-hidden', 'true');
+    }
+  }
+  async function refreshPiStatus() {
+    try {
+      const r = await fetch('/api/pi_status');
+      if (!r.ok) return;
+      const j = await r.json();
+      const task = j?.task;
+      if (!task) return;
+      // Only re-render if the Pi reports a new state — saves DOM work on
+      // a 1 Hz tick.
+      const rev = task.revision != null ? task.revision : (task.task_active ? 1 : 0);
+      if (rev !== _taskLastRevision) {
+        _taskLastRevision = rev;
+        _renderTaskOverlay(task);
+      } else if (!task.task_active && taskOverlay.classList.contains('is-open')) {
+        _renderTaskOverlay(task);
+      }
+    } catch (_) { /* offline / Pi down: leave overlay alone */ }
+  }
+  if (taskAbortBtn) {
+    taskAbortBtn.addEventListener('click', async () => {
+      taskAbortBtn.disabled = true;
+      taskAbortBtn.style.transform = 'scale(.97)';
+      try {
+        await fetch('/api/estop', { method: 'POST' });
+      } catch (_) { /* Pi unreachable: still flip the local UI */ }
+      // Optimistic close — the next status poll will reconcile if the
+      // estop didn't actually take.
+      _renderTaskOverlay({ task_active: false });
+      setTimeout(() => {
+        taskAbortBtn.disabled = false;
+        taskAbortBtn.style.transform = '';
+      }, 400);
+    });
+  }
+  refreshPiStatus();
+  setInterval(refreshPiStatus, 1000);
 
   // ----- Refresh "time ago" labels periodically -----
   setInterval(() => {
