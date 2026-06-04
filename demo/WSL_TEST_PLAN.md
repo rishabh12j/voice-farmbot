@@ -25,6 +25,12 @@ python3 -m venv venv-wsl
 source venv-wsl/bin/activate
 pip install fastapi 'uvicorn[standard]' httpx pyyaml py_trees pydantic
 
+# If pip says "py_trees already satisfied" but the intent server then
+# crashes with `ModuleNotFoundError: No module named 'py_trees'`, pip
+# was finding the ROS 2 copy at /opt/ros/humble/lib/... which isn't on
+# the venv's import path. Force-install into the venv:
+pip install --force-reinstall py_trees
+
 # install a copy of the map at the location the intent server expects
 mkdir -p ~/.growmate_pi
 cp tools/maps/maynooth_54plants.yaml \
@@ -291,6 +297,7 @@ python tools\evaluate_v2.py --pi-url http://localhost:8000/intent --no-llm
 | Today's-care panel visible | JS cache | hard-refresh; check `MEMORY_FEATURES_ENABLED = false` in the served HTML via DevTools |
 | WSL sim never prints `[SIM] FarmBot:` for any command | bridge didn't init in sim mode | restart with `--no-ros2` explicitly |
 | `ModuleNotFoundError: fastapi` in WSL | venv-wsl missing deps | `pip install fastapi 'uvicorn[standard]' httpx pyyaml py_trees pydantic` |
+| `ModuleNotFoundError: py_trees` even after pip says "already satisfied" | pip found ROS 2's copy at `/opt/ros/humble/...` but the venv can't import from there | `pip install --force-reinstall py_trees` |
 
 ---
 
