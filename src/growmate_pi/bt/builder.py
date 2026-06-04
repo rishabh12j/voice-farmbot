@@ -182,11 +182,13 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
                           name=f"LogWatered({i})"),
         ])
 
-    # Friendly summary to TTS — honest about the count.
-    summary = (intent.response.strip() if intent.response else "") or (
-        f"Watered {total} {target}." if total > 1
-        else f"Watered the {target}."
-    )
+    # Past-tense summary spoken after the last plant — the browser-side
+    # overlay announces the forward-tense label ("Watering 3 marigolds")
+    # via SpeechSynthesis at task start, so the final TTS is the
+    # confirmation, not the announcement. Always overrides the LLM's
+    # intent.response (which is forward-tense and doesn't know N yet).
+    summary = (f"Done watering {total} {target}." if total > 1
+               else f"Done watering the {target}.")
     children.append(Respond(summary, name="Summarise"))
     children.append(TaskBoundary("end", name="EndTask"))
 

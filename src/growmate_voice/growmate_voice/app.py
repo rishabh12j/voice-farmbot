@@ -3324,10 +3324,66 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   color: var(--moss-deep);
   opacity: .8;
 }
+/* Stopped-mode card variant: same shell, warm clay accent so it's
+   obviously a different state from "running" */
+.task-card[data-mode="stopped"]{ border: 3px solid var(--clay); }
+.task-card .task-label.stopped{
+  color: var(--clay);
+  font-size: 30px;
+  margin: 0 0 10px;
+}
+.task-card .task-stopped-sub{
+  font-size: 19px;
+  color: var(--ink);
+  opacity: .85;
+  margin: 0 0 28px;
+  line-height: 1.4;
+}
+.task-card .task-reset{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  padding: 26px 24px;
+  border: none;
+  border-radius: var(--radius-m);
+  background: var(--moss);
+  color: white;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: .4px;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(74,124,89,.35);
+  transition: transform .12s ease, box-shadow .2s ease, background .2s ease;
+  font-family: inherit;
+}
+.task-card .task-reset:hover{ background: var(--moss-deep); }
+.task-card .task-reset:active{ transform: scale(.97); }
+.task-card .task-reset:disabled{ opacity: .55; cursor: not-allowed; }
+.task-card .task-reset-icon{
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1;
+}
+.task-card .task-stopped-stay{
+  margin-top: 14px;
+  background: transparent;
+  border: none;
+  color: var(--moss-deep);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: inherit;
+  padding: 8px 10px;
+}
+.task-card .task-stopped-stay:hover{ color: var(--ink); }
 @media (max-width: 600px){
   .task-card{ padding: 28px 22px 22px; }
   .task-card .task-label{ font-size: 24px; }
   .task-card .task-abort{ padding: 22px 18px; font-size: 24px; }
+  .task-card .task-reset{ padding: 22px 18px; font-size: 20px; }
 }
 </style>
 </head>
@@ -3620,22 +3676,42 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
 <!-- ============ Tier B: blocking task overlay ============ -->
 <!-- Sits on top of everything while a long-running action (multi-plant
-     water) is in progress. Polled into existence by refreshPiStatus(). -->
+     water) is in progress, OR while the robot is in a post-estop
+     "needs reset" state. Polled into existence by refreshPiStatus(). -->
 <div class="task-overlay" id="taskOverlay" role="dialog" aria-modal="true"
      aria-labelledby="taskLabel" aria-live="polite">
-  <div class="task-card">
-    <h2 class="task-label" id="taskLabel">Working on it…</h2>
-    <p class="task-progress-text" id="taskProgressText">Plant 1 of 1</p>
-    <div class="task-bar" aria-hidden="true">
-      <div class="task-bar-fill" id="taskBarFill"></div>
+  <div class="task-card" id="taskCard" data-mode="running">
+    <!-- Running mode: while a multi-plant action is in flight -->
+    <div class="task-running" id="taskRunningPanel">
+      <h2 class="task-label" id="taskLabel">Working on it…</h2>
+      <p class="task-progress-text" id="taskProgressText">Plant 1 of 1</p>
+      <div class="task-bar" aria-hidden="true">
+        <div class="task-bar-fill" id="taskBarFill"></div>
+      </div>
+      <p class="task-current" id="taskCurrent"></p>
+      <button class="task-abort" id="taskAbortBtn"
+              aria-label="Emergency stop — halt this task now">
+        <span class="task-abort-icon" aria-hidden="true"></span>
+        EMERGENCY STOP
+      </button>
+      <p class="task-foot">The robot will stop within a second.</p>
     </div>
-    <p class="task-current" id="taskCurrent"></p>
-    <button class="task-abort" id="taskAbortBtn"
-            aria-label="Emergency stop — halt this task now">
-      <span class="task-abort-icon" aria-hidden="true"></span>
-      EMERGENCY STOP
-    </button>
-    <p class="task-foot">The robot will stop within a second.</p>
+    <!-- Stopped mode: after a stop, asks the operator to clear the latch -->
+    <div class="task-stopped" id="taskStoppedPanel" hidden>
+      <h2 class="task-label stopped" id="taskStoppedTitle">Robot stopped</h2>
+      <p class="task-stopped-sub" id="taskStoppedSub">
+        The robot is held still until you reset it.
+      </p>
+      <button class="task-reset" id="taskResetBtn"
+              aria-label="Reset the robot and continue using GrowMate">
+        <span class="task-reset-icon" aria-hidden="true">↻</span>
+        RESET — READY TO CONTINUE
+      </button>
+      <button class="task-stopped-stay" id="taskStoppedStayBtn"
+              aria-label="Leave the robot stopped for now">
+        Leave it stopped for now
+      </button>
+    </div>
   </div>
 </div>
 
@@ -4742,36 +4818,132 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
   // ============ Tier B: blocking task overlay ============
   // Polls /api/pi_status at 1 Hz so the user sees "Plant 3 of 8" updating
-  // in real time during a multi-plant water. The overlay's EMERGENCY STOP
-  // button is the only interactable element while a task is running.
-  const taskOverlay      = $('taskOverlay');
-  const taskLabelEl      = $('taskLabel');
-  const taskProgressText = $('taskProgressText');
-  const taskBarFill      = $('taskBarFill');
-  const taskCurrent      = $('taskCurrent');
-  const taskAbortBtn     = $('taskAbortBtn');
+  // in real time during a multi-plant water. Two modes:
+  //   - "running":  big progress + EMERGENCY STOP button (interactable)
+  //   - "stopped":  big RESET button after a stop, plus a "stay stopped" link
+  // Also announces task milestones via the browser's SpeechSynthesis so
+  // the elderly user hears "Watering 3 marigolds" before motion starts
+  // and the per-plant label as each plant comes up.
+  const taskOverlay         = $('taskOverlay');
+  const taskCard            = $('taskCard');
+  const taskRunningPanel    = $('taskRunningPanel');
+  const taskStoppedPanel    = $('taskStoppedPanel');
+  const taskLabelEl         = $('taskLabel');
+  const taskProgressText    = $('taskProgressText');
+  const taskBarFill         = $('taskBarFill');
+  const taskCurrent         = $('taskCurrent');
+  const taskAbortBtn        = $('taskAbortBtn');
+  const taskResetBtn        = $('taskResetBtn');
+  const taskStoppedStayBtn  = $('taskStoppedStayBtn');
+  const taskStoppedTitle    = $('taskStoppedTitle');
+  const taskStoppedSub      = $('taskStoppedSub');
 
-  let _taskLastRevision = -1;
-  function _renderTaskOverlay(task) {
-    if (!task || !task.task_active) {
-      if (taskOverlay.classList.contains('is-open')) {
-        taskOverlay.classList.remove('is-open');
-        if (typeof app !== 'undefined') app.setAttribute('aria-hidden', 'false');
-      }
-      return;
-    }
-    const cur = task.current_step || 0;
-    const tot = task.total_steps || 0;
-    const pct = tot > 0 ? Math.min(100, Math.max(0, Math.round((cur / tot) * 100))) : 0;
-    taskLabelEl.textContent      = task.task_label || 'Working on it…';
-    taskProgressText.textContent = tot > 0 ? `Plant ${cur} of ${tot}` : 'Starting…';
-    taskBarFill.style.width      = pct + '%';
-    taskCurrent.textContent      = task.current_label || '';
+  let _taskLastRevision  = -1;
+  let _taskLastLabel     = "";
+  let _taskLastCurLabel  = "";
+  let _taskLastMode      = "";   // 'running' / 'stopped' / 'idle'
+  let _taskUserDismissed = false;  // user clicked "Leave it stopped"
+
+  function _speak(text) {
+    // Browser-side TTS for status announcements. Picked over Kokoro
+    // because per-plant updates need to be instant; a 300 ms HTTP round
+    // trip per plant feels laggy. Best-effort: silently skip if the
+    // browser doesn't support synth.
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth || !text) return;
+      synth.cancel();   // drop any in-flight phrase — newer is better
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.0; u.pitch = 1.0; u.volume = 0.85;
+      synth.speak(u);
+    } catch (_) { /* no synth, fall through silently */ }
+  }
+
+  function _openOverlay() {
     if (!taskOverlay.classList.contains('is-open')) {
       taskOverlay.classList.add('is-open');
       if (typeof app !== 'undefined') app.setAttribute('aria-hidden', 'true');
     }
   }
+  function _closeOverlay() {
+    if (taskOverlay.classList.contains('is-open')) {
+      taskOverlay.classList.remove('is-open');
+      if (typeof app !== 'undefined') app.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function _showRunningPanel() {
+    taskCard.setAttribute('data-mode', 'running');
+    taskRunningPanel.hidden = false;
+    taskStoppedPanel.hidden = true;
+    if (taskAbortBtn) taskAbortBtn.disabled = false;
+  }
+  function _showStoppedPanel() {
+    taskCard.setAttribute('data-mode', 'stopped');
+    taskRunningPanel.hidden = true;
+    taskStoppedPanel.hidden = false;
+    if (taskResetBtn) taskResetBtn.disabled = false;
+  }
+
+  function _renderTaskOverlay(task) {
+    if (!task) { _closeOverlay(); _taskLastMode = 'idle'; return; }
+
+    const running = !!task.task_active;
+    const stopped = !running && !!task.estop_requested;
+
+    if (running) {
+      // Switch to running panel
+      if (_taskLastMode !== 'running') {
+        _showRunningPanel();
+        _taskUserDismissed = false;   // new task: reset the dismissed flag
+        _taskLastMode = 'running';
+      }
+      const cur = task.current_step || 0;
+      const tot = task.total_steps || 0;
+      const pct = tot > 0 ? Math.min(100, Math.max(0, Math.round((cur / tot) * 100))) : 0;
+      const label = task.task_label || 'Working on it…';
+      const curLabel = task.current_label || '';
+
+      taskLabelEl.textContent      = label;
+      taskProgressText.textContent = tot > 0 ? `Plant ${cur} of ${tot}` : 'Starting…';
+      taskBarFill.style.width      = pct + '%';
+      taskCurrent.textContent      = curLabel;
+
+      _openOverlay();
+
+      // Pre-announcement: speak the task label the first time we see it.
+      if (label && label !== _taskLastLabel) {
+        _taskLastLabel = label;
+        _speak(label + '.');
+      }
+      // Per-plant status: speak each time the current label changes.
+      if (curLabel && curLabel !== _taskLastCurLabel) {
+        _taskLastCurLabel = curLabel;
+        // Strip the trailing "(3/8)" from the snapshot so the spoken
+        // phrase reads naturally as "Plant 3 of 8: Tomato hash 34".
+        const cleanCur = curLabel.replace(/\s*\(\d+\/\d+\)\s*$/, '');
+        _speak(`Plant ${cur} of ${tot}.`);
+      }
+      return;
+    }
+
+    if (stopped && !_taskUserDismissed) {
+      if (_taskLastMode !== 'stopped') {
+        _showStoppedPanel();
+        _speak('Robot stopped. Press reset to continue.');
+        _taskLastMode = 'stopped';
+      }
+      _openOverlay();
+      return;
+    }
+
+    // No task active, no estop latch, OR user dismissed: close.
+    _closeOverlay();
+    _taskLastMode = 'idle';
+    _taskLastLabel = '';
+    _taskLastCurLabel = '';
+  }
+
   async function refreshPiStatus() {
     try {
       const r = await fetch('/api/pi_status');
@@ -4779,17 +4951,20 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       const j = await r.json();
       const task = j?.task;
       if (!task) return;
-      // Only re-render if the Pi reports a new state — saves DOM work on
-      // a 1 Hz tick.
-      const rev = task.revision != null ? task.revision : (task.task_active ? 1 : 0);
-      if (rev !== _taskLastRevision) {
+      const rev = task.revision != null
+        ? task.revision
+        : (task.task_active ? 1 : 0);
+      // Always re-evaluate when the overlay is open so we catch the
+      // running -> stopped transition. Skip a render only when nothing
+      // has changed AND the overlay is already closed.
+      if (rev !== _taskLastRevision
+          || taskOverlay.classList.contains('is-open')) {
         _taskLastRevision = rev;
-        _renderTaskOverlay(task);
-      } else if (!task.task_active && taskOverlay.classList.contains('is-open')) {
         _renderTaskOverlay(task);
       }
     } catch (_) { /* offline / Pi down: leave overlay alone */ }
   }
+
   if (taskAbortBtn) {
     taskAbortBtn.addEventListener('click', async () => {
       taskAbortBtn.disabled = true;
@@ -4797,15 +4972,35 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       try {
         await fetch('/api/estop', { method: 'POST' });
       } catch (_) { /* Pi unreachable: still flip the local UI */ }
-      // Optimistic close — the next status poll will reconcile if the
-      // estop didn't actually take.
-      _renderTaskOverlay({ task_active: false });
-      setTimeout(() => {
-        taskAbortBtn.disabled = false;
-        taskAbortBtn.style.transform = '';
-      }, 400);
+      setTimeout(() => { taskAbortBtn.style.transform = ''; }, 400);
+      // Don't optimistically close — let the next 1 Hz poll switch us
+      // into the "stopped" panel so the user has a clear reset CTA.
     });
   }
+  if (taskResetBtn) {
+    taskResetBtn.addEventListener('click', async () => {
+      taskResetBtn.disabled = true;
+      try {
+        await fetch('/api/reset', { method: 'POST' });
+      } catch (_) { /* Pi unreachable: still close the overlay locally */ }
+      _speak('Ready when you are.');
+      // Optimistic close — next status poll will reconcile if reset
+      // didn't take and re-open if estop_requested is still true.
+      _closeOverlay();
+      _taskLastMode = 'idle';
+    });
+  }
+  if (taskStoppedStayBtn) {
+    taskStoppedStayBtn.addEventListener('click', () => {
+      // User explicitly chose to leave the robot stopped — close the
+      // overlay and don't re-open it on the next poll until either
+      // (a) reset is pressed elsewhere, or (b) a new task starts.
+      _taskUserDismissed = true;
+      _closeOverlay();
+      _taskLastMode = 'idle';
+    });
+  }
+
   refreshPiStatus();
   setInterval(refreshPiStatus, 1000);
 
