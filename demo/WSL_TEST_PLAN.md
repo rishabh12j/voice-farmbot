@@ -70,8 +70,13 @@ Windows; if `localhost:8000` from Windows works, skip the IP step.)
 ```cmd
 cd C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice
 set PYTHONPATH=C:\Users\risha\growmate-bt\voice-farmbot\src
-python -m growmate_voice.app --pi-url http://localhost:8000/intent
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.137.161:8000/intent
 ```
+
+> **`--no-ros2` is required on Windows.** The Pi side (WSL) does all
+> the ROS publishing; the Windows app only proxies HTTP. Without
+> `--no-ros2` the app hangs at `Initialising — ros2=True` while
+> trying to find or init a local rclpy that isn't there.
 
 Open `http://localhost:7860` in the browser. **Hard-refresh** (Ctrl+Shift+R).
 
@@ -298,6 +303,7 @@ python tools\evaluate_v2.py --pi-url http://localhost:8000/intent --no-llm
 | WSL sim never prints `[SIM] FarmBot:` for any command | bridge didn't init in sim mode | restart with `--no-ros2` explicitly |
 | `ModuleNotFoundError: fastapi` in WSL | venv-wsl missing deps | `pip install fastapi 'uvicorn[standard]' httpx pyyaml py_trees pydantic` |
 | `ModuleNotFoundError: py_trees` even after pip says "already satisfied" | pip found ROS 2's copy at `/opt/ros/humble/...` but the venv can't import from there | `pip install --force-reinstall py_trees` |
+| Windows app hangs at `Initialising — ros2=True`, never reaches "GrowMate at http://…" | Default tries to init a local rclpy; on Windows that hangs (no ROS) | Restart with `--no-ros2`. The Pi handles all ROS publishing; Windows is HTTP-only. |
 
 ---
 
