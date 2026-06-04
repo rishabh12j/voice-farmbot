@@ -204,6 +204,39 @@ def find_plants_by_species(target: str) -> List[Dict[str, Any]]:
     return matches
 
 
+def find_all_plants_in_garden() -> List[Dict[str, Any]]:
+    """Return every plant in the active map, row-sorted (Y then X).
+
+    Used by the multi-plant ``water_all`` tree so "water everything"
+    walks each plant individually with per-leaf event-log writes and
+    estop checkpoints, rather than firing the firmware-level P_4
+    one-shot. Same row-order convention as ``find_plants_by_species``.
+    """
+    data = _load_plants_from_map_handler()
+    plants = list(data.get("plants") or [])
+    plants.sort(key=lambda p: (p["y"], p["x"]))
+    return plants
+
+
+def list_species_in_garden() -> List[str]:
+    """All distinct plant species/type slugs currently in the active map.
+
+    Used by the Windows side to detect "water all the lettuces" - style
+    phrasings where the LLM emitted ``water_all`` but the user actually
+    named a specific species. Order: ascending by frequency-descending,
+    so the most common species come first (deterministic when ties).
+    """
+    data = _load_plants_from_map_handler()
+    plants = data.get("plants") or []
+    seen: Dict[str, int] = {}
+    for p in plants:
+        for key in ("type", "species"):
+            v = (p.get(key) or "").lower().strip()
+            if v:
+                seen[v] = seen.get(v, 0) + 1
+    return sorted(seen.keys(), key=lambda s: (-seen[s], s))
+
+
 # ---------- Module-level singletons (populated by ``build_app``) -------------
 
 
@@ -467,6 +500,17 @@ def build_app(
             "count": len(matches),
             "plants": matches,
         }
+
+    @app.get("/plants/species")
+    def plants_species():
+        """All distinct species slugs in the loaded garden.
+
+        Used by the Windows-side ``water_all -> water target=<species>``
+        rewrite to detect when the LLM misclassified a phrasing like
+        "water all the lettuces". Cheap enough for the Windows app to
+        refresh once per session (or once a minute) rather than per call.
+        """
+        return {"species": list_species_in_garden()}
 
     @app.get("/plants")
     def plants():

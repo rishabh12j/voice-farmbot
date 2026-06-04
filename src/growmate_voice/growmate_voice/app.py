@@ -672,6 +672,71 @@ def api_plants_by_species(target: str) -> Dict[str, Any]:
     return body
 
 
+# --- Tier B follow-up: water_all -> water(target=species) rewrite -----------
+# Cached species list so the post-classification check doesn't HTTP-hop the
+# Pi on every voice/text call. ~60 s freshness is plenty — the active map
+# doesn't change on its own.
+_SPECIES_CACHE: Dict[str, Any] = {"species": None, "fetched_at": 0.0}
+_SPECIES_TTL_S = 60.0
+
+
+def _known_species_in_garden() -> List[str]:
+    """List of distinct species slugs in the currently loaded garden.
+
+    Cached for ``_SPECIES_TTL_S`` seconds so the species-rewrite check
+    is essentially free on hot voice paths. Falls back to an empty list
+    when no Pi is configured (the rewrite then becomes a no-op).
+    """
+    now = time.monotonic()
+    cached = _SPECIES_CACHE.get("species")
+    if cached is not None and (now - _SPECIES_CACHE.get("fetched_at", 0.0)) < _SPECIES_TTL_S:
+        return cached  # type: ignore[return-value]
+    body = _pi_get("/plants/species")
+    species = (body or {}).get("species") or []
+    if not isinstance(species, list):
+        species = []
+    _SPECIES_CACHE["species"] = species
+    _SPECIES_CACHE["fetched_at"] = now
+    return species
+
+
+def _detect_species_in_transcript(transcript: str) -> Optional[str]:
+    """Return the first known species mentioned in ``transcript`` or None.
+
+    Plural-tolerant: matches "tomato", "tomatoes", "tomato bed", etc.
+    Order is the species list's frequency order (most common first), so
+    "water all the lettuces" hits "lettuce" before some rarer overlap.
+    """
+    t = (transcript or "").lower()
+    if not t:
+        return None
+    species_list = _known_species_in_garden()
+    if not species_list:
+        return None
+    # Tokens for whole-word checks (cheap regex).
+    words = re.findall(r"\b[a-z]+\b", t)
+    word_set = set(words)
+    for sp in species_list:
+        sp_l = sp.lower().strip()
+        if not sp_l:
+            continue
+        # Direct word hit
+        if sp_l in word_set:
+            return sp_l
+        # Plural / form-of: drop trailing 'es' / 's' and check
+        plurals = {sp_l + "s", sp_l + "es"}
+        if plurals & word_set:
+            return sp_l
+        # "Y -> ies" / common forms in the other direction
+        if sp_l.endswith("y") and (sp_l[:-1] + "ies") in word_set:
+            return sp_l
+        # Substring catch (e.g. "lettuce_little_gem" species, "lettuce"
+        # word in transcript)
+        if any(w in sp_l for w in words if len(w) > 3):
+            return sp_l
+    return None
+
+
 @app.get("/api/plants")
 def api_plants() -> Dict[str, Any]:
     """Return the real garden layout for the UI map.
@@ -1381,6 +1446,23 @@ def _dispatch_via_aicore(
         _record(source, None, [], "ignored",
                 "No intents from LLM", transcript=transcript)
         return _position_payload(last_cmd=f"(LLM no intents: {transcript})")
+
+    # Tier B follow-up: water_all -> water(target=species) rewrite.
+    # The WSL session caught the LLM classifying "water all the lettuces"
+    # as water_all (firing P_4 across the whole bed). When the user
+    # explicitly named a species in their request, honour that even when
+    # the LLM's action label disagrees. This runs BEFORE the multi-plant
+    # gate so the gate sees the rewritten action and fires properly.
+    for i in intents:
+        if i.get("action") != "water_all":
+            continue
+        detected = _detect_species_in_transcript(transcript)
+        if not detected:
+            continue
+        log.info("water_all rewritten to water target=%s based on transcript "
+                 "(LLM disagreed: %s)", detected, transcript)
+        i["action"] = "water"
+        i["target"] = detected
 
     # Tier B Q2: pre-check multi-plant water for the confirm gate.
     if not skip_multi_plant_gate:

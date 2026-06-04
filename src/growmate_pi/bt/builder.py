@@ -196,12 +196,88 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
 
 
 def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
-    return _seq(
-        "Water all",
+    """Walk every plant in the active map, watering each in turn.
+
+    Replaces the prior fire-and-forget ``PublishCmd("P_4")`` (which the
+    firmware dispatched silently with no UI feedback) with the same
+    multi-plant pattern used by ``_tree_water``: TaskBoundary("start"),
+    CheckAvailable, N x (CheckEstop, StepNotify, MoveTo, PumpOn, Wait,
+    PumpOff, LogPlantEvent), summary, TaskBoundary("end"). Means:
+
+      - The blocking overlay shows up during P_4 (Bug #2 from the
+        second WSL test).
+      - Per-plant event log rows so "today's care" is honest about
+        what actually got watered.
+      - Estop interrupts mid-sequence within ~100 ms rather than
+        waiting on firmware-side completion.
+
+    Fallback: if the active map is empty (loader failure / Pi has no
+    map_handler) we publish bare P_4 and let the firmware handle it —
+    better than refusing the user's "water everything" outright.
+    """
+    from growmate_pi.intent_server import find_all_plants_in_garden
+
+    plants = find_all_plants_in_garden()
+    if not plants:
+        return _seq(
+            "Water all (P_4 fallback)",
+            CheckAvailable(bridge),
+            PublishCmd("P_4", bridge, name="WaterAllPlants"),
+            Respond(intent.response or "Watering all plants."),
+        )
+
+    def _plant_duration(p: Dict[str, Any]) -> int:
+        try:
+            return int(float(p.get("water_quantity") or 6.0))
+        except Exception:
+            return 6
+
+    task_id = _uuid.uuid4().hex[:8]
+    total = len(plants)
+    label = f"Watering all {total} plants"
+
+    children: List[py_trees.behaviour.Behaviour] = [
+        TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
+                     name=f"BeginTask({total})"),
         CheckAvailable(bridge),
-        PublishCmd("P_4", bridge, name="WaterAllPlants"),
-        Respond(intent.response),
-    )
+    ]
+
+    for i, plant in enumerate(plants, start=1):
+        x = float(plant["x"])
+        y = float(plant["y"])
+        z = 0.0
+        duration = _plant_duration(plant)
+        plant_name = str(plant.get("name") or f"plant {plant.get('index', '?')}")
+        plant_index = int(plant.get("index", 0))
+        step_label = f"{plant_name} ({i}/{total})"
+
+        def _make_log_fn(p_idx: int, p_name: str) -> Callable[[], None]:
+            def _fn() -> None:
+                from growmate_pi.intent_server import _event_log
+                if _event_log is None:
+                    return
+                _event_log.log(
+                    event_type="watered",
+                    plant_index=p_idx,
+                    plant_name=p_name,
+                    payload={"source": "water_all", "task_id": task_id},
+                )
+            return _fn
+
+        children.extend([
+            CheckEstop(name=f"CheckEstop({i})"),
+            StepNotify(i, step_label, name=f"Step({i}/{total})"),
+            MoveTo(bridge, x=x, y=y, z=z, name=f"MoveTo({plant_name})"),
+            PublishCmd("D_W_1", bridge, name=f"PumpOn({i})"),
+            Wait(duration, name=f"Pulse({duration}s, {i})"),
+            PublishCmd("D_W_0", bridge, name=f"PumpOff({i})"),
+            LogPlantEvent(_make_log_fn(plant_index, plant_name),
+                          name=f"LogWatered({i})"),
+        ])
+
+    children.append(Respond(f"Done watering all {total} plants.", name="Summarise"))
+    children.append(TaskBoundary("end", name="EndTask"))
+    return _seq(label, *children)
 
 
 def _tree_go_home(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
