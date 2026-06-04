@@ -579,6 +579,52 @@ def _active_map_path() -> Optional[Path]:
     return None
 
 
+def _pi_get(path: str, timeout_s: float = 4.0) -> Optional[Dict[str, Any]]:
+    """Thin proxy helper — GET a path on the configured Pi and return JSON.
+
+    Returns None if no Pi is configured or the call fails. Logs warnings for
+    real failures so the browser-side caller can degrade gracefully.
+    """
+    if not (_STATE.pi_url and _PI_CLIENT_AVAILABLE):
+        return None
+    try:
+        import httpx
+        base = _STATE.pi_url.rsplit("/intent", 1)[0]
+        with httpx.Client(timeout=timeout_s) as client:
+            r = client.get(base + path)
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        log.warning("Pi GET %s failed: %s", path, exc)
+        return None
+
+
+@app.get("/api/plants/needs_attention")
+def api_plants_needs_attention(limit: int = 200) -> Dict[str, Any]:
+    """Day 8/9 proxy: forward to the Pi's needs_attention list.
+
+    Returns an empty list (with note) when no Pi is configured — the UI
+    knows how to show "nothing to do here" in that case.
+    """
+    body = _pi_get(f"/plants/needs_attention?limit={int(limit)}")
+    if body is None:
+        return {"plants": [], "count": 0, "total_in_garden": 0,
+                "error": "Pi not configured or unreachable"}
+    return body
+
+
+@app.get("/api/plants/{idx}")
+def api_plant_detail(idx: int, history_limit: int = 30) -> Dict[str, Any]:
+    """Day 8/9 proxy: forward to the Pi's per-plant detail endpoint."""
+    body = _pi_get(f"/plants/{idx}?history_limit={int(history_limit)}")
+    if body is None:
+        return JSONResponse(status_code=503, content={
+            "error": "Pi not reachable",
+            "plant_index": idx,
+        })
+    return body
+
+
 @app.get("/api/plants")
 def api_plants() -> Dict[str, Any]:
     """Return the real garden layout for the UI map.
@@ -2503,6 +2549,114 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   margin: 0;
 }
 
+/* ---------- Day 9: plant care card ---------- */
+.care-overlay{
+  position: fixed; inset: 0;
+  background: rgba(43,42,38,.45);
+  display: grid; place-items: end center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease;
+  z-index: 85;
+}
+.care-overlay.show{ opacity: 1; pointer-events: auto; }
+.care-card{
+  background: var(--paper);
+  border-radius: var(--radius-l) var(--radius-l) 0 0;
+  padding: 28px 28px 32px;
+  width: min(640px, 100vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-l);
+  border: 2px solid var(--moss-soft);
+  border-bottom: 0;
+  position: relative;
+  transform: translateY(20px);
+  transition: transform .22s ease;
+}
+.care-overlay.show .care-card{ transform: translateY(0); }
+.care-close{
+  position: absolute;
+  top: 14px; right: 14px;
+  width: 48px; height: 48px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 28px;
+  font-weight: 800;
+  cursor: pointer;
+  line-height: 1;
+}
+.care-close:hover{ background: var(--cream-deep); color: var(--ink); }
+.care-close:focus-visible{ outline: none; box-shadow: var(--focus); }
+.care-title{
+  margin: 0 60px 8px 0;
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.care-badge{
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 18px;
+  margin-bottom: 18px;
+}
+.care-badge[data-tone="ok"]   { background: var(--moss-soft); color: var(--moss-deep); }
+.care-badge[data-tone="warn"] { background: #f4d9b8;          color: #8a4f0f; }
+.care-badge[data-tone="bad"]  { background: #f1c5be;          color: var(--tomato-deep); }
+
+.care-facts{
+  list-style: none;
+  padding: 0;
+  margin: 0 0 24px;
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.care-facts li{
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.care-facts li:last-child{ border-bottom: 0; }
+.care-facts .k{ color: var(--ink-soft); min-width: 140px; }
+.care-facts .v{ color: var(--ink); font-weight: 600; }
+
+.care-water{
+  width: 100%;
+  min-height: 72px;
+  font-size: 22px;
+  font-weight: 800;
+  border: none;
+  border-radius: var(--radius-m);
+  background: var(--moss);
+  color: #fff;
+  box-shadow: 0 6px 0 var(--moss-deep);
+  cursor: pointer;
+  transition: transform .1s ease, background .15s ease;
+  margin-bottom: 14px;
+}
+.care-water:hover{ background: #557f63; }
+.care-water:active{ transform: translateY(3px); box-shadow: 0 3px 0 var(--moss-deep); }
+.care-water:disabled{
+  background: var(--cream-deep);
+  color: var(--ink-soft);
+  box-shadow: 0 6px 0 #d4cdb8;
+  cursor: not-allowed;
+}
+.care-water:focus-visible{ outline: none; box-shadow: var(--focus); }
+
+.care-note{
+  font-size: 15px;
+  color: var(--ink-soft);
+  line-height: 1.4;
+  margin: 0;
+}
+
 /* ---------- settings drawer ---------- */
 .drawer-back{
   position: fixed; inset: 0;
@@ -2951,6 +3105,24 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   </div>
 </div>
 
+<!-- ============ Day 9: Plant care card ============ -->
+<div class="care-overlay" id="careOverlay" role="dialog"
+     aria-modal="true" aria-labelledby="careTitle" aria-hidden="true">
+  <div class="care-card">
+    <button class="care-close" id="careClose" aria-label="Close">×</button>
+    <h2 class="care-title" id="careTitle">Plant</h2>
+    <div class="care-badge" id="careBadge" data-tone="ok">All good.</div>
+    <ul class="care-facts" id="careFacts"></ul>
+    <button class="care-water" id="careWater" aria-label="Water this plant">
+      Water this plant
+    </button>
+    <p class="care-note">
+      The pump is connected. Photos and soil sensors are not active on this demo —
+      use voice or the quick actions for those when the hardware is added.
+    </p>
+  </div>
+</div>
+
 <script>
 /* ========================================================================
    GrowMate front-end
@@ -3274,14 +3446,14 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     const p = plantAtEvent(e);
     if (!p) return;
     hideTooltip();
-    sendCommand(`Water the ${p.type}s`);
+    openCareCard(p);                  // Day 9: tap shows the care card
   });
   plantsLayer.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const p = plantAtEvent(e);
     if (!p) return;
     e.preventDefault();
-    sendCommand(`Water the ${p.type}s`);
+    openCareCard(p);
   });
 
   // tooltip on hover
@@ -3299,7 +3471,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     const top  = offY + p.x * ratioY;
     mapTooltip.style.left = left + 'px';
     mapTooltip.style.top  = top  + 'px';
-    mapTooltip.textContent = `${p.name} — tap to water`;
+    mapTooltip.textContent = `${p.name} — tap for details`;
     mapTooltip.classList.add('show');
   }
   function hideTooltip(){ mapTooltip.classList.remove('show'); }
@@ -3656,6 +3828,92 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       setMic('idle');
     }
   }
+
+  // --- Day 9: plant care card -----------------------------------------
+  const careOverlay = document.getElementById('careOverlay');
+  const careTitle   = document.getElementById('careTitle');
+  const careBadge   = document.getElementById('careBadge');
+  const careFacts   = document.getElementById('careFacts');
+  const careWater   = document.getElementById('careWater');
+  const careClose   = document.getElementById('careClose');
+  let _careCurrent = null;
+
+  function _factRow(k, v) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="k">${escapeHTML(k)}</span><span class="v">${escapeHTML(v)}</span>`;
+    return li;
+  }
+
+  function _renderCareCard(plant, detail) {
+    // plant is the map dict; detail is the /api/plants/{idx} response (may be
+    // null if the Pi proxy failed).
+    careTitle.textContent = plant.name || 'Plant';
+    const state = (detail && detail.state) || {};
+    const flagged = state.attention_flag === true;
+    careBadge.textContent = flagged
+      ? (state.attention_reason || 'Needs water.')
+      : 'All good.';
+    careBadge.dataset.tone = flagged ? 'warn' : 'ok';
+
+    careFacts.innerHTML = '';
+    if (state.last_watered_human) {
+      const src = state.last_watered_source === 'water_all'
+        ? ' (from watering all)' : '';
+      careFacts.appendChild(_factRow('Last watered', state.last_watered_human + src));
+    } else {
+      careFacts.appendChild(_factRow('Last watered', 'No record yet'));
+    }
+    if (plant.species) careFacts.appendChild(_factRow('Species', String(plant.species).replace(/_/g, ' ')));
+    if (plant.stage)   careFacts.appendChild(_factRow('Stage', plant.stage));
+    if (typeof plant.x === 'number')
+      careFacts.appendChild(_factRow('Position', `x ${Math.round(plant.x)} mm  ·  y ${Math.round(plant.y)} mm`));
+    if (plant.water_quantity)
+      careFacts.appendChild(_factRow('Each watering', `${plant.water_quantity} seconds`));
+  }
+
+  async function openCareCard(plant) {
+    _careCurrent = plant;
+    // Render with what we already have so the modal feels instant,
+    // then enrich once the Pi answers.
+    _renderCareCard(plant, null);
+    careOverlay.classList.add('show');
+    careOverlay.setAttribute('aria-hidden', 'false');
+    careWater.focus();
+
+    // Lookup index — the /plants list provides it; older mock data may not.
+    const idx = plant.index;
+    if (!idx) return;
+    try {
+      const r = await fetch(`/api/plants/${idx}`);
+      if (!r.ok) return;
+      const detail = await r.json();
+      if (_careCurrent === plant) _renderCareCard(plant, detail);
+    } catch (_) { /* keep the offline rendering */ }
+  }
+
+  function closeCareCard() {
+    careOverlay.classList.remove('show');
+    careOverlay.setAttribute('aria-hidden', 'true');
+    _careCurrent = null;
+  }
+
+  careClose.addEventListener('click', closeCareCard);
+  careOverlay.addEventListener('click', (e) => {
+    if (e.target.id === 'careOverlay') closeCareCard();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && careOverlay.classList.contains('show')) closeCareCard();
+  });
+  careWater.addEventListener('click', () => {
+    const p = _careCurrent;
+    closeCareCard();
+    if (!p) return;
+    // Use the species (raw name like "Lettuce_little_gem") if available,
+    // falls back to the UI type ("tomato" / "lettuce"). Strip underscores
+    // so the LLM hears natural words.
+    const target = (p.species || p.type || '').replace(/_/g, ' ');
+    sendCommand(`Water the ${target}`);
+  });
 
   function encodeWAV(samples, sampleRate) {
     const buffer = new ArrayBuffer(44 + samples.length * 2);
