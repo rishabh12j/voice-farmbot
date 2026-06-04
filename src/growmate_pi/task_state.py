@@ -53,7 +53,16 @@ class TaskState:
     # ------------------------------------------------------------------ task lifecycle
 
     def start(self, task_id: str, label: str, total_steps: int) -> None:
-        """Mark a task as just started. Clears any prior estop flag."""
+        """Mark a task as just started.
+
+        Does NOT clear the estop_requested flag — that's the operator's
+        latch, cleared only by ``/reset_estop``. If the flag is still
+        set, the new task's first ``CheckEstop`` will fail anyway; we
+        rely on the /intent endpoint to refuse non-emergency calls
+        outright while the latch is set, so the user sees a clear
+        "press reset first" rather than a half-rendered running panel
+        that immediately flips back to stopped.
+        """
         with self._lock:
             self._active = True
             self._task_id = task_id
@@ -62,7 +71,6 @@ class TaskState:
             self._current_step = 0
             self._current_label = ""
             self._started_ts = time.time()
-            self._estop_requested = False
             self._revision += 1
 
     def step(self, step_index: int, step_label: str = "") -> None:

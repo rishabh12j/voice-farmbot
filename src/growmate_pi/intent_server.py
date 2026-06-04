@@ -40,6 +40,7 @@ from growmate_pi.schemas import (
     Intent,
     IntentRequest,
     IntentResponse,
+    TreeResult,
 )
 from growmate_pi.task_state import get_task_state
 
@@ -576,11 +577,45 @@ def build_app(
 
         bridge = _require_bridge()
         garden = _require_garden()
+        task_state = get_task_state()
+
+        # Tier B follow-up: refuse non-emergency intents while the
+        # operator's estop latch is set. Without this, a fresh "water
+        # the tomatoes" would build a tree whose first CheckEstop fails
+        # immediately, leaving the user with a half-rendered overlay
+        # that flips back to stopped within a tick. Better to refuse up
+        # front with a clear "press reset first" message — emergency
+        # intents (req.emergency=True) still go through because they're
+        # the safety path.
+        if not req.emergency and task_state.estop_requested():
+            msg = ("The robot is stopped. Please press reset to clear "
+                   "the safety stop before sending another command.")
+            return IntentResponse(
+                status="failure",
+                tree=TreeResult(label="Estop latched", status="failure",
+                                node_results=[]),
+                commands_published=[],
+                tts_text=msg,
+                duration_ms=0,
+                error="estop_latched",
+            )
 
         commands_before = list(bridge.command_log)
         t0 = time.monotonic()
         root = build_tree(bridge, garden, req.intents, emergency=req.emergency)
-        tree_result = execute_tree(root)
+        try:
+            tree_result = execute_tree(root)
+        finally:
+            # Tier B follow-up: guarantee task_state.end() runs even when
+            # the tree fails mid-sequence. py_trees Sequence stops on the
+            # first failing child, so the TaskBoundary("end") leaf at the
+            # tail of a multi-plant water never ticks after a stop. End
+            # here in a finally so the UI flips from running -> stopped
+            # within one /api/pi_status poll regardless of how the tree
+            # finished. Idempotent — end() on an already-ended task is a
+            # no-op.
+            if task_state.is_active():
+                task_state.end()
         duration_ms = int((time.monotonic() - t0) * 1000)
 
         new_commands = [
