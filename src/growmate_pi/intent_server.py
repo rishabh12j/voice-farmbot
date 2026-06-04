@@ -32,10 +32,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from growmate_pi.bt.builder import build_tree
 from growmate_pi.bt.executor import execute_tree, read_tts_text
+from growmate_pi.event_log import DEFAULT_DB_PATH, EventLog
 from growmate_pi.farmbot_ros2_bridge import FarmBotROS2Bridge
 from growmate_pi.garden_config import GardenConfig
 from growmate_pi.schemas import (
     SCHEMA_VERSION,
+    Intent,
     IntentRequest,
     IntentResponse,
 )
@@ -133,6 +135,7 @@ def _load_plants_from_map_handler() -> Dict[str, Any]:
 
 _bridge: Optional[FarmBotROS2Bridge] = None
 _garden: Optional[GardenConfig] = None
+_event_log: Optional[EventLog] = None
 
 
 def _require_bridge() -> FarmBotROS2Bridge:
@@ -147,19 +150,87 @@ def _require_garden() -> GardenConfig:
     return _garden
 
 
+def _lookup_plant_index(target: Optional[str]) -> Optional[int]:
+    """Find the active_map index of a plant by name. None if not found."""
+    if not target:
+        return None
+    data = _load_plants_from_map_handler()
+    plants = data.get("plants") or []
+    target_lc = target.lower().strip()
+    for p in plants:
+        name = (p.get("name") or "")
+        if target_lc in name.lower():
+            # name format from /plants: "Tomato #34" — pull the trailing index.
+            tail = name.rsplit("#", 1)
+            if len(tail) == 2:
+                try:
+                    return int(tail[1])
+                except ValueError:
+                    pass
+    return None
+
+
+# Which intent actions get recorded and how they're categorised. Anything
+# not in this map is skipped — keeps the log focused on actual care events
+# rather than every estop / nav noise.
+_INTENT_EVENT_MAP: Dict[str, str] = {
+    "water":          "watered",
+    "water_all":      "watered_all",
+    "check_sensor":   "sensed",
+    "check_moisture": "moisture_check",
+    "photo":          "photographed",
+    "panorama":       "panorama",
+    "scan_weeds":     "weed_scan",
+    "light_on":       "lights_on",
+    "light_off":      "lights_off",
+}
+
+
+def _log_intent_outcome(intent: Intent, tree_status: str) -> None:
+    """Append an event row for one successfully-executed intent."""
+    if _event_log is None or tree_status not in ("success", "partial"):
+        return
+    event_type = _INTENT_EVENT_MAP.get(intent.action)
+    if not event_type:
+        return
+    plant_name = (intent.target or "").strip() or None
+    plant_index = _lookup_plant_index(plant_name) if plant_name else None
+    payload: Dict[str, Any] = {}
+    if intent.params:
+        payload.update({k: v for k, v in intent.params.items() if k in (
+            "duration_s", "x", "y", "z", "step_mm", "priority",
+        )})
+    if intent.action == "water_all" and "plant_count" not in payload:
+        data = _load_plants_from_map_handler()
+        if data.get("count"):
+            payload["plant_count"] = data["count"]
+    try:
+        _event_log.log(
+            event_type=event_type,
+            plant_index=plant_index,
+            plant_name=plant_name,
+            payload=payload or None,
+        )
+    except Exception:
+        # The event log is best-effort — never let it kill a successful intent.
+        pass
+
+
 def build_app(
     ros2_enabled: bool = True,
     config_path: Optional[Path] = None,
     cors_origins: Optional[list] = None,
+    events_db: Optional[Path] = None,
 ) -> FastAPI:
     """Build the FastAPI app. Constructs the bridge and loads the config.
 
     Wrapping construction in a function (rather than module-level state) lets
     tests build multiple app instances with different config / ros2 flags.
     """
-    global _bridge, _garden
+    global _bridge, _garden, _event_log
     _bridge = FarmBotROS2Bridge(ros2_enabled=ros2_enabled)
     _garden = GardenConfig(config_path or DEFAULT_CONFIG)
+    _event_log = EventLog(events_db or DEFAULT_DB_PATH)
 
     app = FastAPI(title="GrowMate Pi", version=SCHEMA_VERSION)
 
@@ -223,6 +294,13 @@ def build_app(
         tts = read_tts_text() or " ".join(i.response for i in req.intents)
 
         status_str = tree_result.status
+
+        # Day 7: append a per-plant event row for every care-action intent
+        # that didn't fail outright. The log is best-effort.
+        if not req.emergency:
+            for intent_obj in req.intents:
+                _log_intent_outcome(intent_obj, status_str)
+
         return IntentResponse(
             status=status_str,
             tree=tree_result,
@@ -243,6 +321,35 @@ def build_app(
         bridge = _require_bridge()
         record = bridge.reset_emergency_stop()
         return {"status": record.status, "command": record.command}
+
+    @app.get("/events")
+    def events(limit: int = 50, plant: Optional[str] = None,
+               event_type: Optional[str] = None):
+        """Per-plant care event log (Day 7).
+
+        Query params:
+          - ``limit`` (default 50, max 500)
+          - ``plant``: index (int) or name (str). Filters to one plant.
+          - ``event_type``: e.g. "watered" / "sensed" / "photographed"
+        """
+        if _event_log is None:
+            return {"events": [], "count": 0, "error": "event log not initialised"}
+        limit = max(1, min(500, int(limit)))
+        types = [event_type] if event_type else None
+        if plant is not None:
+            # Numeric? Try int; else treat as name
+            try:
+                plant_key: int | str = int(plant)
+            except (TypeError, ValueError):
+                plant_key = str(plant)
+            rows = _event_log.for_plant(plant_key, limit=limit, event_types=types)
+        else:
+            rows = _event_log.recent(limit=limit, event_types=types)
+        return {
+            "events": rows,
+            "count": len(rows),
+            "total_in_db": _event_log.count(),
+        }
 
     @app.get("/history")
     def history(limit: int = 50):
