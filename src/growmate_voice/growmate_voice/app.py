@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import re
 import subprocess
 import sys
 import threading
@@ -35,6 +36,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -1058,6 +1060,238 @@ def _summarise_plants_for_target(target: str) -> Optional[Dict[str, Any]]:
     }
 
 
+# --------------------------------------------------------------------------- Day 11 — fast-path plant-state queries
+# These short-circuit the LLM for common deterministic questions:
+#   - "when did I last water the tomatoes?" -> Pi event log lookup
+#   - "is the marigold thirsty?"            -> Pi needs_attention check
+#   - "which plant needs water most?"        -> top of needs_attention list
+# Spoken answers are built locally — no Ollama round-trip, no hallucination.
+
+_FAST_Q_MOST_URGENT = [
+    re.compile(r"\b(?:which|what)\s+plants?\s+need(?:s)?\s+water\s+(?:the\s+)?most\b", re.I),
+    re.compile(r"\b(?:which|what)\s+plant\s+is\s+(?:the\s+)?most\s+thirsty\b", re.I),
+    re.compile(r"\bwhat['s\s]+(?:the\s+)?most\s+thirsty\s+plant\b", re.I),
+    re.compile(r"\bwhat\s+needs\s+water(?:ing)?\b", re.I),
+    re.compile(r"\bwhat\s+should\s+i\s+water\b", re.I),
+]
+_FAST_Q_LAST_WATERED = [
+    re.compile(r"\bwhen\s+did\s+i\s+(?:last\s+)?water(?:ed)?\s+(?:the\s+)?(.+?)(?:\s*\?)?\s*$", re.I),
+    re.compile(r"\bwhen\s+was\s+(?:the\s+)?(.+?)\s+(?:last\s+)?watered(?:\s*\?)?\s*$", re.I),
+]
+_FAST_Q_DAYS_SINCE = [
+    re.compile(r"\bhow\s+(?:many\s+days|long)\s+(?:has\s+it\s+been\s+)?since\s+(?:i\s+)?(?:last\s+)?water(?:ed)?\s+(?:the\s+)?(.+?)(?:\s*\?)?\s*$", re.I),
+]
+_FAST_Q_IS_THIRSTY = [
+    re.compile(r"\b(?:is|are)\s+(?:the\s+|my\s+)?(.+?)\s+thirsty(?:\s*\?)?\s*$", re.I),
+    re.compile(r"\bdo(?:es)?\s+(?:the\s+|my\s+)?(.+?)\s+need\s+water(?:\s*\?)?\s*$", re.I),
+]
+
+
+def _wall_humanise_ts(ts_ms: Optional[int]) -> Optional[str]:
+    """Render unix-epoch-ms as 'X ago'. Mirrors the Pi-side helper so the
+    fast-path can format event timestamps without an extra HTTP round-trip."""
+    if not ts_ms:
+        return None
+    delta_s = max(0, (time.time() * 1000 - ts_ms) / 1000.0)
+    if delta_s < 45:
+        return "just now"
+    if delta_s < 3600:
+        m = int(round(delta_s / 60))
+        return f"{m} minute{'s' if m != 1 else ''} ago"
+    if delta_s < 86400:
+        h = int(round(delta_s / 3600))
+        return f"{h} hour{'s' if h != 1 else ''} ago"
+    if delta_s < 7 * 86400:
+        d = int(round(delta_s / 86400))
+        return f"{d} day{'s' if d != 1 else ''} ago"
+    if delta_s < 30 * 86400:
+        w = int(round(delta_s / (7 * 86400)))
+        return f"{w} week{'s' if w != 1 else ''} ago"
+    months = int(round(delta_s / (30 * 86400)))
+    return f"{months} month{'s' if months != 1 else ''} ago"
+
+
+def _days_since_ms(ts_ms: Optional[int]) -> Optional[float]:
+    if not ts_ms:
+        return None
+    delta_s = max(0, time.time() * 1000 - ts_ms) / 1000.0
+    return round(delta_s / 86400.0, 1)
+
+
+def _normalise_target_forms(target: str) -> List[str]:
+    """Singular/plural variants of a target string, more specific first.
+    'tomatoes' -> ['tomatoes', 'tomato']; 'lilies' -> ['lilies', 'lily']."""
+    t = (target or "").lower().strip().rstrip("?.,").strip()
+    if not t:
+        return []
+    forms = [t]
+    if t.endswith("ies") and len(t) > 3:
+        forms.append(t[:-3] + "y")
+    if t.endswith("es") and len(t) > 3:
+        forms.append(t[:-2])
+    if t.endswith("s") and len(t) > 1:
+        forms.append(t[:-1])
+    seen: set = set()
+    return [f for f in forms if not (f in seen or seen.add(f))]
+
+
+def _find_latest_water_event(target_forms: List[str]) -> Optional[Dict[str, Any]]:
+    """Most recent 'watered' event whose plant_name matches any candidate form.
+    Returns None if the Pi can't be reached at all, or {} if reached but no
+    match. Callers distinguish: None -> fall through to LLM; {} -> answer
+    'haven't watered yet'."""
+    for form in target_forms:
+        body = _pi_get(f"/events?plant={quote_plus(form)}&event_type=watered&limit=1")
+        if body is None:
+            return None
+        events = body.get("events") or []
+        if events:
+            return events[0]
+    return {}
+
+
+def _matching_plants_in_garden(target_forms: List[str]) -> List[Dict[str, Any]]:
+    try:
+        data = api_plants()
+    except Exception as exc:
+        log.warning("_matching_plants_in_garden: api_plants failed: %s", exc)
+        return []
+    plants = data.get("plants", []) if isinstance(data, dict) else []
+    matches = []
+    for p in plants:
+        ptype = (p.get("type") or "").lower()
+        pname = (p.get("name") or "").lower()
+        if any(f in ptype or f in pname for f in target_forms):
+            matches.append(p)
+    return matches
+
+
+def _fast_answer_most_urgent() -> Optional[Dict[str, Any]]:
+    try:
+        att = api_plants_needs_attention(limit=5)
+    except Exception:
+        return None
+    plants = att.get("plants") or []
+    if att.get("error") and not plants:
+        return None  # Pi unreachable — let LLM try
+    total = att.get("total_in_garden") or 0
+    if not plants:
+        msg = ("All your plants look fine. Nothing is overdue."
+               if total else "I can't read the garden right now.")
+        return {"answer": msg, "transcript_label": "(care status)"}
+    top = plants[0]
+    name = top.get("name") or "one plant"
+    state = top.get("state") or {}
+    days = state.get("days_since_watered")
+    if days is not None:
+        d = int(round(float(days)))
+        msg = (f"The most urgent is {name}. "
+               f"It hasn't been watered in {d} day{'s' if d != 1 else ''}.")
+    else:
+        reason = (state.get("attention_reason") or "It needs watering.").strip()
+        if not reason.endswith("."):
+            reason += "."
+        msg = f"The most urgent is {name}. {reason}"
+    return {"answer": msg, "transcript_label": f"(most urgent: {name})"}
+
+
+def _fast_answer_last_watered(target: str, as_days: bool = False) -> Optional[Dict[str, Any]]:
+    forms = _normalise_target_forms(target)
+    if not forms:
+        return None
+    in_garden = _matching_plants_in_garden(forms)
+    if not in_garden:
+        return {
+            "answer": f"I don't see any {target} in the current garden.",
+            "transcript_label": f"(unknown plant: {target})",
+        }
+    event = _find_latest_water_event(forms)
+    if event is None:
+        return None  # Pi unreachable
+    if not event:
+        return {
+            "answer": f"I haven't watered the {target} yet.",
+            "transcript_label": f"(no watering history: {target})",
+        }
+    ts = event.get("ts")
+    if as_days:
+        days = _days_since_ms(ts)
+        if days is None:
+            return None
+        msg = (f"It's been {days} day{'s' if days != 1 else ''} "
+               f"since I last watered the {target}.")
+    else:
+        human = _wall_humanise_ts(ts) or "recently"
+        msg = f"You watered the {target} {human}."
+    return {"answer": msg, "transcript_label": f"(last watered: {target})"}
+
+
+def _fast_answer_is_thirsty(target: str) -> Optional[Dict[str, Any]]:
+    forms = _normalise_target_forms(target)
+    if not forms:
+        return None
+    in_garden = _matching_plants_in_garden(forms)
+    if not in_garden:
+        return {
+            "answer": f"I don't see any {target} in the current garden.",
+            "transcript_label": f"(unknown plant: {target})",
+        }
+    try:
+        att = api_plants_needs_attention(limit=200)
+    except Exception:
+        return None
+    if att.get("error") and not (att.get("plants") or []):
+        return None
+    overdue = att.get("plants") or []
+    thirsty: List[Dict[str, Any]] = []
+    for p in overdue:
+        species = (p.get("species") or "").lower()
+        name = (p.get("name") or "").lower()
+        if any(f in species or f in name for f in forms):
+            thirsty.append(p)
+    if thirsty:
+        top = thirsty[0]
+        state = top.get("state") or {}
+        days = state.get("days_since_watered")
+        if days is not None:
+            d = int(round(float(days)))
+            msg = (f"Yes, the {target} could use water. "
+                   f"It's been {d} day{'s' if d != 1 else ''} since the last watering.")
+        else:
+            msg = f"Yes, the {target} needs water."
+    else:
+        msg = f"The {target} looks fine. It was watered recently enough."
+    return {"answer": msg, "transcript_label": f"(thirst check: {target})"}
+
+
+def _fast_path_plant_query(transcript: str) -> Optional[Dict[str, Any]]:
+    """Try to answer a plant-state question deterministically without the LLM.
+
+    Returns {'answer': str, 'transcript_label': str} on a hit, else None.
+    Returning None falls through to the normal AICore path — used both for
+    'pattern didn't match' and 'Pi unreachable, let LLM make something up'.
+    """
+    t = (transcript or "").strip()
+    if not t:
+        return None
+    for pat in _FAST_Q_MOST_URGENT:
+        if pat.search(t):
+            return _fast_answer_most_urgent()
+    for pat in _FAST_Q_LAST_WATERED:
+        m = pat.search(t)
+        if m:
+            return _fast_answer_last_watered(m.group(1).strip())
+    for pat in _FAST_Q_DAYS_SINCE:
+        m = pat.search(t)
+        if m:
+            return _fast_answer_last_watered(m.group(1).strip(), as_days=True)
+    for pat in _FAST_Q_IS_THIRSTY:
+        m = pat.search(t)
+        if m:
+            return _fast_answer_is_thirsty(m.group(1).strip())
+    return None
+
+
 def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
     """Run the LLM classifier and dispatch the resulting intents to Pi.
 
@@ -1217,8 +1451,17 @@ async def api_text(body: Dict[str, Any]) -> Any:
                 last.confidence = confidence
             pipeline_log.append(f"🤖 {position_payload['last_cmd']}")
         else:
-            position_payload = _dispatch_via_aicore(text, source="text")
-            pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
+            # Day 11: deterministic plant-state queries skip the LLM.
+            fast = _fast_path_plant_query(text)
+            if fast:
+                position_payload = _position_payload(last_cmd=fast["transcript_label"])
+                position_payload["tts_text"] = fast["answer"]
+                pipeline_log.append(f"⚡ Fast plant query: {fast['answer']}")
+                _record("text", "fast_plant_query", [], "answered",
+                        fast["answer"], transcript=text)
+            else:
+                position_payload = _dispatch_via_aicore(text, source="text")
+                pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
 
         tts_spoken = ""
         tts_audio_b64: Optional[str] = None
@@ -1390,11 +1633,22 @@ async def api_voice(
                 last.confidence = confidence
             pipeline_log.append(f"🤖 {position_payload['last_cmd']}")
         else:
-            # Smart path — LLM classifies (plant-targeted, general questions,
-            # or anything pattern match couldn't handle). Falls back to ignored
-            # if Ollama or Pi is unavailable.
-            position_payload = _dispatch_via_aicore(transcript, source="voice")
-            pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
+            # Day 11: deterministic plant-state queries skip the LLM.
+            # Triggers on phrasings like "when did I last water X",
+            # "is X thirsty", "which plant needs water most".
+            fast = _fast_path_plant_query(transcript)
+            if fast:
+                position_payload = _position_payload(last_cmd=fast["transcript_label"])
+                position_payload["tts_text"] = fast["answer"]
+                pipeline_log.append(f"⚡ Fast plant query: {fast['answer']}")
+                _record("voice", "fast_plant_query", [], "answered",
+                        fast["answer"], transcript=transcript)
+            else:
+                # Smart path — LLM classifies (plant-targeted, general questions,
+                # or anything pattern match couldn't handle). Falls back to ignored
+                # if Ollama or Pi is unavailable.
+                position_payload = _dispatch_via_aicore(transcript, source="voice")
+                pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
 
         tts_spoken = ""
         tts_audio_b64: Optional[str] = None
