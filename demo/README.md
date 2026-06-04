@@ -3,6 +3,7 @@
 | File | Audience | Slides/Pages | Status |
 |---|---|---|---|
 | [RUN_GUIDE.md](RUN_GUIDE.md)                        | **Researcher — single operational reference** for Pi bringup, intent server, Windows app, test order, V2 eval | Runbook | Current |
+| [WSL_TEST_PLAN.md](WSL_TEST_PLAN.md)                | Researcher — phrase-by-phrase test list to run against WSL sim Pi when no FarmBot is available | Test plan | Current |
 | [eval_v2_results.md](eval_v2_results.md)            | Researcher — V2 evaluation results log | Run log + V1 baseline | Day 12 |
 | [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)        | External collaborators integrating their own code | Reference | Stable |
 | [presentation_dundalk.md](presentation_dundalk.md)  | 10 elderly participants, Dundalk focus group, 9 Jun 2026 | 10 slides, large print | Draft 1 |
