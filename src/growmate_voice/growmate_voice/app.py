@@ -45,7 +45,7 @@ from .edgespeech.audio_utils import (
     audio_to_wav_bytes,
     load_wav_from_bytes,
 )
-from .edgespeech.command_map import COMMAND_MAP, get_tts_phrase, match_command
+from .edgespeech.command_map import COMMAND_MAP, TTS_PHRASES, get_tts_phrase, match_command
 from .edgespeech.stt import load_stt
 from .edgespeech.tts import load_tts
 from .ai_core import AICore
@@ -240,6 +240,15 @@ def _record(
     )
 
 
+# Day 6: friendly user-facing labels. Technical command strings stay in
+# the server log and the history record for traceability.
+_FRIENDLY_DIRECTIONS = {
+    ("x", -1): "left", ("x", +1): "right",
+    ("y", -1): "back", ("y", +1): "forward",
+    ("z", -1): "down", ("z", +1): "up",
+}
+
+
 def _do_jog(axis: str, direction: int, step: float, source: str = "button") -> Dict[str, Any]:
     lo, hi = _BOUNDS[axis]
     if axis == "x":
@@ -251,48 +260,70 @@ def _do_jog(axis: str, direction: int, step: float, source: str = "button") -> D
 
     cmd = f"M {int(_STATE.pos_x)} {int(_STATE.pos_y)} {int(_STATE.pos_z)}"
     records = _STATE.robot.execute([cmd])
-    label = {"x": ("LEFT" if direction < 0 else "RIGHT"),
-             "y": ("BACK" if direction < 0 else "FORWARD"),
-             "z": ("DOWN" if direction < 0 else "UP")}[axis]
+    direction_word = _FRIENDLY_DIRECTIONS.get((axis, +1 if direction > 0 else -1), "")
+    if axis == "z":
+        friendly = f"{'Lifted' if direction > 0 else 'Lowered'} the arm by {int(step)} mm."
+    else:
+        friendly = f"Moved {direction_word} {int(step)} mm."
     log.info("JOG axis=%s dir=%+d step=%.0f cmd=%s status=%s",
              axis, direction, step, cmd, records[0].status)
-    note = f"{cmd}  — {label}  [{records[0].status}]"
+    technical = f"{cmd} [{records[0].status}]"
     _record(source, f"{axis}_{'plus' if direction > 0 else 'minus'}",
-            [cmd], records[0].status, note)
-    return _position_payload(last_cmd=note)
+            [cmd], records[0].status, technical)
+    payload = _position_payload(last_cmd=friendly)
+    payload["tts_text"] = friendly
+    return payload
 
 
 def _do_estop(source: str = "button") -> Dict[str, Any]:
     log.critical("EMERGENCY STOP triggered (source=%s)", source)
     record = _STATE.robot.emergency_stop()
-    note = f"EMERGENCY STOP  [{record.status.upper()}]"
-    _record(source, "estop", ["e"], record.status, note)
-    return _position_payload(last_cmd=note)
+    friendly = "Stopped. The robot is halted."
+    _record(source, "estop", ["e"], record.status, f"e [{record.status}]")
+    payload = _position_payload(last_cmd=friendly)
+    payload["tts_text"] = friendly
+    return payload
 
 
 def _do_reset(source: str = "button") -> Dict[str, Any]:
     log.warning("E-stop RESET (source=%s)", source)
     records = _STATE.robot.execute(["E"])
-    note = f"E  — reset  [{records[0].status}]"
-    _record(source, "reset", ["E"], records[0].status, note)
-    return _position_payload(last_cmd=note)
+    friendly = "All clear. Ready to go again."
+    _record(source, "reset", ["E"], records[0].status, f"E [{records[0].status}]")
+    payload = _position_payload(last_cmd=friendly)
+    payload["tts_text"] = friendly
+    return payload
 
 
 def _do_home(source: str = "button") -> Dict[str, Any]:
     records = _STATE.robot.execute(["H_0"])
     _STATE.pos_x = _STATE.pos_y = 0.0
     _STATE.pos_z = 0.0
-    note = f"H_0  — home  [{records[0].status}]"
-    _record(source, "home", ["H_0"], records[0].status, note)
-    return _position_payload(last_cmd=note)
+    friendly = "Heading home."
+    _record(source, "home", ["H_0"], records[0].status, f"H_0 [{records[0].status}]")
+    payload = _position_payload(last_cmd=friendly)
+    payload["tts_text"] = friendly
+    return payload
+
+
+# Friendly captions for each emit action (translated from the technical action key).
+_EMIT_FRIENDLY = {
+    "water": "Watering all the plants.",
+    "photo": "Taking a photo for you.",
+    "light_on": "Lights on.",
+    "light_off": "Lights off.",
+}
 
 
 def _do_emit(emissions: List[str], action: str, label: str, source: str = "button") -> Dict[str, Any]:
     records = _STATE.robot.execute(emissions)
     statuses = ", ".join(r.status for r in records)
-    note = f"{' | '.join(emissions)}  — {label}  [{statuses}]"
-    _record(source, action, emissions, records[0].status, note)
-    return _position_payload(last_cmd=note)
+    friendly = _EMIT_FRIENDLY.get(action, label.capitalize() + ".")
+    technical = f"{' | '.join(emissions)} [{statuses}]"
+    _record(source, action, emissions, records[0].status, technical)
+    payload = _position_payload(last_cmd=friendly)
+    payload["tts_text"] = friendly
+    return payload
 
 
 def _dispatch_via_pi(action: str, source: str,
@@ -313,15 +344,19 @@ def _dispatch_via_pi(action: str, source: str,
     try:
         if action == "estop":
             pi_post_estop(base)
-            note = "EMERGENCY STOP (via Pi)  [sent]"
-            _record(source, "estop", ["e"], "sent", note)
-            return _position_payload(last_cmd=note)
+            friendly = "Stopped. The robot is halted."
+            _record(source, "estop", ["e"], "sent", "e [pi]")
+            payload = _position_payload(last_cmd=friendly)
+            payload["tts_text"] = friendly
+            return payload
 
         if action == "reset":
             pi_post_reset_estop(base)
-            note = "E (reset, via Pi)  [sent]"
-            _record(source, "reset", ["E"], "sent", note)
-            return _position_payload(last_cmd=note)
+            friendly = "All clear. Ready to go again."
+            _record(source, "reset", ["E"], "sent", "E [pi]")
+            payload = _position_payload(last_cmd=friendly)
+            payload["tts_text"] = friendly
+            return payload
 
         # Jog: compute absolute target on Windows (where position state lives),
         # then send explicit coords to Pi so it doesn't need to track position.
@@ -333,26 +368,33 @@ def _dispatch_via_pi(action: str, source: str,
             new_y = _clamp(_STATE.pos_y + (step * direction if axis == "y" else 0), *_BOUNDS["y"])
             new_z = _clamp(_STATE.pos_z + (step * direction if axis == "z" else 0), *_BOUNDS["z"])
             _STATE.pos_x, _STATE.pos_y, _STATE.pos_z = new_x, new_y, new_z
-            label = {"x": ("RIGHT" if direction > 0 else "LEFT"),
-                     "y": ("FORWARD" if direction > 0 else "BACK"),
-                     "z": ("UP" if direction > 0 else "DOWN")}[axis]
+            direction_word = _FRIENDLY_DIRECTIONS.get((axis, +1 if direction > 0 else -1), "")
+            if axis == "z":
+                friendly = f"{'Lifted' if direction > 0 else 'Lowered'} the arm by {int(step)} mm."
+            else:
+                friendly = f"Moved {direction_word} {int(step)} mm."
             intent = PiIntent(
                 action="move",
                 params={"x": new_x, "y": new_y, "z": new_z},
-                response=f"{label}.",
+                response=friendly,
             )
             reply = pi_post_intent(_STATE.pi_url, [intent],
                                    raw_text=f"(jog {step:.0f}mm) {action}",
                                    client_id="growmate_voice.app")
             status = "sent" if reply.status == "success" else reply.status
             cmds = reply.commands_published or [f"M {new_x:.0f} {new_y:.0f} {new_z:.0f}"]
-            note = f"{cmds[0]}  — {label} {step:.0f}mm (via Pi)  [{status}]"
-            _record(source, action, cmds, status, note)
-            return _position_payload(last_cmd=note)
+            _record(source, action, cmds, status, f"{cmds[0]} [pi:{status}]")
+            payload = _position_payload(last_cmd=friendly)
+            payload["tts_text"] = friendly
+            return payload
 
         intent = app_action_to_intent(action)
         if intent is None:
             return None
+
+        # Use the standard friendly phrase for this action; falls back to the
+        # intent's own response (set by app_action_to_intent) if not mapped.
+        friendly = TTS_PHRASES.get(action) or intent.response or f"{action.replace('_', ' ').capitalize()}."
 
         reply = pi_post_intent(
             _STATE.pi_url,
@@ -362,9 +404,10 @@ def _dispatch_via_pi(action: str, source: str,
         )
         status = "sent" if reply.status == "success" else reply.status
         cmds = reply.commands_published or [intent.action]
-        note = f"{' | '.join(cmds)}  — {action} (via Pi)  [{status}]"
-        _record(source, action, cmds, status, note)
-        return _position_payload(last_cmd=note)
+        _record(source, action, cmds, status, f"{' | '.join(cmds)} [pi:{status}]")
+        payload = _position_payload(last_cmd=friendly)
+        payload["tts_text"] = friendly
+        return payload
     except Exception as exc:
         log.warning("Pi dispatch failed for '%s': %s — falling back to local", action, exc)
         return None
@@ -1056,11 +1099,16 @@ def _dispatch_via_aicore(transcript: str, source: str) -> Dict[str, Any]:
     status = "sent" if reply.status == "success" else reply.status
     cmds = reply.commands_published or []
     actions = ",".join(i.get("action", "?") for i in intents)
-    note = f"{' | '.join(cmds) or '(no cmds)'}  — {actions} (LLM via Pi)  [{status}]"
-    _record(source, intents[0].get("action"), cmds, status, note,
+    # Friendly user-facing string: use Pi's spoken text if any, then the
+    # LLM-generated intent responses. The raw command list goes into the
+    # history record for traceability but never into last_cmd.
+    spoken = (reply.tts_text or " ".join(i.get("response", "") for i in intents)).strip()
+    friendly = spoken or f"Done ({actions})."
+    _record(source, intents[0].get("action"), cmds, status,
+            f"{' | '.join(cmds) or '(no cmds)'} [{status}]",
             transcript=transcript)
-    payload = _position_payload(last_cmd=note)
-    payload["tts_text"] = reply.tts_text or " ".join(i.get("response", "") for i in intents)
+    payload = _position_payload(last_cmd=friendly)
+    payload["tts_text"] = friendly
     return payload
 
 
@@ -1374,8 +1422,10 @@ html, body{ margin:0; padding:0; }
 html{ background: var(--cream); }
 body{
   font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 18px;
-  line-height: 1.4;
+  /* Day 6: body bumped from 18 → 20 px so labels and chat bubbles meet
+     the elderly-readable minimum without resizing every component. */
+  font-size: 20px;
+  line-height: 1.45;
   color: var(--ink);
   background: var(--cream);
   -webkit-font-smoothing: antialiased;
@@ -3396,6 +3446,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
   // ----- Voice button (real audio capture -> WAV -> POST /api/voice) -----
   function setMic(stateName) {
+    const prev = state.micState;
     state.micState = stateName;
     micBtn.dataset.state = stateName;
     micWrap.dataset.state = stateName;
@@ -3403,6 +3454,37 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     if (stateName === 'idle')       micLabel.textContent = 'Tap to talk';
     if (stateName === 'recording')  micLabel.textContent = 'Listening… tap to stop';
     if (stateName === 'processing') micLabel.textContent = 'Thinking…';
+    // Day 6: speak a friendly "thinking" filler when we enter processing
+    // — silence feels broken to elderly users. Uses the browser's local
+    // SpeechSynthesis so there's no network call. The server's TTS reply
+    // will arrive a moment later and play over the top, which is fine.
+    if (stateName === 'processing' && prev !== 'processing') sayThinking();
+  }
+
+  // --- Day 6: client-side "thinking" filler ---
+  const _thinkingPhrases = [
+    'Just a moment.',
+    'Let me check.',
+    'One moment please.',
+    'Looking that up.',
+    'Hold on a second.',
+    'Thinking.',
+  ];
+  let _lastThinkingIdx = -1;
+  function sayThinking() {
+    try {
+      if (!('speechSynthesis' in window)) return;
+      // Don't pile up phrases if one is already in flight.
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) return;
+      // Avoid repeating the same phrase twice in a row.
+      let idx = Math.floor(Math.random() * _thinkingPhrases.length);
+      if (idx === _lastThinkingIdx) idx = (idx + 1) % _thinkingPhrases.length;
+      _lastThinkingIdx = idx;
+      const u = new SpeechSynthesisUtterance(_thinkingPhrases[idx]);
+      u.rate = 0.95;     // slightly slower for clarity
+      u.volume = 0.65;   // quieter than the main TTS so it doesn't compete
+      window.speechSynthesis.speak(u);
+    } catch (_) { /* speech not supported — silent fallback */ }
   }
 
   const TARGET_SR = 16000;

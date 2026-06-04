@@ -30,17 +30,22 @@ COMMAND_MAP: List[Tuple[List[str], str]] = [
 
 
 TTS_PHRASES: Dict[str, str] = {
-    "estop":   "Emergency stop activated",
-    "reset":   "Emergency stop cleared",
-    "home":    "Returning to home position",
-    "y_plus":  "Moving forward",
-    "y_minus": "Moving backward",
-    "x_minus": "Moving left",
-    "x_plus":  "Moving right",
-    "z_plus":  "Raising the arm",
-    "z_minus": "Lowering the arm",
-    "water":   "Watering plants",
-    "photo":   "Taking a photo",
+    # Day 6: friendlier, present-tense phrasing for elderly users.
+    # Spoken back via TTS after every successful action so silence
+    # never lasts long.
+    "estop":     "Stopped. The robot is halted.",
+    "reset":     "All clear. Ready to go again.",
+    "home":      "Heading home.",
+    "y_plus":    "Moving forward.",
+    "y_minus":   "Moving back.",
+    "x_minus":   "Moving left.",
+    "x_plus":    "Moving right.",
+    "z_plus":    "Lifting the arm up.",
+    "z_minus":   "Lowering the arm.",
+    "water":     "Watering all the plants.",
+    "photo":     "Taking a photo for you.",
+    "light_on":  "Lights on.",
+    "light_off": "Lights off.",
 }
 
 

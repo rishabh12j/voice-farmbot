@@ -45,8 +45,10 @@ html, body{ margin:0; padding:0; }
 html{ background: var(--cream); }
 body{
   font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 18px;
-  line-height: 1.4;
+  /* Day 6: body bumped from 18 → 20 px so labels and chat bubbles meet
+     the elderly-readable minimum without resizing every component. */
+  font-size: 20px;
+  line-height: 1.45;
   color: var(--ink);
   background: var(--cream);
   -webkit-font-smoothing: antialiased;
@@ -2067,6 +2069,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
   // ----- Voice button (real audio capture -> WAV -> POST /api/voice) -----
   function setMic(stateName) {
+    const prev = state.micState;
     state.micState = stateName;
     micBtn.dataset.state = stateName;
     micWrap.dataset.state = stateName;
@@ -2074,6 +2077,37 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     if (stateName === 'idle')       micLabel.textContent = 'Tap to talk';
     if (stateName === 'recording')  micLabel.textContent = 'Listening… tap to stop';
     if (stateName === 'processing') micLabel.textContent = 'Thinking…';
+    // Day 6: speak a friendly "thinking" filler when we enter processing
+    // — silence feels broken to elderly users. Uses the browser's local
+    // SpeechSynthesis so there's no network call. The server's TTS reply
+    // will arrive a moment later and play over the top, which is fine.
+    if (stateName === 'processing' && prev !== 'processing') sayThinking();
+  }
+
+  // --- Day 6: client-side "thinking" filler ---
+  const _thinkingPhrases = [
+    'Just a moment.',
+    'Let me check.',
+    'One moment please.',
+    'Looking that up.',
+    'Hold on a second.',
+    'Thinking.',
+  ];
+  let _lastThinkingIdx = -1;
+  function sayThinking() {
+    try {
+      if (!('speechSynthesis' in window)) return;
+      // Don't pile up phrases if one is already in flight.
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) return;
+      // Avoid repeating the same phrase twice in a row.
+      let idx = Math.floor(Math.random() * _thinkingPhrases.length);
+      if (idx === _lastThinkingIdx) idx = (idx + 1) % _thinkingPhrases.length;
+      _lastThinkingIdx = idx;
+      const u = new SpeechSynthesisUtterance(_thinkingPhrases[idx]);
+      u.rate = 0.95;     // slightly slower for clarity
+      u.volume = 0.65;   // quieter than the main TTS so it doesn't compete
+      window.speechSynthesis.speak(u);
+    } catch (_) { /* speech not supported — silent fallback */ }
   }
 
   const TARGET_SR = 16000;
