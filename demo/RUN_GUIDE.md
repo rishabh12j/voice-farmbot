@@ -128,7 +128,7 @@ alone isn't enough.
 ### 1.6 Launch and verify
 
 ```bash
-ros2 launch farmbot_bringup standard.launch.py 2>&1 | tee /tmp/bringup.log
+ros2 launch farmbot_bringup no_camera.launch.py 2>&1 | tee /tmp/bringup.log
 ```
 
 Wait for **both** lines:
@@ -217,7 +217,7 @@ PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --no-ros2 --port 
 ```cmd
 cd C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice
 set PYTHONPATH=C:\Users\risha\growmate-bt\voice-farmbot\src
-python -m growmate_voice.app --pi-url http://192.168.0.39:8000/intent
+python -m growmate_voice.app --pi-url http://192.168.0.54:8000/intent
 ```
 
 Look for `V2 mode: dispatching to Pi at ...` and `Pi ready: ...` in
@@ -234,13 +234,23 @@ Run these in order — each one validates a more complex layer than the
 last:
 
 1. **Lights** quick-action → publishes `D_L_1`, then again → `D_L_0`
+   — _hardware run: PASS_
 2. **Home** quick-action → gantry to (0, 0, 0)
+   — _hardware run: PASS_
 3. **Step 100 mm** + jog forward → `M 0 100 0`, gantry moves
+   — _hardware run: PASS_
 4. **Photo** quick-action → `I_1`
+   — _hardware run: PASS_
 5. Mic → say *"go home"* (pattern path) → fast, no LLM
 6. Mic → say *"water the basil"* (LLM path) → AICore resolves the
    plant via the Pi's loaded map → gantry to basil's coord → pump → done
-7. **Stop** button → `e` immediately, gantry halts
+   — _first hardware run: misrouted to water-everything via matcher
+   substring bug. Fixed (see "Hardware run findings" below)._
+7. **Stop** button → `e` immediately, gantry halts. Press **Reset**
+   to re-arm before the next command.
+   — _first hardware run: Stop worked, but Reset needed multiple
+   presses to take. Fixed: `/reset_estop` now publishes `E` three
+   times with 180 ms gaps._
 
 If any step misbehaves, the pipeline log on screen (bottom of the
 page) shows what route was chosen (`🤖`, `🧠`, `⚡`, `❓`) and what
@@ -258,6 +268,10 @@ know they survived a rebuild:
 
 - Mic or text → *"water everything"* → modal appears with a clear
   Yes/No (64 px tap targets), large fonts.
+  - _First hardware run: "can you help me water all the plants?"
+    slipped past the gate because the trailing "?" was treated as a
+    knowledge query. Fixed by separating "polite imperative" from
+    "knowledge question" — see "Hardware run findings" below._
 - **No / no response within 10 s** → cancelled, `Cancelled.` spoken.
 - **Yes** → executes `water_all`.
 - Emergency phrases (*stop*, *halt*, *freeze*, *emergency stop*) **never**
@@ -269,30 +283,257 @@ know they survived a rebuild:
   name, species, last-watered timestamp, "Water this plant" button,
   and a footer note that photo / soil-moisture aren't active yet.
 
-### Day 10 — Today's care panel
+### Day 10 — Today's care panel — PARKED
 
-- Home screen, above the chat feed, shows:
-  - Moss-green *"All plants are watered. Nothing waiting on you."* — OR
-  - Warm-clay *"N plants need watering ▾"* — tap to expand the list.
-- Tap any list row → opens the Day 9 care card for that plant.
-- Polls `/api/plants/needs_attention` every 5 minutes; also refreshes
-  immediately after any successful action.
+**Status:** archived from the UI as of the gh1/farmbotdev hardware run.
+The panel polled `/api/plants/needs_attention` and showed an "N plants
+need watering" nudge, but the underlying event log had two flaws the
+hardware run exposed:
 
-### Day 11 — voice plant queries (deterministic, skips LLM)
+- `P_4 / watered_all` rows were being logged even when the BT didn't
+  actually finish (the tree returned `partial` or `success` based on
+  publish, not on the FarmBot completing the sequence).
+- Result: the panel cheerfully reported "all plants watered" when the
+  robot had only finished part of the cycle.
 
-Try each in the text input or via mic — they should answer in well
-under a second (no Ollama round-trip):
+The fix needs a **tick-and-verify gate** in the BT — only log
+`watered_all` after the FarmBot reports the sequence complete. That's a
+real piece of work, not a UI tweak, so the panel is hidden behind
+`_MEMORY_FEATURES_ENABLED = False` in `app.py` until it lands.
 
-- *"When did I last water the tomatoes?"* → timestamp from event log
-- *"How many days since I watered the marigolds?"* → numeric count
-- *"Is the basil thirsty?"* → checks `needs_attention` list
-- *"Does the lettuce need water?"* → same
-- *"Which plant needs water most?"* → top of attention list
-- *"What should I water today?"* → same as "most urgent"
+Flip the flag back to `True` (Python const + the matching JS
+`MEMORY_FEATURES_ENABLED` in the inline script) to re-enable both Day
+10 and Day 11 at once.
 
-If a query falls through unexpectedly, look at the pipeline log:
-`⚡ Fast plant query: ...` on a hit, `🧠 AICore: ...` on fall-through
-(usually Pi unreachable mid-query).
+### Day 11 — voice plant queries — PARKED
+
+**Status:** same flag, same reason. Falls through to AICore (LLM) now.
+
+The fast-path was reading `last_watered_ts` from the same event log
+Day 10 used, so the "P_4 logged but not actually finished" bug would
+have given the user a confidently-wrong answer ("you watered the
+tomatoes 2 hours ago" when in reality the gantry got 30% in and
+stopped). Better to defer to the LLM until the event log is honest.
+
+If/when re-armed, fall-through is signalled by `🧠 AICore: ...` in the
+pipeline log (Pi unreachable mid-query) and a fast-path hit by
+`⚡ Fast plant query: ...`.
+
+---
+
+## Hardware run findings (gh1 / farmbotdev, Jun 2026)
+
+First end-to-end test on a real FarmBot surfaced four bugs. All four
+are fixed in code; this section is the post-mortem so the symptoms
+don't get re-debugged from scratch later.
+
+### 1. E-stop reset wasn't taking — `/reset_estop` only published `E` once
+
+Symptom: pressing the stop button halted the gantry, but pressing
+Reset (and even pressing it again) didn't re-arm the system. The Pi
+HTTP log showed `POST /reset_estop 200 OK` so the bridge ran, but
+follow-up `/intent` calls had no visible effect.
+
+Cause: `bridge.reset_emergency_stop()` published `E` exactly once.
+`panel_controller` translates that to `F09` on `uart_transmit` which
+the firmware needs for the actual reset — but a single publish was
+racing the panel_controller / sequencer state on this Pi and getting
+dropped.
+
+Fix: `/reset_estop` now publishes `E` three times with 180 ms gaps,
+and `/estop` publishes `e` twice. Both endpoints log the per-publish
+status to the Pi console so you can see exactly what happened.
+
+### 2. "water the basil" was misrouted to water-everything
+
+Symptom: saying *"water the basil"* triggered the soft-confirm modal
+with the question *"Should I water all the plants?"* — wrong target,
+wrong action.
+
+Cause: the matcher in `edgespeech/command_map.py` used
+`v in candidate` for variant matching. The variant `"water"` was a
+substring of `"water the basil"`, so it matched the bare-water action
+(P_4). The same trap was firing on Day 11 phrasings like *"when did i
+water the marigold"* — `"water"` substring → action=water → confirm
+gate.
+
+Fix: introduced `STRICT_MATCH_ACTIONS = {"water", "photo"}`. Variants
+for those actions only match on **exact equality** after
+filler/normalisation — `water`, `water plants`, `water the plants`,
+`water all the plants`, `start watering` all still resolve, but
+anything with a target or question wrapper falls through to the LLM,
+which classifies properly.
+
+### 3. "Can you help me water all the plants?" slipped past the confirm gate
+
+Symptom: the destructive water-all phrasing executed immediately,
+no Yes/No modal.
+
+Cause: the AICore-route confirm gate was checking for any
+question-starter word (`is`, `should`, `can`, `could`, `?`) — if
+present, the gate was disarmed on the assumption "this is a
+knowledge query". But *"can you help me …?"* is a polite imperative,
+not a question.
+
+Fix: split the question heuristic into `polite_imperatives` (which
+do NOT disarm the gate — `can you`, `could you`, `would you`,
+`please`, `help me`) and `knowledge_starters` (`when`, `why`, `how`,
+`what`, …). A transcript with both `everything`/`all the plants`
+AND any polite-imperative phrase now defers for confirm.
+
+### 4. Today's-care panel / fast-path plant queries — parked
+
+Symptom: the panel reported *"all plants watered"* when the BT had
+only partially executed `P_4`; voice queries gave confidently-wrong
+timestamps for the same reason.
+
+Cause: the per-plant event log records `watered_all` on tree
+publish-success, not on real FarmBot sequence completion. Until the
+BT gets a tick-and-verify wrapper (work item in PLANS.md follow-up),
+both features are off behind `_MEMORY_FEATURES_ENABLED = False` in
+`app.py` and `MEMORY_FEATURES_ENABLED = false` in the inline JS.
+
+To re-arm: flip both flags to true, hard-refresh the browser.
+
+---
+
+## Original Windows-app log (for reference, the run that produced these findings)
+
+<details>
+<summary>Click to expand</summary>
+
+```
+(moderation) C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice>python -m growmate_voice.app --pi-url http://192.168.0.54:8000/intent
+(moderation) C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice>python -m growmate_voice.app --pi-url http://192.168.0.54:8000/intent
+10:53:53  INFO      [growmate]  V2 mode: dispatching to Pi at http://192.168.0.54:8000/intent
+10:53:53  INFO      [growmate]  Pi ready: {'ok': True, 'schema_version': '1.0.0', 'bridge_mode': 'ros2', 'bridge_ready': True, 'topic': 'keyboard_topic', 'config': '/home/farmbotdev/Rishabh_Growmate_FarmBot/src/growmate_pi/config/farmbot.yaml'}
+10:53:53  INFO      [growmate]  === GrowMate startup ros2=True pi_url=http://192.168.0.54:8000/intent 127.0.0.1:7860 ===
+10:53:53  INFO      [growmate]  Initialising — ros2=True
+[growmate_voice] Connected to ROS2; publishing to 'keyboard_topic'
+10:53:53  INFO      [growmate]  GrowMate backend ready.  Log: C:\Users\risha\.growmate_voice\logs\growmate.log
+10:53:53  INFO      [growmate]  GrowMate at http://127.0.0.1:7860  (log: C:\Users\risha\.growmate_voice\logs\growmate.log)
+INFO:     Started server process [33944]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:7860 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60141 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60141 - "GET /api/plants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51116 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+10:53:57  INFO      [growmate]  Launched farmbot_bringup pid=37284
+INFO:     127.0.0.1:60141 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60141 - "GET /api/plants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64608 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+10:54:00  INFO      [growmate]  Launched farmbot_bringup pid=22712
+10:54:01  INFO      [growmate]  App state -> READY (ros2=True)
+10:54:03  WARNING   [growmate]  FarmBot process exited (rc=1)
+10:54:04  INFO      [growmate]  App state -> READY (ros2=True)
+INFO:     127.0.0.1:64608 - "POST /api/farmbot/power HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64608 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64608 - "POST /api/action HTTP/1.1" 200 OK
+10:54:19  INFO      [growmate]  Whisper prompt biased with 800 chars
+10:54:31  INFO      [growmate]  AICore ready (model=gemma3:4b, config=C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice\config\farmbot.yaml)
+WARNING: Defaulting repo_id to hexgrad/Kokoro-82M. Pass repo_id='hexgrad/Kokoro-82M' to suppress this warning.
+C:\Users\risha\.conda\envs\moderation\Lib\site-packages\torch\nn\modules\rnn.py:1013: UserWarning: dropout option adds dropout after all but last recurrent layer, so non-zero dropout expects num_layers greater than 1, but got dropout=0.2 and num_layers=1
+  super().__init__("LSTM", *args, **kwargs)
+C:\Users\risha\.conda\envs\moderation\Lib\site-packages\torch\nn\utils\weight_norm.py:144: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+  WeightNorm.apply(module, name, dim)
+INFO:     127.0.0.1:59122 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59122 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61386 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61386 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63705 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63705 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63705 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52395 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52395 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61612 - "GET /api/plants/30 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56882 - "GET /api/plants/8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56882 - "POST /api/text HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57168 - "POST /api/confirm HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57168 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49900 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49900 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59401 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57754 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62632 - "POST /api/confirm HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62632 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56714 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56714 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65142 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50622 - "POST /api/reset HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55616 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55616 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55616 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55616 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56822 - "POST /api/action HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63512 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62973 - "POST /api/voice HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62973 - "GET /api/plants/needs_attention HTTP/1.1" 200 OK
+```
+
+### Pi-side intent server log
+
+```
+farmbotdev@ubuntu:~/Rishabh_Growmate_FarmBot$ cd ~/Rishabh_Growmate_FarmBot
+source /opt/ros/$ROS_DISTRO/setup.bash
+source install/setup.bash
+source venv/bin/activate
+PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --port 8000
+[growmate_pi] Bridge: connected, publishing to 'keyboard_topic'
+INFO:     Started server process [40032]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     192.168.0.127:60135 - "GET /status HTTP/1.1" 200 OK
+INFO:     192.168.0.127:55758 - "GET /plants HTTP/1.1" 200 OK
+INFO:     192.168.0.127:55757 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:50821 - "GET /plants HTTP/1.1" 200 OK
+INFO:     192.168.0.127:50822 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:55377 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:55378 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:64085 - "GET /status HTTP/1.1" 200 OK
+INFO:     192.168.0.127:51117 - "GET /plants HTTP/1.1" 200 OK
+INFO:     192.168.0.127:51118 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:64610 - "GET /plants HTTP/1.1" 200 OK
+INFO:     192.168.0.127:64609 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:59144 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:59145 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:50116 - "GET /plants/needs_attention?limit=20 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:50120 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:49292 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:51014 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:51015 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:63706 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:57044 - "POST /estop HTTP/1.1" 200 OK
+INFO:     192.168.0.127:57045 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:52399 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:52400 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:61613 - "GET /plants/30?history_limit=30 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:56883 - "GET /plants/8?history_limit=30 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:57169 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:57170 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:49904 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:49905 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:59402 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:62633 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:62634 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:53482 - "POST /reset_estop HTTP/1.1" 200 OK
+INFO:     192.168.0.127:51555 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:51556 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:65143 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:50623 - "POST /reset_estop HTTP/1.1" 200 OK
+INFO:     192.168.0.127:55617 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:50624 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:59685 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:59686 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:56823 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:63513 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+INFO:     192.168.0.127:62974 - "POST /intent HTTP/1.1" 200 OK
+INFO:     192.168.0.127:62975 - "GET /plants/needs_attention?limit=200 HTTP/1.1" 200 OK
+```
+
+</details>
 
 ---
 

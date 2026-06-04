@@ -110,6 +110,16 @@ _CONFIRM_PATTERN_ACTIONS = {"water"}
 _CONFIRM_AICORE_ACTIONS = {"water_all"}
 # Anything in this set ALWAYS bypasses confirm — emergency is instant.
 _NEVER_CONFIRM = {"estop", "reset", "emergency_stop"}
+
+# Day 10 ("today's care" panel) and Day 11 (fast-path plant queries) both
+# read from the per-plant event log + needs_attention list. After hardware
+# testing on farmbotdev (Jun 2026), the memory model showed real flaws:
+# P_4 watered_all rows landed even when the BT didn't actually finish, and
+# fast-path date queries were getting mis-routed via the matcher into
+# water_all confirms. Pausing both until the event-log model gets a proper
+# "tick-and-verify" gate (see PLANS.md follow-up). Flip back to True to
+# re-enable both at once.
+_MEMORY_FEATURES_ENABLED = False
 _PENDING_TTL_S = 10.0
 
 
@@ -907,16 +917,25 @@ def _maybe_defer_for_confirm(
             "everything", "all the plants", "all plants", "the whole garden",
             "every plant", "all my plants", "all of them",
         )
-        question_starters = (
-            "when ", "why ", "how ", "what ", "should ", "could ",
-            "is ", "are ", "do ", "does ", "tell ", "explain ",
+        # Phrases that LOOK like questions ("can you …?", "could you …?") but
+        # are really polite imperatives. Without this, "can you help me water
+        # all the plants?" was sliding past the confirm gate because of the
+        # trailing "?" — gh1 hardware run showed this misfire.
+        polite_imperatives = (
+            "can you ", "could you ", "would you ", "will you ",
+            "please ", " please", "help me ", "help to ",
         )
-        is_question = (
-            "?" in t
-            or any(t.startswith(q) for q in question_starters)
-            or any(f" {q.strip()} " in f" {t} " for q in question_starters)
+        knowledge_starters = (
+            "when ", "why ", "how ", "what ", "what's ", "which ",
+            "who ", "should ", "is ", "are ", "do ", "does ",
+            "has ", "have ", "tell ", "explain ",
         )
-        if any(p in t for p in confirm_phrases) and not is_question:
+        looks_polite = any(p in t for p in polite_imperatives)
+        is_knowledge_question = (not looks_polite) and (
+            any(t.startswith(q) for q in knowledge_starters)
+            or any(f" {q.strip()} " in f" {t} " for q in knowledge_starters)
+        )
+        if any(p in t for p in confirm_phrases) and not is_knowledge_question:
             cid = _store_pending({
                 "type": "aicore_transcript",
                 "transcript": transcript,
@@ -1271,6 +1290,8 @@ def _fast_path_plant_query(transcript: str) -> Optional[Dict[str, Any]]:
     Returning None falls through to the normal AICore path — used both for
     'pattern didn't match' and 'Pi unreachable, let LLM make something up'.
     """
+    if not _MEMORY_FEATURES_ENABLED:
+        return None
     t = (transcript or "").strip()
     if not t:
         return None
@@ -1905,8 +1926,11 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   box-shadow: var(--shadow-s);
 }
 
-/* Day 10: Today's care nudge */
+/* Day 10: Today's care nudge — parked (Jun 2026 hardware run found event-log
+   accuracy issues: P_4 logged 'watered_all' even when the BT didn't finish).
+   Hidden via display:none until the event log gets a proper verify gate. */
 .today-card{
+  display: none;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-l);
@@ -4574,7 +4598,12 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     }
   }
 
+  // Day 10 today's-care panel parked — keep the function as a no-op so
+  // any caller (finishCommand, init) stays a single line and is easy to
+  // re-arm once the event-log verify gate lands.
+  const MEMORY_FEATURES_ENABLED = false;
   async function refreshTodayCare() {
+    if (!MEMORY_FEATURES_ENABLED) return;
     try {
       const r = await fetch('/api/plants/needs_attention');
       if (!r.ok) return;
@@ -4596,7 +4625,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   renderHistory();
   fetchPlantsFromBackend();   // override with active_map.yaml plants if available
   refreshTodayCare();
-  setInterval(refreshTodayCare, 5 * 60 * 1000);   // re-check every 5 min
+  if (MEMORY_FEATURES_ENABLED) {
+    setInterval(refreshTodayCare, 5 * 60 * 1000);   // re-check every 5 min
+  }
 })();
 </script>
 </body>

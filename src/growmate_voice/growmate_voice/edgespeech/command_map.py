@@ -24,9 +24,18 @@ COMMAND_MAP: List[Tuple[List[str], str]] = [
     (["right", "x plus", "x+", "move right", "go right"],                "x_plus"),
     (["up", "z plus", "z+", "raise", "arm up", "lift"],                  "z_plus"),
     (["down", "z minus", "z-", "lower", "arm down", "drop"],             "z_minus"),
-    (["water", "water plant", "water the plants", "start watering"],     "water"),
+    (["water", "water plant", "water plants", "water the plants",
+      "water all", "water all the plants", "start watering"],            "water"),
     (["take photo", "photo", "capture", "take picture"],                 "photo"),
 ]
+
+
+# Actions whose variants must match **exactly** (after fillers/normalisation),
+# never via substring or fuzzy fallback. Without this rule, "water the basil"
+# matches the bare "water" variant via substring → the action becomes
+# water_all (P_4) and the soft-confirm gate fires on the wrong target.
+# Same trap for "when did i water the marigold" → also lands on water_all.
+STRICT_MATCH_ACTIONS = {"water", "photo"}
 
 
 TTS_PHRASES: Dict[str, str] = {
@@ -108,16 +117,32 @@ def match_command(transcript: str) -> Tuple[Optional[str], str]:
     stripped = _strip_fillers(text)
     candidates = [c for c in (text, stripped) if c]
 
+    # Pass 1 — exact equality, all actions.
     for candidate in candidates:
         for variants, action in COMMAND_MAP:
             for v in variants:
-                if candidate == v or v in candidate:
+                if candidate == v:
                     return action, "exact"
 
+    # Pass 2 — substring match, but skip actions in STRICT_MATCH_ACTIONS so
+    # "water the basil" doesn't get classified as bare "water" via "water" in
+    # candidate. Those phrasings fall through to the LLM, which handles the
+    # target plant properly.
+    for candidate in candidates:
+        for variants, action in COMMAND_MAP:
+            if action in STRICT_MATCH_ACTIONS:
+                continue
+            for v in variants:
+                if v in candidate:
+                    return action, "exact"
+
+    # Pass 3 — fuzzy similarity, also skipping the strict actions.
     best_action: Optional[str] = None
     best_score = 0.0
     for candidate in candidates:
         for variants, action in COMMAND_MAP:
+            if action in STRICT_MATCH_ACTIONS:
+                continue
             for v in variants:
                 score = _similarity(candidate, v)
                 if score > best_score:

@@ -534,14 +534,33 @@ def build_app(
     @app.post("/estop")
     def estop():
         bridge = _require_bridge()
+        # Publish 'e' twice with a short gap. A single publish was sometimes
+        # missed on hardware (race with panel_controller / sequencer state).
         record = bridge.emergency_stop()
-        return {"status": record.status, "command": record.command}
+        time.sleep(0.12)
+        bridge.emergency_stop()
+        print(f"[growmate_pi] /estop -> published 'e' x2 (status: {record.status})",
+              flush=True)
+        return {"status": record.status, "command": record.command, "repeated": 2}
 
     @app.post("/reset_estop")
     def reset_estop():
         bridge = _require_bridge()
-        record = bridge.reset_emergency_stop()
-        return {"status": record.status, "command": record.command}
+        # Publish 'E' three times with small gaps. On the hardware run with
+        # gh1 / farmbotdev a single 'E' frequently failed to take — the
+        # firmware F09 round-trip needs the panel_controller to be alive
+        # and the keyboard_topic subscription primed. Three publishes
+        # (~180 ms each) survive a missed first message reliably.
+        statuses = []
+        for i in range(3):
+            rec = bridge.reset_emergency_stop()
+            statuses.append(rec.status)
+            if i < 2:
+                time.sleep(0.18)
+        print(f"[growmate_pi] /reset_estop -> published 'E' x3 (statuses: {statuses})",
+              flush=True)
+        return {"status": statuses[-1], "command": "E", "repeated": 3,
+                "all_statuses": statuses}
 
     @app.get("/events")
     def events(limit: int = 50, plant: Optional[str] = None,
