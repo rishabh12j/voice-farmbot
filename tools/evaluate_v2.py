@@ -27,6 +27,10 @@ Metrics:
 * **USC**   Unsafe State Count — number of cases where Pi reported
   ``failure`` due to a bounds violation (we look for "out of bounds" in
   the node messages).
+* **ELC**   Event Log Coverage (Day 12) — % cases where every expected
+  per-plant event row (watered / sensed / photographed / …) actually
+  landed in the Pi's SQLite event log. Cases with no expected events
+  (jog, home, emergency, general_question) don't count.
 * **Latency** Mean wall-clock duration_ms reported by Pi per request.
 """
 
@@ -103,6 +107,22 @@ TEST_CASES: List[TestCase] = [
 ]
 
 
+# Day 7 / 12: which intent actions log a row in the Pi's event_log. Mirrors
+# growmate_pi.intent_server._INTENT_EVENT_MAP — if that map changes, this
+# must too. Anything not listed here doesn't write a row.
+_ACTION_TO_EVENT: dict = {
+    "water":          "watered",
+    "water_all":      "watered_all",
+    "check_sensor":   "sensed",
+    "check_moisture": "moisture_check",
+    "photo":          "photographed",
+    "panorama":       "panorama",
+    "scan_weeds":     "weed_scan",
+    "light_on":       "lights_on",
+    "light_off":      "lights_off",
+}
+
+
 @dataclass
 class CaseResult:
     utterance: str
@@ -117,6 +137,11 @@ class CaseResult:
     duration_ms: int = 0
     error: Optional[str] = None
     dbsr_pass: bool = False
+    # Day 12: event-log tracking
+    expected_event_types: List[str] = field(default_factory=list)
+    observed_event_types: List[str] = field(default_factory=list)
+    elc_applicable: bool = False
+    elc_pass: bool = False
 
 
 # ---- intent generation ------------------------------------------------------
@@ -164,6 +189,37 @@ def _build_intent_payload(
     }
 
 
+def _expected_events_for_intents(intents: list, is_emergency: bool) -> List[str]:
+    """Which event_types we expect to land in the Pi log after this batch.
+
+    Emergency batches are short-circuited (intent_server skips logging on
+    ``req.emergency=True``) — return empty so the eval doesn't penalise them.
+    """
+    if is_emergency:
+        return []
+    out: List[str] = []
+    for i in intents:
+        ev = _ACTION_TO_EVENT.get(i.get("action") or "")
+        if ev:
+            out.append(ev)
+    return out
+
+
+def _fetch_event_log_tail(client, base_url: str, limit: int = 20) -> List[dict]:
+    """Pull the most recent ``limit`` rows from the Pi's event log.
+
+    Returns a list of event dicts (newest first), or an empty list on any
+    failure — the eval shouldn't crash if the log endpoint is briefly
+    unresponsive between cases.
+    """
+    try:
+        r = client.get(f"{base_url}/events?limit={int(limit)}")
+        r.raise_for_status()
+        return r.json().get("events", []) or []
+    except Exception:
+        return []
+
+
 def _try_import_ai_core():
     try:
         from growmate_voice.ai_core import AICore  # type: ignore[import-not-found]
@@ -181,9 +237,22 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
     classifier = _try_import_ai_core() if use_llm else None
     results: List[CaseResult] = []
 
+    # Day 12: the /events endpoint lives on the same Pi but at a different path
+    # — strip the /intent suffix so we can query the log between cases.
+    base_url = pi_url.rsplit("/intent", 1)[0]
+
     with httpx.Client(timeout=http_timeout_s) as client:
+        # Snapshot the highest event id BEFORE the run so we can find rows
+        # added by this eval pass without touching the prod log.
+        pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
+        last_seen_id = pre_run_tail[0].get("id", 0) if pre_run_tail else 0
+
         for utterance, _exp_type, exp_cmds, desc, category in TEST_CASES:
             payload = _build_intent_payload(utterance, category, classifier)
+            expected_events = _expected_events_for_intents(
+                payload.get("intents") or [], category == "emergency"
+            )
+
             t0 = time.monotonic()
             try:
                 r = client.post(pi_url, json=payload)
@@ -199,6 +268,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
                         pi_status="error",
                         duration_ms=elapsed,
                         error=str(exc),
+                        expected_event_types=expected_events,
                     )
                 )
                 continue
@@ -215,6 +285,24 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
             dbsr_pass = all(any(c in cmd for cmd in commands) for c in exp_cmds) \
                 if exp_cmds else reply.get("status") in ("success", "partial")
 
+            # Day 12: pull recent log rows added since the last snapshot and
+            # check expected event_types are present. Only counts when this
+            # case was supposed to log something AND the Pi reported success
+            # — a failed tree shouldn't be marked as a logging miss.
+            observed_events: List[str] = []
+            elc_applicable = bool(expected_events) and reply.get("status") in ("success", "partial")
+            elc_pass = False
+            if expected_events:
+                fresh_tail = _fetch_event_log_tail(
+                    client, base_url, limit=max(5, len(expected_events) + 5)
+                )
+                new_rows = [e for e in fresh_tail if e.get("id", 0) > last_seen_id]
+                if new_rows:
+                    last_seen_id = max(e.get("id", last_seen_id) for e in new_rows)
+                observed_events = [e.get("event_type") for e in new_rows]
+                if elc_applicable:
+                    elc_pass = all(et in observed_events for et in expected_events)
+
             results.append(
                 CaseResult(
                     utterance=utterance,
@@ -228,6 +316,10 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
                     out_of_bounds=oob,
                     duration_ms=int(reply.get("duration_ms", 0)),
                     dbsr_pass=bool(dbsr_pass),
+                    expected_event_types=expected_events,
+                    observed_event_types=observed_events,
+                    elc_applicable=elc_applicable,
+                    elc_pass=elc_pass,
                 )
             )
     return results
@@ -240,11 +332,16 @@ def _summarise(results: List[CaseResult]) -> dict:
     total_succ = sum(r.nodes_success for r in results)
     usc = sum(1 for r in results if r.out_of_bounds)
     latencies = [r.duration_ms for r in results if r.duration_ms > 0]
+    # Day 12: ELC denominator is only the cases that should have logged.
+    elc_applicable = [r for r in results if r.elc_applicable]
+    elc_pass = sum(1 for r in elc_applicable if r.elc_pass)
     return {
         "n_cases": total,
         "DBSR": round(dbsr_pass / max(total, 1) * 100, 1),
         "SNSR": round(total_succ / max(total_nodes, 1) * 100, 1),
         "USC": usc,
+        "ELC": round(elc_pass / max(len(elc_applicable), 1) * 100, 1) if elc_applicable else None,
+        "ELC_n_applicable": len(elc_applicable),
         "latency_ms_mean": round(statistics.mean(latencies), 0) if latencies else 0,
         "latency_ms_max": max(latencies) if latencies else 0,
     }
@@ -279,11 +376,17 @@ def main(argv=None) -> int:
         print(json.dumps({"summary": summary, "cases": [r.__dict__ for r in results]}, indent=2))
         return 0
 
-    print(f"\n{'category':<10} {'utterance':<42} {'status':<8} {'dbsr':<5} {'ms':<6}")
-    print("-" * 75)
+    print(f"\n{'category':<10} {'utterance':<42} {'status':<8} {'dbsr':<5} {'elc':<5} {'ms':<6}")
+    print("-" * 85)
     for r in results:
         flag = "OK" if r.dbsr_pass else "MISS"
-        print(f"{r.category:<10} {r.utterance[:40]:<42} {r.pi_status:<8} {flag:<5} {r.duration_ms:<6}")
+        if not r.elc_applicable:
+            elc = "n/a"
+        elif r.elc_pass:
+            elc = "OK"
+        else:
+            elc = "MISS"
+        print(f"{r.category:<10} {r.utterance[:40]:<42} {r.pi_status:<8} {flag:<5} {elc:<5} {r.duration_ms:<6}")
 
     print(f"\nSummary: {summary}")
     return 0 if summary["DBSR"] >= 80 else 1
