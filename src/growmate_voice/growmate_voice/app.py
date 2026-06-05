@@ -3746,6 +3746,15 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     <div class="hist-empty" id="histEmpty" hidden>Nothing yet — try saying <b>“water the tomatoes”</b>.</div>
   </section>
 
+  <!-- Dev-aid: shows the last phrase we tried to speak via browser TTS.
+       Empty (and invisible) most of the time; useful when debugging
+       iOS Safari speech issues without a Mac inspector. -->
+  <div id="ttsDebugStrip" aria-hidden="true" style="
+    font-size: 12px; color: var(--moss-deep); opacity: .55;
+    padding: 6px 16px; text-align: center; font-style: italic;
+    min-height: 1.2em;
+  "></div>
+
   <footer class="footer">
     <div class="legal">GrowMate · FarmBot Genesis XL · 5.7 m × 2.7 m bed</div>
     <div class="foot-buttons">
@@ -3943,11 +3952,18 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     try {
       const synth = window.speechSynthesis;
       if (synth) {
-        // No-op getVoices() triggers Safari's voice-list population.
+        // Touch getVoices() inside the gesture to trigger Safari's
+        // async voice-list population. Hook voiceschanged so when the
+        // list arrives we can pin a stable English voice for every
+        // future utterance (iOS otherwise sometimes hops voices).
         synth.getVoices();
+        synth.onvoiceschanged = () => {
+          if (!_ttsVoice) _ttsVoice = _pickVoice();
+        };
         const u = new SpeechSynthesisUtterance('a');
         u.volume = 0;
         u.rate = 10;    // max-speed, near-inaudible duration
+        u.lang = 'en-US';
         synth.speak(u);
       }
     } catch (_) {}
@@ -5001,6 +5017,25 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   let _taskLastMode      = "";   // 'running' / 'stopped' / 'idle'
   let _taskUserDismissed = false;  // user clicked "Leave it stopped"
 
+  // Cache the best English voice once it's available, so every utterance
+  // picks the same one. iOS sometimes hops voices mid-session otherwise.
+  let _ttsVoice = null;
+  function _pickVoice() {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return null;
+      const voices = synth.getVoices();
+      if (!voices || !voices.length) return null;
+      // Prefer a local English voice; Samantha on iOS, Microsoft Zira /
+      // Google US English on desktop. Anything en-* > anything else.
+      const enLocal = voices.find(v => v.localService && /^en/i.test(v.lang));
+      if (enLocal) return enLocal;
+      const enAny = voices.find(v => /^en/i.test(v.lang));
+      if (enAny) return enAny;
+      return voices[0] || null;
+    } catch (_) { return null; }
+  }
+
   function _speak(text) {
     // Browser-side TTS for status announcements. Picked over Kokoro
     // because per-plant updates need to be instant; a 300 ms HTTP round
@@ -5009,24 +5044,49 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     try {
       const synth = window.speechSynthesis;
       if (!synth || !text) return;
-      // iOS Safari quirk: cancel() then immediately speak() within the
-      // same task often loses the new utterance. Only cancel if there's
-      // actually something queued and we want to override it; otherwise
-      // just append. Older announcements completing under the new one
-      // is fine for "Plant 3 of 8" -> "Plant 4 of 8" overlap.
-      if (synth.speaking || synth.pending) {
-        synth.cancel();
-      }
+      // iOS Safari: do NOT call synth.cancel() here. Cancel-then-speak
+      // in the same task is the #1 reason "Plant 2 of 8" silently
+      // disappears after "Watering 8 lettuce" plays. Let utterances
+      // queue naturally — the speak intervals (~3 s) are slow enough
+      // that we don't get pile-up, and queued utterances on iOS just
+      // play in order rather than getting trampled.
       const u = new SpeechSynthesisUtterance(text);
+      if (!_ttsVoice) _ttsVoice = _pickVoice();
+      if (_ttsVoice) u.voice = _ttsVoice;
       u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
       u.lang = 'en-US';                 // iOS needs an explicit lang
       u.onerror = (e) => console.warn('[tts] error:', e?.error || e);
-      // Wrap in a microtask so cancel() above has a tick to settle on
-      // iOS Safari. Negligible on desktop browsers.
-      setTimeout(() => {
-        try { synth.speak(u); } catch (e) { console.warn('[tts] speak:', e); }
-      }, 0);
+      synth.speak(u);
+      _lastSpoken = text;
+      _renderDebugStrip();
     } catch (e) { console.warn('[tts]', e); }
+  }
+
+  // ============ iOS Safari speech keep-alive ============
+  // iOS Safari pauses speechSynthesis after ~15 s of "idle" between
+  // utterances and silently drops the next speak(). pause()/resume()
+  // tickled every 13 s keeps the engine awake without producing audio.
+  // No-op on desktop browsers (they ignore the cycle).
+  setInterval(() => {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      // Only tickle when we actually have stuff to keep alive, OR every
+      // tick if we've ever spoken — cheaper than always pulsing.
+      synth.pause();
+      synth.resume();
+    } catch (_) {}
+  }, 13000);
+
+  // Tiny dev-aid debug strip showing the last phrase we tried to speak,
+  // injected into the existing pipeline log area. Helps debug iOS speech
+  // without a Mac/Safari devtools session.
+  let _lastSpoken = '';
+  function _renderDebugStrip() {
+    try {
+      const strip = document.getElementById('ttsDebugStrip');
+      if (strip) strip.textContent = _lastSpoken ? ('TTS: ' + _lastSpoken) : '';
+    } catch (_) {}
   }
 
   function _openOverlay() {
