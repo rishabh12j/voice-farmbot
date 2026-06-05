@@ -3934,13 +3934,20 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
         _audioUnlocked = true;
       }
     } catch (_) { /* swallow */ }
-    // Also nudge the speech queue with a no-op utterance so the FIRST
-    // real announcement plays cleanly on iOS.
+    // Also nudge the speech queue inside this gesture so the FIRST
+    // real announcement plays cleanly on iOS Safari. Empty strings or
+    // pure whitespace don't satisfy iOS's "real utterance" rule — it
+    // needs a non-empty token, even if rate/volume make it inaudible.
+    // Kicking off voice loading here too so the first user-visible
+    // speak() doesn't race the async voiceschanged event.
     try {
       const synth = window.speechSynthesis;
       if (synth) {
-        const u = new SpeechSynthesisUtterance('');
+        // No-op getVoices() triggers Safari's voice-list population.
+        synth.getVoices();
+        const u = new SpeechSynthesisUtterance('a');
         u.volume = 0;
+        u.rate = 10;    // max-speed, near-inaudible duration
         synth.speak(u);
       }
     } catch (_) {}
@@ -5002,11 +5009,24 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     try {
       const synth = window.speechSynthesis;
       if (!synth || !text) return;
-      synth.cancel();   // drop any in-flight phrase — newer is better
+      // iOS Safari quirk: cancel() then immediately speak() within the
+      // same task often loses the new utterance. Only cancel if there's
+      // actually something queued and we want to override it; otherwise
+      // just append. Older announcements completing under the new one
+      // is fine for "Plant 3 of 8" -> "Plant 4 of 8" overlap.
+      if (synth.speaking || synth.pending) {
+        synth.cancel();
+      }
       const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.0; u.pitch = 1.0; u.volume = 0.85;
-      synth.speak(u);
-    } catch (_) { /* no synth, fall through silently */ }
+      u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+      u.lang = 'en-US';                 // iOS needs an explicit lang
+      u.onerror = (e) => console.warn('[tts] error:', e?.error || e);
+      // Wrap in a microtask so cancel() above has a tick to settle on
+      // iOS Safari. Negligible on desktop browsers.
+      setTimeout(() => {
+        try { synth.speak(u); } catch (e) { console.warn('[tts] speak:', e); }
+      }, 0);
+    } catch (e) { console.warn('[tts]', e); }
   }
 
   function _openOverlay() {
