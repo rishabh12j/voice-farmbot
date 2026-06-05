@@ -3898,6 +3898,63 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
    ====================================================================== */
 
 (() => {
+  // ============ iOS Safari audio gesture workaround ============
+  // The Kokoro TTS comes back as base64 WAV in a fetch response — long
+  // after the user's tap that started recording. iOS Safari (and every
+  // browser on iOS, since they all use WebKit) refuses `new
+  // Audio(...).play()` outside a "user gesture" task, so the response
+  // audio is silently dropped on the phone even though it works on
+  // desktop Chrome/Edge.
+  //
+  // Trick: keep ONE HTMLAudioElement around, "unlock" it on the first
+  // user gesture by calling play() on a tiny silent WAV, and reuse it
+  // for every later response. Once unlocked, subsequent .src = ... +
+  // .play() are treated as a continuation of the same audio session
+  // and iOS lets them through.
+  //
+  // Same idea for SpeechSynthesisUtterance — speak an empty utterance
+  // once to "unlock" the speech queue.
+  const _kokoroAudio = new Audio();
+  _kokoroAudio.preload = 'auto';
+  let _audioUnlocked = false;
+  // ~46-byte silent WAV (1 sample, 8 kHz, mono) — enough to satisfy
+  // iOS that we have a real, primed Audio element. Plays inaudibly.
+  const _SILENT_WAV_B64 =
+    'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+
+  function unlockAudio() {
+    if (_audioUnlocked) return;
+    try {
+      _kokoroAudio.src = 'data:audio/wav;base64,' + _SILENT_WAV_B64;
+      const p = _kokoroAudio.play();
+      if (p && p.then) {
+        p.then(() => { _audioUnlocked = true; })
+         .catch(() => { /* still let later attempts try */ });
+      } else {
+        _audioUnlocked = true;
+      }
+    } catch (_) { /* swallow */ }
+    // Also nudge the speech queue with a no-op utterance so the FIRST
+    // real announcement plays cleanly on iOS.
+    try {
+      const synth = window.speechSynthesis;
+      if (synth) {
+        const u = new SpeechSynthesisUtterance('');
+        u.volume = 0;
+        synth.speak(u);
+      }
+    } catch (_) {}
+  }
+
+  function playKokoro(b64) {
+    if (!b64) return;
+    try {
+      _kokoroAudio.src = 'data:audio/wav;base64,' + b64;
+      const p = _kokoroAudio.play();
+      if (p && p.catch) p.catch(() => {});
+    } catch (_) {}
+  }
+
   // ----- state -----
   const state = {
     powered: false,
@@ -4507,13 +4564,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       const data = await r.json();
       // Normalise the backend response into the shape finishCommand expects
       const norm = adaptVoiceResponse(data);
-      // Auto-play TTS if returned
-      if (data.tts_audio_b64) {
-        try {
-          const audio = new Audio('data:audio/wav;base64,' + data.tts_audio_b64);
-          audio.play().catch(() => {});
-        } catch (_) {}
-      }
+      // Auto-play TTS if returned (via the primed singleton so iOS
+      // Safari doesn't drop it as autoplay).
+      if (data.tts_audio_b64) playKokoro(data.tts_audio_b64);
       finishCommand(norm);
     } catch (e) {
       showToast('Voice request failed: ' + e.message, 'warn');
@@ -4585,9 +4638,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
         body: JSON.stringify({ confirm_id: cid, confirmed: yes, tts: _confirmTtsBackend, enable_tts: 'true' }),
       });
       const data = await r.json();
-      if (data.tts_audio_b64) {
-        try { new Audio('data:audio/wav;base64,' + data.tts_audio_b64).play().catch(() => {}); } catch (_) {}
-      }
+      if (data.tts_audio_b64) playKokoro(data.tts_audio_b64);
       const norm = adaptVoiceResponse(data);
       finishCommand(norm, yes ? null : 'Cancelled');
     } catch (e) {
@@ -4707,7 +4758,25 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     return buffer;
   }
 
+  // ============ iOS Safari belt-and-braces ============
+  // Whichever element the user first taps — mic, send, a quick action,
+  // a confirm Yes, the Power button at the gate — prime the audio +
+  // speech queues. Listener removes itself after firing once so it's
+  // free on subsequent taps.
+  const _firstInteractionTypes = ['click', 'touchstart', 'keydown'];
+  function _onFirstInteraction(_e) {
+    unlockAudio();
+    _firstInteractionTypes.forEach(t =>
+      document.removeEventListener(t, _onFirstInteraction, true));
+  }
+  _firstInteractionTypes.forEach(t =>
+    document.addEventListener(t, _onFirstInteraction, true));
+
   micBtn.addEventListener('click', () => {
+    // iOS Safari: prime the audio + speech queues inside this gesture
+    // so the Kokoro response that comes back ~500 ms later is allowed
+    // to play. No-op on desktop browsers / after the first prime.
+    unlockAudio();
     console.log('[mic] click; current state:', state.micState);
     if (state.micState === 'idle')       startRecording();
     else if (state.micState === 'recording') stopRecording();
@@ -4730,6 +4799,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     if (textRow.classList.contains('show')) textInput.focus();
   });
   sendTextBtn.addEventListener('click', () => {
+    unlockAudio();   // same iOS Safari prime as the mic button
     const v = textInput.value.trim();
     if (!v) return;
     textInput.value = '';
@@ -4758,9 +4828,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
         body: JSON.stringify({ text }),
       });
       const data = await r.json();
-      if (data.tts_audio_b64) {
-        try { new Audio('data:audio/wav;base64,' + data.tts_audio_b64).play().catch(() => {}); } catch (_) {}
-      }
+      if (data.tts_audio_b64) playKokoro(data.tts_audio_b64);
       norm = adaptVoiceResponse(data);
     } catch (e) {
       norm = await api('/api/voice', { method: 'POST', body: { text } });
