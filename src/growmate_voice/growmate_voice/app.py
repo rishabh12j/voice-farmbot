@@ -5020,6 +5020,15 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     }
 
     // No task active, no estop latch, OR user dismissed: close.
+    // If we're transitioning from "running" -> "idle" without an estop
+    // latch having been set, that's a clean natural completion. Speak
+    // a quick "All done" via the browser TTS so the user gets snappy
+    // feedback while the Kokoro-synthesised summary ("Done watering 3
+    // marigolds.") makes its way back through /intent. The Kokoro
+    // line still plays, just a beat later.
+    if (_taskLastMode === 'running' && !task.estop_requested) {
+      _speak('All done.');
+    }
     _closeOverlay();
     _taskLastMode = 'idle';
     _taskLastLabel = '';
@@ -5060,16 +5069,46 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     });
   }
   if (taskResetBtn) {
+    // Holds the original label so we can restore it after the
+    // visible "Resetting…" / "Robot ready" transition. Captured the
+    // first time the button is clicked.
+    let _resetBtnOriginalHTML = null;
     taskResetBtn.addEventListener('click', async () => {
+      if (_resetBtnOriginalHTML === null) _resetBtnOriginalHTML = taskResetBtn.innerHTML;
       taskResetBtn.disabled = true;
+      taskResetBtn.innerHTML =
+        '<span class="task-reset-icon" aria-hidden="true">…</span>RESETTING…';
+      taskStoppedSub.textContent = 'Clearing the safety stop.';
+      _speak('Resetting the robot.');
+      let ok = false;
       try {
-        await fetch('/api/reset', { method: 'POST' });
-      } catch (_) { /* Pi unreachable: still close the overlay locally */ }
-      _speak('Ready when you are.');
-      // Optimistic close — next status poll will reconcile if reset
-      // didn't take and re-open if estop_requested is still true.
-      _closeOverlay();
-      _taskLastMode = 'idle';
+        const r = await fetch('/api/reset', { method: 'POST' });
+        ok = r && r.ok;
+      } catch (_) { ok = false; }
+      if (ok) {
+        // Visible "it actually worked" confirmation before we close so
+        // the user isn't left wondering whether the press registered.
+        taskResetBtn.innerHTML =
+          '<span class="task-reset-icon" aria-hidden="true">✓</span>ROBOT READY';
+        taskStoppedSub.textContent = 'Safety stop cleared. You can speak the next command.';
+        _speak('Robot ready. You can speak the next command.');
+        // Give the user a beat to read it before we close.
+        setTimeout(() => {
+          taskResetBtn.innerHTML = _resetBtnOriginalHTML;
+          taskResetBtn.disabled = false;
+          taskStoppedSub.textContent = 'The robot is held still until you reset it.';
+          _closeOverlay();
+          _taskLastMode = 'idle';
+        }, 1400);
+      } else {
+        // Reset call failed - keep the overlay open so the user can
+        // try again, and surface the failure clearly.
+        taskResetBtn.innerHTML = _resetBtnOriginalHTML;
+        taskResetBtn.disabled = false;
+        taskStoppedSub.textContent =
+          "Reset didn't take. Make sure the Pi is reachable, then try again.";
+        _speak('Reset did not take. Please try again.');
+      }
     });
   }
   if (taskStoppedStayBtn) {

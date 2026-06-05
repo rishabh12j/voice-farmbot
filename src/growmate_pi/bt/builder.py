@@ -42,6 +42,13 @@ from growmate_pi.bt.condition_nodes import (
 )
 
 
+# Seconds the multi-plant trees wait after task_state.start() before the
+# first MoveTo. Long enough for the browser TTS to speak "Watering 3
+# marigolds." before the gantry begins moving. Tick-aware Wait so an
+# estop during this window still halts within one tick.
+_ANNOUNCE_PAUSE_S = 2.5
+
+
 def _seq(name: str, *children) -> py_trees.composites.Sequence:
     s = py_trees.composites.Sequence(name=name, memory=True)
     s.add_children(list(children))
@@ -143,6 +150,12 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
                      name=f"BeginTask({total})"),
         CheckAvailable(bridge),
+        # Speak-then-move: the browser TTS announces the task label as
+        # soon as task_active flips True. Give it a moment to actually
+        # play before the gantry starts moving. The Wait is tick-aware,
+        # so an estop press during the announcement still halts within
+        # ~100 ms.
+        Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
     ]
 
     for i, plant in enumerate(matches, start=1):
@@ -240,6 +253,8 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
                      name=f"BeginTask({total})"),
         CheckAvailable(bridge),
+        # Same speak-then-move pause as _tree_water. See comment there.
+        Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
     ]
 
     for i, plant in enumerate(plants, start=1):
