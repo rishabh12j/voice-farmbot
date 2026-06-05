@@ -228,6 +228,149 @@ restart (Ctrl+Shift+R) so the new HTML/JS picks up.
 
 ---
 
+## 3a. Access GrowMate from a phone (full functionality)
+
+The web UI works fine over LAN HTTP, but the **microphone button**
+needs an HTTPS origin per the browser security policy. `localhost` is
+the one exception. Two paths to give a phone the full experience.
+
+### 3a.1 Cloudflared quick tunnel — recommended for demo day
+
+Free, no signup, **one command per session**, real HTTPS. Internet
+required.
+
+**One-time install:**
+
+```cmd
+winget install --id Cloudflare.cloudflared
+```
+
+**Every session, third terminal (Windows app keeps running on default
+host/port):**
+
+```cmd
+cloudflared tunnel --url http://localhost:7860
+```
+
+The output includes a line like:
+
+```
+Your quick Tunnel has been created! Visit it at (it may take some time
+to be reachable):
+https://strange-purple-bird-1234.trycloudflare.com
+```
+
+Open that URL on the phone. The mic button works. The tunnel URL is
+random and rotates each launch — fine for a researcher-driven demo,
+not great if you're emailing the link to focus-group participants
+ahead of time.
+
+For a **stable** URL (handy for the focus group), set up a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+with a free Cloudflare account and a domain you own. The tunnel runs
+the same way; the URL just doesn't rotate.
+
+### 3a.2 mkcert + local CA — offline / stable LAN URL
+
+For demos with no internet at the venue, or when you want the same
+LAN URL every time. Uses a local certificate authority and a
+self-signed cert your phone trusts after a one-time install.
+
+**One-time setup (Windows):**
+
+```cmd
+winget install FiloSottile.mkcert
+mkcert -install
+:: Replace 192.168.1.42 with your Windows LAN IP (run `ipconfig`).
+:: 'pc-name.local' is your hostname; check with `hostname`.
+mkcert localhost 127.0.0.1 192.168.1.42 pc-name.local
+```
+
+That writes `localhost+3.pem` and `localhost+3-key.pem` to the
+current directory. Move them somewhere sensible, e.g.
+`C:\Users\risha\.growmate_voice\certs\`.
+
+**One-time per phone:** install the mkcert root CA. On the Windows
+machine:
+
+```cmd
+mkcert -CAROOT
+:: Prints something like C:\Users\risha\AppData\Local\mkcert
+:: That folder contains rootCA.pem. Email it to yourself or AirDrop
+:: it to the phone, then:
+::   - iOS: open the .pem in Safari -> Settings -> General -> VPN
+::     & Device Management -> trust the cert.
+::   - Android: Settings -> Security -> Encryption & credentials ->
+::     Install a certificate -> CA certificate.
+```
+
+**Every session (Windows app):**
+
+```cmd
+cd C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice
+set PYTHONPATH=C:\Users\risha\growmate-bt\voice-farmbot\src
+python -m growmate_voice.app --no-ros2 ^
+  --pi-url http://192.168.0.54:8000/intent ^
+  --host 0.0.0.0 ^
+  --ssl-keyfile C:\Users\risha\.growmate_voice\certs\localhost+3-key.pem ^
+  --ssl-certfile C:\Users\risha\.growmate_voice\certs\localhost+3.pem
+```
+
+Console prints `GrowMate at https://0.0.0.0:7860`. From the phone:
+`https://192.168.1.42:7860` — no warning, full mic, no internet
+required.
+
+Don't forget the Windows firewall:
+
+```cmd
+netsh advfirewall firewall add rule name="GrowMate 7860" ^
+  dir=in action=allow protocol=TCP localport=7860
+```
+
+### 3a.3 LAN HTTP, no mic — fallback if HTTPS isn't an option
+
+```cmd
+python -m growmate_voice.app --no-ros2 --host 0.0.0.0 ^
+  --pi-url http://192.168.0.54:8000/intent
+```
+
+Phone visits `http://192.168.1.42:7860`. Everything works **except
+the microphone button** — the browser refuses `getUserMedia` over
+HTTP from a non-localhost origin. Buttons, jog controls, the
+blocking overlay, text input, EMERGENCY STOP, RESET all work fine.
+
+Useful for confirming the UI renders correctly on a small screen
+before bothering with TLS.
+
+### 3a.4 What works from the phone — sanity check matrix
+
+| Feature | Cloudflared HTTPS | mkcert HTTPS | LAN HTTP |
+|---|---|---|---|
+| Web UI / layout | ✓ | ✓ | ✓ |
+| Button presses (lights, home, jog, photo) | ✓ | ✓ | ✓ |
+| Text-input commands | ✓ | ✓ | ✓ |
+| Mic button (voice input) | ✓ | ✓ | ✗ (browser blocks) |
+| Kokoro TTS playback (audio out) | ✓ | ✓ | ✓ |
+| Browser TTS announcements (Tier B) | ✓ | ✓ | ✓ |
+| Tier B blocking overlay + EMERGENCY STOP | ✓ | ✓ | ✓ |
+| Today's care panel (when re-armed) | ✓ | ✓ | ✓ |
+| Stable URL across sessions | ✗ (rotates) | ✓ | ✓ |
+| Works without internet | ✗ | ✓ | ✓ |
+
+### 3a.5 The shortcut for demo day, 9 June 2026
+
+```cmd
+:: terminal 1 — Pi (already running per section 2)
+:: terminal 2 — Windows app (already running per section 3)
+:: terminal 3 — tunnel
+cloudflared tunnel --url http://localhost:7860
+```
+
+Copy the printed `https://*.trycloudflare.com` URL. Open it on your
+phone. Done.
+
+---
+
 ## 4. Test order (smallest risk first)
 
 Run these in order — each one validates a more complex layer than the

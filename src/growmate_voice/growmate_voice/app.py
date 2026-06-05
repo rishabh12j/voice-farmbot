@@ -5239,8 +5239,26 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="GrowMate FastAPI jog + voice panel")
     parser.add_argument("--no-ros2", action="store_true",
                         help="Simulation mode — commands printed, not published")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Bind address. Default 127.0.0.1 (localhost only). "
+                             "Use 0.0.0.0 to accept LAN connections (e.g. from "
+                             "a phone on the same WiFi). HTTPS is then required "
+                             "for mic access — see --ssl-keyfile / --ssl-certfile.")
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--ssl-keyfile",
+        default=None,
+        help=("TLS private key (PEM). Pair with --ssl-certfile to serve over "
+              "HTTPS so phone browsers can use the mic. Easiest path: "
+              "`mkcert -install && mkcert localhost <lan-ip>`, then pass the "
+              "two generated files. Without TLS, the mic only works on "
+              "localhost (browser security policy)."),
+    )
+    parser.add_argument(
+        "--ssl-certfile",
+        default=None,
+        help="TLS certificate (PEM). See --ssl-keyfile.",
+    )
     parser.add_argument(
         "--pi-url",
         default=None,
@@ -5290,9 +5308,20 @@ def main(argv: Optional[List[str]] = None) -> None:
         log.critical("uvicorn not installed — run: pip install uvicorn[standard] fastapi")
         sys.exit(1)
 
-    log.info("GrowMate at http://%s:%s  (log: %s)", args.host, args.port, log_path())
+    scheme = "https" if (args.ssl_keyfile and args.ssl_certfile) else "http"
+    log.info("GrowMate at %s://%s:%s  (log: %s)",
+             scheme, args.host, args.port, log_path())
+    if (args.ssl_keyfile and not args.ssl_certfile) or \
+       (args.ssl_certfile and not args.ssl_keyfile):
+        log.warning("Both --ssl-keyfile AND --ssl-certfile are required for "
+                    "HTTPS; falling back to plain HTTP.")
+    uvicorn_kwargs: Dict[str, Any] = {"host": args.host, "port": args.port,
+                                       "log_level": "info"}
+    if args.ssl_keyfile and args.ssl_certfile:
+        uvicorn_kwargs["ssl_keyfile"] = args.ssl_keyfile
+        uvicorn_kwargs["ssl_certfile"] = args.ssl_certfile
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        uvicorn.run(app, **uvicorn_kwargs)
     finally:
         if _STATE.robot is not None:
             _STATE.robot.shutdown()
