@@ -64,23 +64,56 @@ git pull origin main
 
 ### 1.3 Rebuild and re-source
 
+**The rule: build OUTSIDE the venv, run the intent server INSIDE it.**
+The venv has fastapi / py_trees / pydantic / httpx for the runtime, but
+its Python is missing the ROS 2 build-time deps (`empy`, `lark`,
+`catkin_pkg`). If you build inside the venv, the rosidl message
+generation fails with `ModuleNotFoundError: No module named 'em'` and
+none of the four overriding packages get produced — which then
+silently falls back to the upstream `FarmBot_ROS2` install at runtime.
+That's where the "H_0 works but P_4 doesn't" trap from section 8 lives.
+
+So:
+
 ```bash
+deactivate 2>/dev/null                    # IMPORTANT — out of venv for build
+which python3                             # should be /usr/bin/python3, not venv
+
+# One-time per Pi: install ROS 2 message-generation deps if missing
+sudo apt update
+sudo apt install -y python3-empy python3-lark python3-catkin-pkg python3-numpy
+
+# If this is a returning Pi, wipe stale install/build/log first so
+# colcon starts from a clean slate.
+rm -rf install build log
+
 source /opt/ros/$ROS_DISTRO/setup.bash
-source venv/bin/activate 2>/dev/null || true   # if venv exists, use it
+# Source upstream FIRST so colcon knows what it's overriding:
+source ~/FarmBot_ROS2/install/setup.bash 2>/dev/null || true
+
 colcon build --symlink-install \
   --allow-overriding farmbot_command_handler farmbot_controllers farmbot_interfaces map_handler
+
+# Source Rishabh LAST so its prefix beats FarmBot_ROS2 on AMENT_PREFIX_PATH:
 source install/setup.bash
 ```
 
-If the venv doesn't exist yet (first-time on this Pi):
+Then verify with section 1.3a's for-loop — every package must end in
+`~/Rishabh_Growmate_FarmBot/install/...`.
+
+If the venv doesn't exist yet (first-time on this Pi), create it
+AFTER the build succeeds:
 
 ```bash
 python3 -m venv --system-site-packages venv
 source venv/bin/activate
 pip install pydantic fastapi 'uvicorn[standard]' httpx py_trees pyyaml
-touch venv/COLCON_IGNORE
-# then colcon build again
+touch venv/COLCON_IGNORE                  # stop colcon from scanning into it
+deactivate                                # keep the venv off the build path
 ```
+
+The venv is needed only by the intent server (section 2). Bringup and
+the keyboard controller (sections 1.6, 1.7) don't need it.
 
 ### 1.3a Verify which workspace each package is loading from
 
@@ -833,6 +866,7 @@ Until that's written, fall back to
 | `H_0` moves but `P_4` doesn't | Map controller cached an empty map at startup | Same as above |
 | `H_0` moves but `P_4` doesn't, AND `active_map.yaml` is fine | Standalone upstream `FarmBot_ROS2` workspace is shadowing the Rishabh overlay — `ros2` picks up the upstream `map_handler` which knows nothing about the Maynooth garden | Run the for-loop in section 1.3a and verify every `farmbot_*` and `map_handler` resolves to `~/Rishabh_Growmate_FarmBot/install/...`; re-source upstream first and Rishabh last |
 | A Python module is the wrong copy (e.g. `py_trees` from `/opt/ros/...` instead of the venv) | venv created without `--system-site-packages` OR a `pip install` reported "already satisfied" by finding the ROS-installed copy | Same diagnosis from section 1.3a (`python3 -c "import X; print(X.__file__)"`); `pip install --force-reinstall <pkg>` inside the venv to pin a local copy |
+| `colcon build` fails with `ModuleNotFoundError: No module named 'em'` (rosidl_adapter) | You're building INSIDE the venv. ROS 2's message generator uses the active Python; the venv lacks `empy`/`lark`/`catkin_pkg` even with `--system-site-packages` if Python versions don't line up | `deactivate` first, install `python3-empy python3-lark python3-catkin-pkg` via `apt`, rebuild outside the venv (section 1.3) |
 | `fatal: not a git repository` after pull | Folder predates git on this Pi | `git init` + `remote add` + `fetch` + `checkout -f main` (section 1.2) |
 | `ModuleNotFoundError: rclpy` inside the venv | Venv created without `--system-site-packages` | `python3 -m venv --system-site-packages venv` (recreate) |
 | `colcon build` picks up venv files | Missing `COLCON_IGNORE` marker | `touch venv/COLCON_IGNORE`, rebuild |
