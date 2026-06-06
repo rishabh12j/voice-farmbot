@@ -151,6 +151,43 @@ source ~/Rishabh_Growmate_FarmBot/install/setup.bash
 Re-run the for-loop and confirm every package now points at the
 Rishabh path.
 
+**Gotcha that bit us on gh1:** if `~/.bashrc` auto-sources
+`~/FarmBot_ROS2/install/setup.bash` on every new shell (very common
+on the Maynooth Pis), Rishabh's `setup.bash` re-chain-sources
+FarmBot_ROS2 internally — putting FarmBot_ROS2 BACK at the front of
+`AMENT_PREFIX_PATH` after you sourced Rishabh, no matter what order
+you typed. You can confirm by running `grep FarmBot ~/.bashrc`. Fix:
+
+```bash
+# Comment out the .bashrc auto-source so you control the order yourself
+sed -i 's|^source ~/FarmBot_ROS2/install/setup.bash|# &    # manual; see RUN_GUIDE 1.3a|' ~/.bashrc
+exec $SHELL                                              # clean shell
+# Now source manually, underlay first, overlay last:
+source ~/FarmBot_ROS2/install/setup.bash
+source ~/Rishabh_Growmate_FarmBot/install/setup.bash
+```
+
+Still seeing FarmBot_ROS2 first? Rishabh's `setup.bash` is chaining
+FarmBot_ROS2 internally and we can't fight it nicely. Surgically drop
+FarmBot_ROS2 entries from `AMENT_PREFIX_PATH` after sourcing
+(Rishabh's `install/` already has copies of `farmbot_bringup`,
+`farmbot_controllers`, etc.):
+
+```bash
+new_path=""
+for p in $(echo "$AMENT_PREFIX_PATH" | tr ':' '\n'); do
+  case "$p" in
+    */FarmBot_ROS2/*) continue ;;
+    *) new_path="${new_path}${new_path:+:}$p" ;;
+  esac
+done
+export AMENT_PREFIX_PATH="$new_path"
+```
+
+Watch `hardware_communication` and `farmbot_hri` in the for-loop
+after the surgery — if they come back `NOT-FOUND`, you'll need
+those packages added to Rishabh's `src/` too.
+
 **b. Where is the active python module coming from?**
 
 ```bash
