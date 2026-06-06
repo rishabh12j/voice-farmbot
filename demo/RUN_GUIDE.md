@@ -82,6 +82,79 @@ touch venv/COLCON_IGNORE
 # then colcon build again
 ```
 
+### 1.3a Verify which workspace each package is loading from
+
+This is the one that bit us on gh1: if you accidentally source the
+standalone upstream FarmBot_ROS2 workspace AFTER the Rishabh repo
+(instead of BEFORE), every ROS 2 lookup returns the upstream copy and
+none of your overrides apply. The keyboard controller runs, motors
+move, but `P_4` falls flat because the upstream `map_handler` is
+loading a stale or empty map.
+
+Two cheap checks. Run both AFTER all your `source ...` lines:
+
+**a. Which prefix is each FarmBot package loading from?**
+
+```bash
+for pkg in farmbot_bringup farmbot_controllers farmbot_command_handler farmbot_interfaces map_handler; do
+  printf "%-30s -> %s\n" "$pkg" "$(ros2 pkg prefix $pkg 2>/dev/null || echo NOT-FOUND)"
+done
+```
+
+You want every line ending in `~/Rishabh_Growmate_FarmBot/install/...`
+(or whatever your path is). If any line ends in
+`/home/farmbotdev/FarmBot_ROS2/install/...` (or any other standalone
+location), that package is wrong — the upstream copy is shadowing your
+edits. Re-source in the right order:
+
+```bash
+# Source upstream FIRST (if you have it sourced at all), Rishabh LAST
+source /opt/ros/$ROS_DISTRO/setup.bash
+# only if you previously sourced the standalone workspace:
+# source ~/FarmBot_ROS2/install/setup.bash
+source ~/Rishabh_Growmate_FarmBot/install/setup.bash
+```
+
+Re-run the for-loop and confirm every package now points at the
+Rishabh path.
+
+**b. Where is the active python module coming from?**
+
+```bash
+python3 -c "import growmate_pi; print('growmate_pi:', growmate_pi.__file__)"
+python3 -c "import py_trees;    print('py_trees:   ', py_trees.__file__)"
+python3 -c "import rclpy;       print('rclpy:      ', rclpy.__file__)" 2>/dev/null
+```
+
+Expected: `growmate_pi` comes from
+`~/Rishabh_Growmate_FarmBot/src/growmate_pi/...` (because of
+`PYTHONPATH=src`), `py_trees` from your venv, `rclpy` from
+`/opt/ros/$ROS_DISTRO/...`.
+
+If `py_trees` reports `/opt/ros/$ROS_DISTRO/lib/python3.X/site-packages/py_trees`,
+the venv didn't get picked up — `pip install --force-reinstall py_trees`
+inside the venv to get a local copy.
+
+**c. (One-liner sanity dump for the bug ticket)**
+
+When something feels off and you want to capture the whole environment
+in a paste-able blob:
+
+```bash
+echo "--- ROS_DISTRO=$ROS_DISTRO ---"
+echo "--- AMENT_PREFIX_PATH ---"
+echo "$AMENT_PREFIX_PATH" | tr ':' '\n'
+echo "--- key packages ---"
+for pkg in farmbot_bringup farmbot_controllers farmbot_command_handler farmbot_interfaces map_handler; do
+  printf "%-30s -> %s\n" "$pkg" "$(ros2 pkg prefix $pkg 2>/dev/null || echo NOT-FOUND)"
+done
+echo "--- python modules ---"
+python3 -c "import sys, growmate_pi, py_trees; print('growmate_pi:', growmate_pi.__file__); print('py_trees:', py_trees.__file__); print('venv:', sys.prefix)"
+```
+
+Paste that into the issue or message before debugging — saves twenty
+minutes of "wait what shell did I source from".
+
 ### 1.4 Load the right map for this garden
 
 ```bash
@@ -217,11 +290,15 @@ PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --no-ros2 --port 
 ```cmd
 cd C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice
 set PYTHONPATH=C:\Users\risha\growmate-bt\voice-farmbot\src
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.137.161:8000/intent
+
 python -m growmate_voice.app --pi-url http://192.168.0.54:8000/intent
 ```
 
 Look for `V2 mode: dispatching to Pi at ...` and `Pi ready: ...` in
 the console.
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.137.161:8000/intent
+
 
 Open `http://localhost:7860` in the browser. Hard-refresh after every
 restart (Ctrl+Shift+R) so the new HTML/JS picks up.
@@ -754,6 +831,8 @@ Until that's written, fall back to
 |---|---|---|
 | Bringup tracebacks in `map_controller` | `active_map.yaml` was wiped by `colcon build` (install-share dir is rebuilt) | Re-copy the YAML (section 1.4), restart bringup |
 | `H_0` moves but `P_4` doesn't | Map controller cached an empty map at startup | Same as above |
+| `H_0` moves but `P_4` doesn't, AND `active_map.yaml` is fine | Standalone upstream `FarmBot_ROS2` workspace is shadowing the Rishabh overlay — `ros2` picks up the upstream `map_handler` which knows nothing about the Maynooth garden | Run the for-loop in section 1.3a and verify every `farmbot_*` and `map_handler` resolves to `~/Rishabh_Growmate_FarmBot/install/...`; re-source upstream first and Rishabh last |
+| A Python module is the wrong copy (e.g. `py_trees` from `/opt/ros/...` instead of the venv) | venv created without `--system-site-packages` OR a `pip install` reported "already satisfied" by finding the ROS-installed copy | Same diagnosis from section 1.3a (`python3 -c "import X; print(X.__file__)"`); `pip install --force-reinstall <pkg>` inside the venv to pin a local copy |
 | `fatal: not a git repository` after pull | Folder predates git on this Pi | `git init` + `remote add` + `fetch` + `checkout -f main` (section 1.2) |
 | `ModuleNotFoundError: rclpy` inside the venv | Venv created without `--system-site-packages` | `python3 -m venv --system-site-packages venv` (recreate) |
 | `colcon build` picks up venv files | Missing `COLCON_IGNORE` marker | `touch venv/COLCON_IGNORE`, rebuild |
