@@ -392,7 +392,8 @@ def _dispatch_via_pi(action: str, source: str,
             )
             reply = pi_post_intent(_STATE.pi_url, [intent],
                                    raw_text=f"(jog {step:.0f}mm) {action}",
-                                   client_id="growmate_voice.app")
+                                   client_id="growmate_voice.app",
+                                   wait_for_completion=False)
             status = "sent" if reply.status == "success" else reply.status
             cmds = reply.commands_published or [f"M {new_x:.0f} {new_y:.0f} {new_z:.0f}"]
             _record(source, action, cmds, status, f"{cmds[0]} [pi:{status}]")
@@ -413,12 +414,20 @@ def _dispatch_via_pi(action: str, source: str,
             [intent],
             raw_text=f"(button) {action}",
             client_id="growmate_voice.app",
+            wait_for_completion=False,
         )
         status = "sent" if reply.status == "success" else reply.status
         cmds = reply.commands_published or [intent.action]
         _record(source, action, cmds, status, f"{' | '.join(cmds)} [pi:{status}]")
         payload = _position_payload(last_cmd=friendly)
         payload["tts_text"] = friendly
+        # A multi-plant water runs in the background ("running"); the live
+        # overlay's browser voice narrates it (announce -> per-plant -> "All
+        # done"), so keep Kokoro quiet to avoid two voices out of step. Quick
+        # commands (and a no-match water, which returns terminal) still speak.
+        payload["suppress_voice"] = (
+            intent.action in ("water", "water_all") and reply.status == "running"
+        )
         return payload
     except Exception as exc:
         log.warning("Pi dispatch failed for '%s': %s — falling back to local", action, exc)
@@ -1579,7 +1588,8 @@ def _dispatch_via_aicore(
 
     try:
         reply = pi_post_intent(_STATE.pi_url, pi_intents,
-                               raw_text=transcript, client_id="growmate_voice.app")
+                               raw_text=transcript, client_id="growmate_voice.app",
+                               wait_for_completion=False)
     except Exception as exc:
         log.warning("AICore dispatch to Pi failed: %s", exc)
         _record(source, intents[0].get("action"), [], "error",
@@ -1599,6 +1609,12 @@ def _dispatch_via_aicore(
             transcript=transcript)
     payload = _position_payload(last_cmd=friendly)
     payload["tts_text"] = friendly
+    # A multi-plant water runs in the background ("running") and the live
+    # overlay's browser voice narrates it; keep Kokoro quiet so the two voices
+    # don't talk over each other / out of order. A no-match water returns
+    # terminal, so its spoken refusal still plays.
+    is_water = any(i.get("action") in ("water", "water_all") for i in intents)
+    payload["suppress_voice"] = (is_water and reply.status == "running")
     return payload
 
 
@@ -1648,7 +1664,8 @@ async def api_text(body: Dict[str, Any]) -> Any:
 
         tts_spoken = ""
         tts_audio_b64: Optional[str] = None
-        if enable_tts == "true" and tts != "none":
+        if (enable_tts == "true" and tts != "none"
+                and not position_payload.get("suppress_voice")):
             phrase = (position_payload.get("tts_text") or "").strip() or get_tts_phrase(action)
             try:
                 tts_backend = _get_tts(tts)
@@ -1760,7 +1777,8 @@ def api_confirm(body: Dict[str, Any]) -> Any:
 
     tts_audio_b64: Optional[str] = None
     phrase = (payload.get("tts_text") or "").strip()
-    if enable_tts == "true" and tts != "none" and phrase:
+    if (enable_tts == "true" and tts != "none" and phrase
+            and not payload.get("suppress_voice")):
         tts_audio_b64 = _synthesise_tts_b64(phrase, tts)
 
     return JSONResponse({
@@ -1842,7 +1860,8 @@ async def api_voice(
 
         tts_spoken = ""
         tts_audio_b64: Optional[str] = None
-        if enable_tts.lower() == "true" and tts != "none":
+        if (enable_tts.lower() == "true" and tts != "none"
+                and not position_payload.get("suppress_voice")):
             # Prefer the LLM-generated response (richer + plant-specific) when
             # we took the AICore path; otherwise use the canned pattern phrase.
             phrase = (position_payload.get("tts_text") or "").strip() or get_tts_phrase(action)

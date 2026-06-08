@@ -95,6 +95,7 @@ def post_intent(
     timeout_s: float = 20.0,
     poll_interval_s: float = 1.0,
     overall_timeout_s: float = 1900.0,
+    wait_for_completion: bool = True,
 ) -> IntentResponse:
     """POST an IntentRequest to the Pi and return the terminal reply.
 
@@ -108,6 +109,11 @@ def post_intent(
     ``timeout_s`` bounds the initial POST (and each poll); ``overall_timeout_s``
     caps the whole operation. Raises ``RuntimeError`` if httpx isn't installed
     or the initial POST fails.
+
+    ``wait_for_completion`` (default True) is for headless callers (the eval
+    harness) that need the terminal outcome. Interactive callers (the voice
+    app) pass False: they get the immediate ``running`` reply and let the live
+    status overlay narrate progress, so the UI/voice isn't blocked for minutes.
     """
     if httpx is None:
         raise RuntimeError("httpx is not installed; pip install httpx")
@@ -127,8 +133,10 @@ def post_intent(
     except Exception as exc:
         raise RuntimeError(f"POST {pi_url} failed: {exc}") from exc
 
-    # Fast path: tree finished within the Pi's grace window.
-    if reply.status != "running" or not reply.task_id:
+    # Return the immediate reply when the caller doesn't want to block
+    # (interactive — overlay narrates), or when the tree already finished
+    # inside the Pi's grace window.
+    if not wait_for_completion or reply.status != "running" or not reply.task_id:
         return reply
 
     # Async path: poll the lightweight status endpoint until terminal.
