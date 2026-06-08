@@ -3991,6 +3991,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   function playKokoro(b64) {
     if (!b64) return;
     try {
+      // Stop any browser filler/announcement so the two engines don't overlap.
+      if (typeof _cancelSpeech === 'function') _cancelSpeech();
       _kokoroAudio.src = 'data:audio/wav;base64,' + b64;
       const p = _kokoroAudio.play();
       if (p && p.catch) p.catch(() => {});
@@ -4512,16 +4514,14 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   function sayThinking() {
     try {
       if (!('speechSynthesis' in window)) return;
-      // Don't pile up phrases if one is already in flight.
-      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) return;
       // Avoid repeating the same phrase twice in a row.
       let idx = Math.floor(Math.random() * _thinkingPhrases.length);
       if (idx === _lastThinkingIdx) idx = (idx + 1) % _thinkingPhrases.length;
       _lastThinkingIdx = idx;
-      const u = new SpeechSynthesisUtterance(_thinkingPhrases[idx]);
-      u.rate = 0.95;     // slightly slower for clarity
-      u.volume = 0.65;   // quieter than the main TTS so it doesn't compete
-      window.speechSynthesis.speak(u);
+      // Route through the shared queue (skip if anything is already speaking /
+      // queued) so the filler never overlaps the real announcement — and a
+      // later flush (Kokoro reply or task announcement) cancels it cleanly.
+      _enqueueSpeech(_thinkingPhrases[idx], { skipIfBusy: true });
     } catch (_) { /* speech not supported — silent fallback */ }
   }
 
@@ -5055,31 +5055,83 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     } catch (_) { return null; }
   }
 
-  function _speak(text) {
-    // Browser-side TTS for status announcements. Picked over Kokoro
-    // because per-plant updates need to be instant; a 300 ms HTTP round
-    // trip per plant feels laggy. Best-effort: silently skip if the
-    // browser doesn't support synth.
+  // ---- Serialized browser-speech queue --------------------------------
+  // All status speech goes through ONE queue so utterances never overlap or
+  // get dropped — the old fire-and-forget speak() caused "overlapping and
+  // missing words" when the filler, Kokoro, and overlay all hit the engine.
+  // Each utterance waits for the previous via onend, with a generous
+  // duration-based safety timeout for iOS (where onend can be unreliable).
+  let _speechQ = [];
+  let _speechBusy = false;
+  let _speechTimer = null;
+
+  function _estimateSpeechMs(text) {
+    // ~14 chars/sec + 400 ms padding, clamped. Used only as a stall-guard;
+    // onend is the primary advance signal, so keep this comfortably long.
+    return Math.min(12000, Math.max(1500, Math.round((text.length / 14) * 1000) + 400));
+  }
+
+  function _drainSpeech() {
+    if (_speechBusy) return;
+    const synth = window.speechSynthesis;
+    if (!synth) { _speechQ = []; return; }
+    const text = _speechQ.shift();
+    if (text == null) return;
+    _speechBusy = true;
+    // Fire exactly once whether onend, onerror, or the stall-timer triggers
+    // — otherwise both could advance and skip/overlap the next utterance.
+    let advanced = false;
+    const advance = () => {
+      if (advanced) return;
+      advanced = true;
+      if (_speechTimer) { clearTimeout(_speechTimer); _speechTimer = null; }
+      _speechBusy = false;
+      _drainSpeech();
+    };
     try {
-      const synth = window.speechSynthesis;
-      if (!synth || !text) return;
-      // iOS Safari: do NOT call synth.cancel() here. Cancel-then-speak
-      // in the same task is the #1 reason "Plant 2 of 8" silently
-      // disappears after "Watering 8 lettuce" plays. Let utterances
-      // queue naturally — the speak intervals (~3 s) are slow enough
-      // that we don't get pile-up, and queued utterances on iOS just
-      // play in order rather than getting trampled.
       const u = new SpeechSynthesisUtterance(text);
       if (!_ttsVoice) _ttsVoice = _pickVoice();
       if (_ttsVoice) u.voice = _ttsVoice;
       u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
       u.lang = 'en-US';                 // iOS needs an explicit lang
-      u.onerror = (e) => console.warn('[tts] error:', e?.error || e);
+      u.onend = advance;
+      u.onerror = advance;
       synth.speak(u);
       _lastSpoken = text;
       _renderDebugStrip();
-    } catch (e) { console.warn('[tts]', e); }
+      // Stall guard: advance if onend never fires (iOS). Generous so it
+      // doesn't cut a real utterance short.
+      _speechTimer = setTimeout(advance, _estimateSpeechMs(text) + 2500);
+    } catch (e) { _speechBusy = false; }
   }
+
+  function _enqueueSpeech(text, opts) {
+    opts = opts || {};
+    const synth = window.speechSynthesis;
+    if (!synth || !text) return;
+    // skipIfBusy: drop low-priority speech (the "thinking" filler) when
+    // something is already speaking or queued, so it never piles up.
+    if (opts.skipIfBusy && (_speechBusy || _speechQ.length)) return;
+    if (opts.flush) {
+      _speechQ = [];
+      try { synth.cancel(); } catch (_) {}
+      if (_speechTimer) { clearTimeout(_speechTimer); _speechTimer = null; }
+      _speechBusy = false;
+    }
+    _speechQ.push(text);
+    _drainSpeech();
+  }
+
+  // Stop browser speech immediately — called before Kokoro audio plays so the
+  // two engines never talk over each other.
+  function _cancelSpeech() {
+    _speechQ = [];
+    if (_speechTimer) { clearTimeout(_speechTimer); _speechTimer = null; }
+    _speechBusy = false;
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (_) {}
+  }
+
+  function _speak(text) { _enqueueSpeech(text); }
 
   // ============ iOS Safari speech keep-alive ============
   // iOS Safari pauses speechSynthesis after ~15 s of "idle" between
@@ -5161,17 +5213,22 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       _openOverlay();
 
       // Pre-announcement: speak the task label the first time we see it.
+      // flush: clear any trailing "thinking" filler so the announcement is
+      // clean and prompt (no overlap).
       if (label && label !== _taskLastLabel) {
         _taskLastLabel = label;
-        _speak(label + '.');
+        _enqueueSpeech(label + '.', { flush: true });
       }
-      // Per-plant status: speak each time the current label changes.
+      // Progress: announce a few milestones, NOT every plant. Speaking all of
+      // them piled up and lagged behind the gantry on big "water all" runs.
+      // Small batches (<=4) still get every plant; larger ones get ~3 evenly
+      // spaced updates. The final plant is covered by "All done".
       if (curLabel && curLabel !== _taskLastCurLabel) {
         _taskLastCurLabel = curLabel;
-        // Strip the trailing "(3/8)" from the snapshot so the spoken
-        // phrase reads naturally as "Plant 3 of 8: Tomato hash 34".
-        const cleanCur = curLabel.replace(/\s*\(\d+\/\d+\)\s*$/, '');
-        _speak(`Plant ${cur} of ${tot}.`);
+        const stepN = Math.max(1, Math.round(tot / 4));
+        if (tot > 0 && cur > 0 && cur < tot && (tot <= 4 || cur % stepN === 0)) {
+          _enqueueSpeech(`Plant ${cur} of ${tot}.`);
+        }
       }
       return;
     }
@@ -5179,7 +5236,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     if (stopped && !_taskUserDismissed) {
       if (_taskLastMode !== 'stopped') {
         _showStoppedPanel();
-        _speak('Robot stopped. Press reset to continue.');
+        _enqueueSpeech('Robot stopped. Press reset to continue.', { flush: true });
         _taskLastMode = 'stopped';
       }
       _openOverlay();
@@ -5187,14 +5244,12 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     }
 
     // No task active, no estop latch, OR user dismissed: close.
-    // If we're transitioning from "running" -> "idle" without an estop
-    // latch having been set, that's a clean natural completion. Speak
-    // a quick "All done" via the browser TTS so the user gets snappy
-    // feedback while the Kokoro-synthesised summary ("Done watering 3
-    // marigolds.") makes its way back through /intent. The Kokoro
-    // line still plays, just a beat later.
+    // running -> idle without an estop latch = clean completion. Speak a
+    // prompt "All done." (flush any trailing progress line so it lands
+    // immediately). For a backgrounded water the app suppresses the Kokoro
+    // reply, so this is the single completion cue.
     if (_taskLastMode === 'running' && !task.estop_requested) {
-      _speak('All done.');
+      _enqueueSpeech('All done.', { flush: true });
     }
     _closeOverlay();
     _taskLastMode = 'idle';
