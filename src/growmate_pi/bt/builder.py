@@ -25,8 +25,11 @@ from growmate_pi.schemas import Intent
 from growmate_pi.bt.action_nodes import (
     CheckEstop,
     EmergencyStop,
+    HOME_TIMEOUT_S,
     LogPlantEvent,
+    MOVE_TIMEOUT_S,
     MoveTo,
+    PUMP_TIMEOUT_S,
     PublishCmd,
     ReadSensor,
     Respond,
@@ -81,14 +84,14 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         return _seq(
             f"Move to ({x:.0f}, {y:.0f}, {z:.0f})",
             CheckAvailable(bridge),
-            MoveTo(bridge, x=x, y=y, z=z),
+            MoveTo(bridge, x=x, y=y, z=z, verify=True, timeout_s=MOVE_TIMEOUT_S),
             Respond(intent.response),
         )
     # Named target move (resolve plant/location from garden config)
     return _seq(
         f"Move to {intent.target}",
         *_safety_and_target(bridge, garden, intent.target),
-        MoveTo(bridge),
+        MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S),
         Respond(intent.response),
     )
 
@@ -187,10 +190,13 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         children.extend([
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, step_label, name=f"Step({i}/{total})"),
-            MoveTo(bridge, x=x, y=y, z=z, name=f"MoveTo({plant_name})"),
-            PublishCmd("D_W_1", bridge, name=f"PumpOn({i})"),
+            MoveTo(bridge, x=x, y=y, z=z, verify=True,
+                   timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})"),
+            PublishCmd("D_W_1", bridge, verify=True,
+                       timeout_s=PUMP_TIMEOUT_S, name=f"PumpOn({i})"),
             Wait(duration, name=f"Pulse({duration}s, {i})"),
-            PublishCmd("D_W_0", bridge, name=f"PumpOff({i})"),
+            PublishCmd("D_W_0", bridge, verify=True,
+                       timeout_s=PUMP_TIMEOUT_S, name=f"PumpOff({i})"),
             LogPlantEvent(_make_log_fn(plant_index, plant_name),
                           name=f"LogWatered({i})"),
         ])
@@ -282,10 +288,13 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         children.extend([
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, step_label, name=f"Step({i}/{total})"),
-            MoveTo(bridge, x=x, y=y, z=z, name=f"MoveTo({plant_name})"),
-            PublishCmd("D_W_1", bridge, name=f"PumpOn({i})"),
+            MoveTo(bridge, x=x, y=y, z=z, verify=True,
+                   timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})"),
+            PublishCmd("D_W_1", bridge, verify=True,
+                       timeout_s=PUMP_TIMEOUT_S, name=f"PumpOn({i})"),
             Wait(duration, name=f"Pulse({duration}s, {i})"),
-            PublishCmd("D_W_0", bridge, name=f"PumpOff({i})"),
+            PublishCmd("D_W_0", bridge, verify=True,
+                       timeout_s=PUMP_TIMEOUT_S, name=f"PumpOff({i})"),
             LogPlantEvent(_make_log_fn(plant_index, plant_name),
                           name=f"LogWatered({i})"),
         ])
@@ -299,7 +308,8 @@ def _tree_go_home(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviou
     return _seq(
         "Go home",
         CheckAvailable(bridge),
-        PublishCmd("H_0", bridge, name="GoHome"),
+        PublishCmd("H_0", bridge, verify=True, timeout_s=HOME_TIMEOUT_S,
+                   name="GoHome"),
         Respond(intent.response),
     )
 

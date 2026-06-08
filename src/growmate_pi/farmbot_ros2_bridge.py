@@ -19,8 +19,15 @@ one instance and pass it to the BT builder.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import List, Optional
+
+
+# Sim-mode fake busy-cycle duration. Short enough to keep verify_sim fast, long
+# enough that the 10 Hz executor sees at least one RUNNING tick before it
+# resolves — so the verify path is genuinely exercised in dev, not skipped.
+_SIM_BUSY_S = 0.2
 
 
 @dataclass
@@ -46,13 +53,39 @@ class FarmBotROS2Bridge:
     _init_lock = threading.Lock()
     _rclpy_inited = False
 
-    def __init__(self, ros2_enabled: bool = True, topic: str = "keyboard_topic"):
+    def __init__(
+        self,
+        ros2_enabled: bool = True,
+        topic: str = "keyboard_topic",
+        verify_enabled: bool = True,
+        busy_topic: str = "busy_state",
+    ):
         self.topic = topic
+        self.busy_topic = busy_topic
+        self.verify_enabled = verify_enabled
         self.ros2_enabled = False
         self._node = None
         self._publisher = None
+        self._busy_sub = None
         self._String = None
+        self._Bool = None
         self.command_log: List[CommandRecord] = []
+
+        # Busy-state tracking for the tick-and-verify gate. ``_busy`` mirrors
+        # the firmware's /busy_state; ``_completion_count`` ticks up on every
+        # True->False edge (one finished command). Verified action nodes poll
+        # ``completion_count()`` to know their command actually ran rather than
+        # was merely published. Guarded by a lock because the spin thread and
+        # the BT executor thread both touch it.
+        self._busy_lock = threading.Lock()
+        self._busy = False
+        self._completion_count = 0
+        self._sim_busy_until: Optional[float] = None  # sim-mode fake cycle
+
+        # Background spin thread (real mode only) so subscription callbacks
+        # fire — the node was previously publish-only and never spun.
+        self._spin_thread: Optional[threading.Thread] = None
+        self._spinning = False
 
         if ros2_enabled:
             self._init_ros2()
@@ -62,7 +95,7 @@ class FarmBotROS2Bridge:
     def _init_ros2(self) -> None:
         try:
             import rclpy
-            from std_msgs.msg import String
+            from std_msgs.msg import Bool, String
         except ImportError:
             print("[growmate_pi] rclpy unavailable — running in simulation mode")
             return
@@ -74,10 +107,92 @@ class FarmBotROS2Bridge:
                 FarmBotROS2Bridge._rclpy_inited = True
 
             self._String = String
+            self._Bool = Bool
             self._node = rclpy.create_node("growmate_pi_bridge")
             self._publisher = self._node.create_publisher(String, self.topic, 10)
+            # Tick-and-verify: listen to the firmware busy flag so verified
+            # action nodes can wait for real completion, not just publish.
+            self._busy_sub = self._node.create_subscription(
+                Bool, self.busy_topic, self._on_busy, 10
+            )
             self.ros2_enabled = True
-            print(f"[growmate_pi] Bridge: connected, publishing to '{self.topic}'")
+            self._start_spin(rclpy)
+            print(
+                f"[growmate_pi] Bridge: connected, publishing to '{self.topic}', "
+                f"verifying via '{self.busy_topic}' "
+                f"(verify={'on' if self.verify_enabled else 'off'})"
+            )
+
+    # ---------- Busy-state plumbing (tick-and-verify gate) --------------------
+
+    def _start_spin(self, rclpy) -> None:
+        """Spin the node in a daemon thread so subscription callbacks fire.
+
+        One thread per bridge instance; ``shutdown()`` stops it. The loop guard
+        also catches a torn-down node mid-spin so shutdown doesn't crash here.
+        """
+        if self._spinning:
+            return
+        self._spinning = True
+
+        def _loop():
+            while self._spinning and rclpy.ok() and self._node is not None:
+                try:
+                    rclpy.spin_once(self._node, timeout_sec=0.1)
+                except Exception:
+                    break
+
+        self._spin_thread = threading.Thread(
+            target=_loop, name="growmate_pi_bridge_spin", daemon=True
+        )
+        self._spin_thread.start()
+
+    def _on_busy(self, msg) -> None:
+        """/busy_state callback. Count each True->False edge as one completion."""
+        new = bool(msg.data)
+        with self._busy_lock:
+            was = self._busy
+            self._busy = new
+            if was and not new:
+                self._completion_count += 1
+
+    def _refresh_sim(self) -> None:
+        """Advance the simulated busy cycle (sim mode only).
+
+        ``publish(track=True)`` arms ``_sim_busy_until``; once the clock passes
+        it we drop busy and bump the completion count, mimicking the firmware's
+        True->False edge so verified nodes resolve in dev too.
+        """
+        if self._sim_busy_until is None:
+            return
+        if time.monotonic() >= self._sim_busy_until:
+            with self._busy_lock:
+                if self._busy:
+                    self._busy = False
+                    self._completion_count += 1
+            self._sim_busy_until = None
+
+    def verify_active(self) -> bool:
+        """True when verified nodes should poll for completion rather than
+        fast-succeed: verify_enabled AND a working channel (real publisher up,
+        or sim mode which fakes the cycle)."""
+        if not self.verify_enabled:
+            return False
+        if self.ros2_enabled:
+            return self._publisher is not None
+        return True  # sim mode simulates a cycle
+
+    def is_busy(self) -> bool:
+        if not self.ros2_enabled:
+            self._refresh_sim()
+        with self._busy_lock:
+            return self._busy
+
+    def completion_count(self) -> int:
+        if not self.ros2_enabled:
+            self._refresh_sim()
+        with self._busy_lock:
+            return self._completion_count
 
     def is_ready(self) -> bool:
         """True when either real ROS2 publisher is up, or sim mode is active.
@@ -89,9 +204,16 @@ class FarmBotROS2Bridge:
             return True  # sim mode is always "available"
         return self._publisher is not None
 
-    def publish(self, command: str) -> CommandRecord:
+    def publish(self, command: str, track: bool = False) -> CommandRecord:
         """Send one FarmBot command string. Always returns a record; errors
         are recorded in the ``status`` field rather than raised.
+
+        Args:
+            command: the FarmBot command string.
+            track: when True and running in sim mode, arm a short fake
+                busy-state cycle so a verified action node observes a
+                completion. Ignored in real mode — there the firmware drives
+                /busy_state and the bridge just listens.
         """
         description = self._describe(command)
 
@@ -106,6 +228,11 @@ class FarmBotROS2Bridge:
         else:
             print(f"  -> [SIM] FarmBot: {command}  ({description})")
             record = CommandRecord(command, "simulated", description)
+            if track:
+                # Fake one busy cycle so a verified node sees a completion.
+                with self._busy_lock:
+                    self._busy = True
+                self._sim_busy_until = time.monotonic() + _SIM_BUSY_S
 
         self.command_log.append(record)
         return record
@@ -157,7 +284,12 @@ class FarmBotROS2Bridge:
         return f"Command: {command}"
 
     def shutdown(self) -> None:
-        """Destroy the ROS2 node. Safe to call multiple times."""
+        """Stop the spin thread and destroy the ROS2 node. Safe to call
+        multiple times."""
+        self._spinning = False
+        if self._spin_thread is not None:
+            self._spin_thread.join(timeout=1.0)
+            self._spin_thread = None
         if self._node is not None:
             try:
                 self._node.destroy_node()
@@ -165,3 +297,4 @@ class FarmBotROS2Bridge:
                 pass
             self._node = None
             self._publisher = None
+            self._busy_sub = None

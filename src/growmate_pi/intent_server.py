@@ -450,14 +450,21 @@ def build_app(
     config_path: Optional[Path] = None,
     cors_origins: Optional[list] = None,
     events_db: Optional[Path] = None,
+    verify_enabled: bool = True,
 ) -> FastAPI:
     """Build the FastAPI app. Constructs the bridge and loads the config.
 
     Wrapping construction in a function (rather than module-level state) lets
     tests build multiple app instances with different config / ros2 flags.
+
+    ``verify_enabled`` turns on the tick-and-verify gate: action nodes that
+    publish a move/pump/home wait for the firmware to confirm completion via
+    /busy_state before reporting SUCCESS. Off -> legacy fire-and-forget.
     """
     global _bridge, _garden, _event_log
-    _bridge = FarmBotROS2Bridge(ros2_enabled=ros2_enabled)
+    _bridge = FarmBotROS2Bridge(
+        ros2_enabled=ros2_enabled, verify_enabled=verify_enabled
+    )
     _garden = GardenConfig(config_path or DEFAULT_CONFIG)
     _event_log = EventLog(events_db or DEFAULT_DB_PATH)
 
@@ -482,10 +489,18 @@ def build_app(
             "schema_version": SCHEMA_VERSION,
             "bridge_mode": "ros2" if _bridge.ros2_enabled else "sim",
             "bridge_ready": _bridge.is_ready(),
+            "verify_enabled": _bridge.verify_active(),
             "topic": _bridge.topic,
             "config": str((config_path or DEFAULT_CONFIG)),
             "task": get_task_state().snapshot(),
         }
+
+    @app.on_event("shutdown")
+    def _on_shutdown():
+        # Stop the bridge's busy_state spin thread and destroy its node so a
+        # restart doesn't leak a spinning thread / duplicate node.
+        if _bridge is not None:
+            _bridge.shutdown()
 
     @app.get("/plants/by_species/{target}")
     def plants_by_species(target: str):
@@ -791,6 +806,15 @@ def main(argv=None) -> None:
         help="Run in simulation mode (no rclpy / no real FarmBot)",
     )
     parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help=(
+            "Disable the tick-and-verify gate: action nodes report SUCCESS on "
+            "publish instead of waiting for firmware /busy_state confirmation. "
+            "Use only if the firmware command handler isn't publishing busy_state."
+        ),
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=None,
@@ -808,6 +832,7 @@ def main(argv=None) -> None:
         ros2_enabled=not args.no_ros2,
         config_path=args.config,
         cors_origins=args.cors,
+        verify_enabled=not args.no_verify,
     )
 
     import uvicorn

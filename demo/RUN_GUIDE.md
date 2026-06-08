@@ -3,7 +3,10 @@
 Single reference for bringing the whole stack up — Pi (bringup +
 keyboard + intent server), Windows (voice app), and the V2 evaluation
 harness. Covers everything built through Day 12 of the elderly-UX
-sprint. Day 13 (demo-day script + recovery) lives in
+sprint, plus the post-Day-12 **tick-and-verify gate** (moves/pumps now
+wait for firmware confirmation — see section 2.1 and the hardware
+checklist [verify_gate_hardware.md](verify_gate_hardware.md)). Day 13
+(demo-day script + recovery) lives in
 [demo_day_run.md](demo_day_run.md) once written.
 
 If you're new to the project, read this front-to-back once. If you
@@ -273,7 +276,7 @@ If missing, find a working copy and bring it in:
 ```bash
 find ~ -name "activeConfig.yaml" 2>/dev/null
 # then for example:
-cp /home/farmbotdev/FarmBot_ROS2/install/farmbot_controllers/share/farmbot_controllers/config/activeConfig.yaml \
+cp /home/gh1/FarmBot_ROS2/install/farmbot_controllers/share/farmbot_controllers/config/activeConfig.yaml \
    "$(ros2 pkg prefix farmbot_controllers)/share/farmbot_controllers/config/activeConfig.yaml"
 ```
 
@@ -340,7 +343,7 @@ source venv/bin/activate
 PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --port 8000
 ```
 
-Expected: `Bridge: connected, publishing to 'keyboard_topic'`.
+Expected: `Bridge: connected, publishing to 'keyboard_topic', verifying via 'busy_state' (verify=on)`.
 
 Confirm from any terminal (the Pi itself, another Pi, or the laptop):
 
@@ -366,6 +369,39 @@ For sim mode (no real motor moves — for the V2 eval or local dev):
 PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --no-ros2 --port 8000
 ```
 
+### 2.1 Tick-and-verify gate (moves/pumps wait for real completion)
+
+The intent server now **verifies every move / pump / home against the
+firmware** before reporting success: the bridge subscribes to `/busy_state`
+and a verified node holds RUNNING until the firmware signals the command
+finished (`true`→`false`). This is what finally makes the event log honest
+(it unblocks Day 10 / 11 — section 5). It is **on by default**.
+
+Confirm it's active:
+
+```bash
+curl -s http://<pi-ip>:8000/status \
+  | python3 -c "import sys,json; print('verify_enabled:', json.load(sys.stdin)['verify_enabled'])"
+```
+
+The gate's one dependency is `/busy_state`. Before trusting it, confirm the
+firmware actually publishes it (watch it cycle as the gantry homes):
+
+```bash
+ros2 topic echo /busy_state    # in another terminal send H_0 → expect 'true' then 'false'
+```
+
+If `/busy_state` never appears, run with the gate OFF (legacy fire-and-forget)
+so verified moves don't time out to `partial`:
+
+```bash
+PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --port 8000 --no-verify
+```
+
+Full gate checklist (single-move test, honest-log water, timeout, e-stop, and
+the position-arrival follow-up) lives in
+**[verify_gate_hardware.md](verify_gate_hardware.md)**.
+
 ---
 
 ## 3. Launch the voice app (Windows)
@@ -373,15 +409,20 @@ PYTHONPATH=src:$PYTHONPATH python -m growmate_pi.intent_server --no-ros2 --port 
 ```cmd
 cd C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice
 set PYTHONPATH=C:\Users\risha\growmate-bt\voice-farmbot\src
-python -m growmate_voice.app --no-ros2 --pi-url http://192.168.137.161:8000/intent
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.39:8000/intent
 
 python -m growmate_voice.app --pi-url http://192.168.0.54:8000/intent
 ```
 
 Look for `V2 mode: dispatching to Pi at ...` and `Pi ready: ...` in
 the console.
-python -m growmate_voice.app --no-ros2 --pi-url http://192.168.137.161:8000/intent
 
+> **Local sim (no Pi / no robot):** run the intent server in WSL with
+> `--no-ros2`, then point the app at the **WSL VM's IP** (`hostname -I`), not
+> `localhost` — Windows↔WSL `localhost` forwarding is often dead. Example:
+> `python -m growmate_voice.app --no-ros2 --pi-url http://<wsl-ip>:8000/intent`
+> (conda env: `moderation`). `/status` should show `"verify_enabled": true`
+> and `"bridge_mode": "sim"`.
 
 Open `http://localhost:7860` in the browser. Hard-refresh after every
 restart (Ctrl+Shift+R) so the new HTML/JS picks up.
@@ -409,7 +450,7 @@ winget install --id Cloudflare.cloudflared
 host/port):**
 
 ```cmd
-cloudflared tunnel --url http://localhost:7860
+cloudflared tunnel --url http://localhost:7860 --protocol http2
 ```
 
 The output includes a line like:
@@ -555,6 +596,13 @@ last:
    presses to take. Fixed: `/reset_estop` now publishes `E` three
    times with 180 ms gaps._
 
+> **Tick-and-verify (new):** in step 3 the move should report done only
+> *after* the gantry physically arrives, and in a water run each pump step
+> should wait for completion before the next plant. If a verified move
+> returns instantly, the gate isn't active — check `/status` `verify_enabled`
+> and `/busy_state` (section 2.1). Explicit tests in
+> [verify_gate_hardware.md](verify_gate_hardware.md).
+
 If any step misbehaves, the pipeline log on screen (bottom of the
 page) shows what route was chosen (`🤖`, `🧠`, `⚡`, `❓`) and what
 phrase the Pi reported back. Note the new Pi's IP and which step
@@ -599,10 +647,13 @@ hardware run exposed:
 - Result: the panel cheerfully reported "all plants watered" when the
   robot had only finished part of the cycle.
 
-The fix needs a **tick-and-verify gate** in the BT — only log
-`watered_all` after the FarmBot reports the sequence complete. That's a
-real piece of work, not a UI tweak, so the panel is hidden behind
-`_MEMORY_FEATURES_ENABLED = False` in `app.py` until it lands.
+The fix — a **tick-and-verify gate** in the BT (only log after the FarmBot
+reports the sequence complete) — is now **built and sim-verified**: the bridge
+gates moves/pumps on `/busy_state` (section 2.1). It is **not yet
+hardware-validated**, so the panel stays behind `_MEMORY_FEATURES_ENABLED =
+False` in `app.py` until `/busy_state` is confirmed on the real FarmBot
+(checklist: [verify_gate_hardware.md](verify_gate_hardware.md)). Once that
+passes on hardware, flip the flag.
 
 Flip the flag back to `True` (Python const + the matching JS
 `MEMORY_FEATURES_ENABLED` in the inline script) to re-enable both Day
@@ -610,7 +661,9 @@ Flip the flag back to `True` (Python const + the matching JS
 
 ### Day 11 — voice plant queries — PARKED
 
-**Status:** same flag, same reason. Falls through to AICore (LLM) now.
+**Status:** same flag, same reason. Falls through to AICore (LLM) now. The
+tick-and-verify gate it was waiting on is built + sim-verified (section 2.1);
+re-arm together with Day 10 once `/busy_state` is confirmed on hardware.
 
 The fast-path was reading `last_watered_ts` from the same event log
 Day 10 used, so the "P_4 logged but not actually finished" bug would
@@ -691,12 +744,15 @@ only partially executed `P_4`; voice queries gave confidently-wrong
 timestamps for the same reason.
 
 Cause: the per-plant event log records `watered_all` on tree
-publish-success, not on real FarmBot sequence completion. Until the
-BT gets a tick-and-verify wrapper (work item in PLANS.md follow-up),
-both features are off behind `_MEMORY_FEATURES_ENABLED = False` in
-`app.py` and `MEMORY_FEATURES_ENABLED = false` in the inline JS.
+publish-success, not on real FarmBot sequence completion. The
+tick-and-verify wrapper is now **built and sim-verified** (the bridge gates
+moves/pumps on `/busy_state`; section 2.1 + [verify_gate_hardware.md](verify_gate_hardware.md)),
+but until it's confirmed on real hardware both features stay off behind
+`_MEMORY_FEATURES_ENABLED = False` in `app.py` and
+`MEMORY_FEATURES_ENABLED = false` in the inline JS.
 
-To re-arm: flip both flags to true, hard-refresh the browser.
+To re-arm: validate `/busy_state` on hardware (verify_gate_hardware.md), then
+flip both flags to true and hard-refresh the browser.
 
 ---
 
@@ -942,3 +998,4 @@ Until that's written, fall back to
 - **Sprint plan:** `PLANS.md` §4 (15-day elderly UX sprint)
 - **Integration guide (for collaborators integrating their own code):**
   `demo/INTEGRATION_GUIDE.md`
+- **Tick-and-verify gate hardware checklist:** `demo/verify_gate_hardware.md`

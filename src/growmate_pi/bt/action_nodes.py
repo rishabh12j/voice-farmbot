@@ -26,36 +26,127 @@ import py_trees
 from growmate_pi.task_state import get_task_state
 
 
-# ---------- Generic command publisher -----------------------------------------
+# ---------- Per-command verify timeouts (tick-and-verify gate) ----------------
+
+# Generous backstops for a firmware that never reports completion, not tight
+# SLAs. On real hardware /busy_state resolves well inside these; they only bite
+# when the firmware handler isn't running (and then --no-verify is the fix).
+MOVE_TIMEOUT_S = 90.0
+PUMP_TIMEOUT_S = 15.0
+HOME_TIMEOUT_S = 120.0
 
 
-class PublishCmd(py_trees.behaviour.Behaviour):
+# ---------- Generic verified command publisher --------------------------------
+
+
+class _VerifiedCommand(py_trees.behaviour.Behaviour):
+    """Base for nodes that publish one command and optionally wait for the
+    firmware to confirm it via the bridge's busy-state tracking.
+
+    Lifecycle:
+      * ``initialise`` builds the command string (subclass hook), publishes it
+        once, and snapshots the bridge completion counter.
+      * ``update`` returns SUCCESS immediately when verification is inactive
+        (verify=False, or the bridge can't verify) — the legacy
+        fire-and-forget path. When active it returns RUNNING until the counter
+        advances (the command's busy cycle finished -> SUCCESS), the
+        per-command timeout elapses (-> FAILURE, "unconfirmed"), or the
+        operator e-stops (-> FAILURE, same one-tick contract as ``Wait``).
+
+    Subclasses implement ``_build_command() -> Optional[str]``; returning None
+    means "couldn't build a valid command" and yields FAILURE without
+    publishing (the subclass should set ``feedback_message`` to say why).
+    """
+
+    def __init__(self, bridge, verify: bool = False,
+                 timeout_s: float = MOVE_TIMEOUT_S, name: str = "Command"):
+        super().__init__(name)
+        self._bridge = bridge
+        self._verify = verify
+        self._timeout_s = float(timeout_s)
+        self._task_state = get_task_state()
+        self._cmd: Optional[str] = None
+        self._publish_ok = False
+        self._count0 = 0
+        self._start: Optional[float] = None
+
+    def _build_command(self) -> Optional[str]:
+        raise NotImplementedError
+
+    def initialise(self):
+        self._start = time.monotonic()
+        self._cmd = self._build_command()
+        if self._cmd is None:
+            self._publish_ok = False
+            return
+        record = self._bridge.publish(self._cmd, track=self._verify)
+        self._publish_ok = record.status in ("sent", "simulated")
+        self.feedback_message = (
+            record.description if self._publish_ok
+            else f"publish failed: {record.error}"
+        )
+        # Snapshot AFTER publish: on real hardware the firmware hasn't raised
+        # busy yet, so this baseline is pre-cycle; we then wait for it to grow.
+        self._count0 = self._bridge.completion_count()
+
+    def update(self):
+        if self._cmd is None or not self._publish_ok:
+            return py_trees.common.Status.FAILURE
+
+        # Legacy fast path: verification off for this node or unavailable.
+        if not self._verify or not self._bridge.verify_active():
+            return py_trees.common.Status.SUCCESS
+
+        # Verified path — poll the bridge for a completed busy cycle.
+        if self._task_state.estop_requested():
+            self.feedback_message = "estop requested mid-command"
+            return py_trees.common.Status.FAILURE
+        if self._bridge.completion_count() > self._count0:
+            self.feedback_message = f"{self._cmd} confirmed"
+            return py_trees.common.Status.SUCCESS
+        if self._start is not None and (
+            time.monotonic() - self._start >= self._timeout_s
+        ):
+            self.feedback_message = (
+                f"unconfirmed: no busy-state completion for {self._cmd}"
+            )
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+
+    def terminate(self, new_status):
+        self._start = None
+
+
+class PublishCmd(_VerifiedCommand):
     """Publish one FarmBot command string. SUCCESS unless the bridge errored.
 
     Used for fixed string commands like ``D_W_1``, ``D_L_0``, ``H_0``, ``P_4``,
     ``I_1`` etc. Commands that need parameters (M x y z) have their own nodes.
+
+    With ``verify=True`` the node holds RUNNING until the firmware reports the
+    command finished (busy-state True->False) — used for pump on/off and home.
     """
 
-    def __init__(self, command: str, bridge, name: Optional[str] = None):
-        super().__init__(name or f"Publish({command})")
+    def __init__(self, command: str, bridge, verify: bool = False,
+                 timeout_s: float = PUMP_TIMEOUT_S, name: Optional[str] = None):
+        super().__init__(bridge, verify=verify, timeout_s=timeout_s,
+                         name=name or f"Publish({command})")
         self._command = command
-        self._bridge = bridge
 
-    def update(self):
-        record = self._bridge.publish(self._command)
-        if record.status in ("sent", "simulated"):
-            self.feedback_message = record.description
-            return py_trees.common.Status.SUCCESS
-        self.feedback_message = f"publish failed: {record.error}"
-        return py_trees.common.Status.FAILURE
+    def _build_command(self) -> Optional[str]:
+        return self._command
 
 
 # ---------- Movement ----------------------------------------------------------
 
 
-class MoveTo(py_trees.behaviour.Behaviour):
+class MoveTo(_VerifiedCommand):
     """Publish ``M x y z`` from blackboard ``plant_data`` (default) or
-    explicit coords passed at construction time."""
+    explicit coords passed at construction time.
+
+    With ``verify=True`` the node holds RUNNING until the gantry move is
+    confirmed via busy-state, so a downstream pump/log only runs once the
+    robot has actually arrived."""
 
     def __init__(
         self,
@@ -63,10 +154,11 @@ class MoveTo(py_trees.behaviour.Behaviour):
         x: Optional[float] = None,
         y: Optional[float] = None,
         z: Optional[float] = None,
+        verify: bool = False,
+        timeout_s: float = MOVE_TIMEOUT_S,
         name: str = "MoveTo",
     ):
-        super().__init__(name)
-        self._bridge = bridge
+        super().__init__(bridge, verify=verify, timeout_s=timeout_s, name=name)
         self._static = (x, y, z) if x is not None else None
         if self._static is None:
             self.blackboard = self.attach_blackboard_client(name=name)
@@ -74,7 +166,7 @@ class MoveTo(py_trees.behaviour.Behaviour):
                 "plant_data", access=py_trees.common.Access.READ
             )
 
-    def update(self):
+    def _build_command(self) -> Optional[str]:
         if self._static:
             x, y, z = self._static
         else:
@@ -83,13 +175,8 @@ class MoveTo(py_trees.behaviour.Behaviour):
                 x, y, z = data["x"], data["y"], data["z"]
             except (KeyError, TypeError):
                 self.feedback_message = "no coords on blackboard"
-                return py_trees.common.Status.FAILURE
-        cmd = f"M {x} {y} {z}"
-        record = self._bridge.publish(cmd)
-        if record.status in ("sent", "simulated"):
-            self.feedback_message = record.description
-            return py_trees.common.Status.SUCCESS
-        return py_trees.common.Status.FAILURE
+                return None
+        return f"M {x} {y} {z}"
 
 
 # ---------- Timing ------------------------------------------------------------
