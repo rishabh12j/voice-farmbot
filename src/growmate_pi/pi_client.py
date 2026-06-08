@@ -15,6 +15,7 @@ on Windows.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -82,17 +83,31 @@ def app_action_to_intent(action: str) -> Optional[Intent]:
 # ---------- HTTP client -------------------------------------------------------
 
 
+_TERMINAL_STATUSES = {"success", "failure", "partial"}
+
+
 def post_intent(
     pi_url: str,
     intents: List[Intent],
     raw_text: str = "",
     emergency: bool = False,
     client_id: str = "growmate_voice.app",
-    timeout_s: float = 30.0,
+    timeout_s: float = 20.0,
+    poll_interval_s: float = 1.0,
+    overall_timeout_s: float = 1900.0,
 ) -> IntentResponse:
-    """POST an IntentRequest to the Pi and return the parsed reply.
+    """POST an IntentRequest to the Pi and return the terminal reply.
 
-    Raises ``RuntimeError`` if httpx isn't installed or the request fails.
+    The Pi runs verified trees (move/pump/home wait on firmware completion) on
+    a background task, so a long command (multi-plant water) comes back as
+    ``status == "running"`` with a ``task_id``. This call then polls
+    ``GET /intent_status/{task_id}`` every ``poll_interval_s`` until a terminal
+    status — so no single HTTP request is held open for minutes. Quick commands
+    finish inside the Pi's grace window and return inline (no polling).
+
+    ``timeout_s`` bounds the initial POST (and each poll); ``overall_timeout_s``
+    caps the whole operation. Raises ``RuntimeError`` if httpx isn't installed
+    or the initial POST fails.
     """
     if httpx is None:
         raise RuntimeError("httpx is not installed; pip install httpx")
@@ -108,9 +123,49 @@ def post_intent(
         with httpx.Client(timeout=timeout_s) as client:
             r = client.post(pi_url, json=req.model_dump(mode="json"))
             r.raise_for_status()
-            return IntentResponse.model_validate(r.json())
+            reply = IntentResponse.model_validate(r.json())
     except Exception as exc:
         raise RuntimeError(f"POST {pi_url} failed: {exc}") from exc
+
+    # Fast path: tree finished within the Pi's grace window.
+    if reply.status != "running" or not reply.task_id:
+        return reply
+
+    # Async path: poll the lightweight status endpoint until terminal.
+    base = pi_url.rsplit("/intent", 1)[0]
+    status_url = f"{base}/intent_status/{reply.task_id}"
+    announce = reply.tts_text  # forward-tense ("Watering the tomatoes")
+    deadline = time.monotonic() + overall_timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval_s)
+        try:
+            with httpx.Client(timeout=timeout_s) as client:
+                r = client.get(status_url)
+                r.raise_for_status()
+                body = r.json()
+        except Exception as exc:
+            # Transient hiccup — keep polling rather than failing the whole op.
+            log.debug("intent_status poll failed: %s", exc)
+            continue
+        st = body.get("status")
+        if st in _TERMINAL_STATUSES:
+            return IntentResponse.model_validate(body)
+        if st == "running":
+            continue
+        # Unknown / expired task_id — stop polling.
+        return IntentResponse(
+            status="failure",
+            task_id=reply.task_id,
+            tts_text=announce,
+            error=str(body.get("error", "task lost")),
+        )
+
+    return IntentResponse(
+        status="partial",
+        task_id=reply.task_id,
+        tts_text=announce,
+        error="client poll timeout",
+    )
 
 
 def post_estop(pi_base_url: str, timeout_s: float = 5.0) -> Dict:

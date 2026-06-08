@@ -22,7 +22,9 @@ Run with:
 from __future__ import annotations
 
 import argparse
+import threading
 import time
+import uuid as _uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -243,6 +245,106 @@ def list_species_in_garden() -> List[str]:
 _bridge: Optional[FarmBotROS2Bridge] = None
 _garden: Optional[GardenConfig] = None
 _event_log: Optional[EventLog] = None
+
+
+# ---------- Async intent execution -------------------------------------------
+# The tick-and-verify gate makes a tree run for as long as the firmware takes
+# (a multi-plant water is minutes). Holding the HTTP request open that long
+# trips client timeouts, so /intent ticks the tree on a background thread and
+# returns a task_id; the client polls /intent_status/{task_id} for the terminal
+# result. A short grace wait lets quick trees still return inline (one trip).
+# Only one tree runs at a time — a new non-emergency intent is refused while a
+# tree is in flight (preserves the old one-at-a-time execution semantics).
+
+_INTENT_GRACE_S = 8.0          # return inline if the tree finishes this fast
+_INTENT_RESULT_TTL_S = 900.0   # keep finished results this long for late polls
+
+_intent_lock = threading.Lock()
+_intent_results: Dict[str, Dict[str, Any]] = {}   # task_id -> {"resp": dict, "ts": float}
+_intent_running: Optional[str] = None             # task_id of the in-flight tree
+
+
+def _prune_intent_results_locked() -> None:
+    """Drop finished results older than the TTL. Call with _intent_lock held."""
+    now = time.time()
+    stale = [k for k, v in _intent_results.items()
+             if now - v.get("ts", 0) > _INTENT_RESULT_TTL_S]
+    for k in stale:
+        _intent_results.pop(k, None)
+
+
+def _execute_intent_tree(req: IntentRequest, task_id: str) -> IntentResponse:
+    """Build, tick to completion, and return the terminal IntentResponse.
+
+    Runs on the background worker thread (or inline within the grace window).
+    Mirrors the old synchronous /intent body so behaviour is unchanged apart
+    from where it runs.
+    """
+    bridge = _require_bridge()
+    garden = _require_garden()
+    task_state = get_task_state()
+
+    commands_before = list(bridge.command_log)
+    t0 = time.monotonic()
+    root = build_tree(bridge, garden, req.intents, emergency=req.emergency)
+    try:
+        tree_result = execute_tree(root)
+    finally:
+        # Guarantee task_state.end() runs even when the tree fails mid-sequence
+        # so the UI flips running -> stopped within one /status poll. Idempotent.
+        if task_state.is_active():
+            task_state.end()
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    new_commands = [
+        r.command for r in bridge.command_log[len(commands_before):]
+    ]
+    tts = read_tts_text() or " ".join(i.response for i in req.intents)
+    status_str = tree_result.status
+
+    # Day 7: append a per-plant event row for every care-action intent that
+    # didn't fail outright. Best-effort.
+    if not req.emergency:
+        for intent_obj in req.intents:
+            _log_intent_outcome(intent_obj, status_str)
+
+    return IntentResponse(
+        status=status_str,
+        task_id=task_id,
+        tree=tree_result,
+        commands_published=new_commands,
+        tts_text=tts.strip(),
+        duration_ms=duration_ms,
+        error=None if status_str == "success" else _summarise_error(tree_result),
+    )
+
+
+def _intent_worker(req: IntentRequest, task_id: str, done: threading.Event) -> None:
+    """Background runner: tick the tree, stash the terminal result, clear the
+    in-flight flag. Never raises — a failure is stored as a failure response."""
+    global _intent_running
+    try:
+        resp = _execute_intent_tree(req, task_id)
+    except Exception as exc:  # never let the worker die silently
+        ts = get_task_state()
+        if ts.is_active():
+            ts.end()
+        resp = IntentResponse(
+            status="failure",
+            task_id=task_id,
+            tree=TreeResult(label="intent error", status="failure", node_results=[]),
+            tts_text="Something went wrong running that.",
+            error=str(exc),
+        )
+    finally:
+        with _intent_lock:
+            _prune_intent_results_locked()
+            _intent_results[task_id] = {
+                "resp": resp.model_dump(mode="json"),
+                "ts": time.time(),
+            }
+            _intent_running = None
+        done.set()
 
 
 def _require_bridge() -> FarmBotROS2Bridge:
@@ -634,70 +736,108 @@ def build_app(
                 ),
             )
 
+        global _intent_running
         bridge = _require_bridge()
-        garden = _require_garden()
         task_state = get_task_state()
 
-        # Tier B follow-up: refuse non-emergency intents while the
-        # operator's estop latch is set. Without this, a fresh "water
-        # the tomatoes" would build a tree whose first CheckEstop fails
-        # immediately, leaving the user with a half-rendered overlay
-        # that flips back to stopped within a tick. Better to refuse up
-        # front with a clear "press reset first" message — emergency
-        # intents (req.emergency=True) still go through because they're
-        # the safety path.
-        if not req.emergency and task_state.estop_requested():
+        # Emergency is the safety path: publish 'e' immediately (like /estop)
+        # and flip the estop latch so any in-flight background tree aborts on
+        # its next tick. No tree-building, no queueing — and the latch then
+        # requires /reset_estop before the next command, same as the button.
+        if req.emergency:
+            task_state.request_estop()
+            record = bridge.emergency_stop()
+            return IntentResponse(
+                status="success",
+                task_id="emergency",
+                tree=TreeResult(label="Emergency stop", status="success",
+                                node_results=[]),
+                commands_published=[record.command],
+                tts_text="Emergency stop, robot halted.",
+            )
+
+        # Refuse non-emergency intents while the operator's estop latch is set —
+        # a clear "press reset first" beats a half-rendered overlay that flips
+        # straight back to stopped on the first CheckEstop.
+        if task_state.estop_requested():
             msg = ("The robot is stopped. Please press reset to clear "
                    "the safety stop before sending another command.")
             return IntentResponse(
                 status="failure",
                 tree=TreeResult(label="Estop latched", status="failure",
                                 node_results=[]),
-                commands_published=[],
                 tts_text=msg,
-                duration_ms=0,
                 error="estop_latched",
             )
 
-        commands_before = list(bridge.command_log)
-        t0 = time.monotonic()
-        root = build_tree(bridge, garden, req.intents, emergency=req.emergency)
-        try:
-            tree_result = execute_tree(root)
-        finally:
-            # Tier B follow-up: guarantee task_state.end() runs even when
-            # the tree fails mid-sequence. py_trees Sequence stops on the
-            # first failing child, so the TaskBoundary("end") leaf at the
-            # tail of a multi-plant water never ticks after a stop. End
-            # here in a finally so the UI flips from running -> stopped
-            # within one /api/pi_status poll regardless of how the tree
-            # finished. Idempotent — end() on an already-ended task is a
-            # no-op.
-            if task_state.is_active():
-                task_state.end()
-        duration_ms = int((time.monotonic() - t0) * 1000)
+        # One tree at a time. A verified tree runs in the background (below);
+        # refuse a new command while one is in flight rather than ticking two
+        # trees over the same bridge/blackboard. Reserve the task_id slot under
+        # the lock so two concurrent requests can't both start.
+        with _intent_lock:
+            busy = _intent_running is not None
+            if not busy:
+                task_id = _uuid.uuid4().hex[:12]
+                _intent_running = task_id
+        if busy:
+            return IntentResponse(
+                status="failure",
+                tree=TreeResult(label="Busy", status="failure", node_results=[]),
+                tts_text=("I'm still working on the last command. "
+                          "Give me a moment, or press stop."),
+                error="busy",
+            )
 
-        new_commands = [
-            r.command for r in bridge.command_log[len(commands_before):]
-        ]
-        tts = read_tts_text() or " ".join(i.response for i in req.intents)
-
-        status_str = tree_result.status
-
-        # Day 7: append a per-plant event row for every care-action intent
-        # that didn't fail outright. The log is best-effort.
-        if not req.emergency:
-            for intent_obj in req.intents:
-                _log_intent_outcome(intent_obj, status_str)
-
-        return IntentResponse(
-            status=status_str,
-            tree=tree_result,
-            commands_published=new_commands,
-            tts_text=tts.strip(),
-            duration_ms=duration_ms,
-            error=None if status_str == "success" else _summarise_error(tree_result),
+        # Launch the tree on a background worker and wait briefly. A quick tree
+        # (move, home, lights) finishes inside the grace window and returns its
+        # terminal result inline — one round-trip, old behaviour. A long one
+        # (multi-plant water) returns "running" + task_id for the client to
+        # poll via /intent_status, so the HTTP request is never held for minutes.
+        done = threading.Event()
+        worker = threading.Thread(
+            target=_intent_worker, args=(req, task_id, done),
+            name=f"intent-{task_id}", daemon=True,
         )
+        worker.start()
+
+        if done.wait(_INTENT_GRACE_S):
+            with _intent_lock:
+                stored = _intent_results.get(task_id)
+            if stored is not None:
+                return IntentResponse.model_validate(stored["resp"])
+
+        # Still running — hand back the task_id and the forward-tense reply so
+        # the client can announce ("Watering the tomatoes") while it polls.
+        forward_tts = " ".join(i.response for i in req.intents).strip()
+        return IntentResponse(
+            status="running",
+            task_id=task_id,
+            tts_text=forward_tts,
+        )
+
+    @app.get("/intent_status/{task_id}")
+    def intent_status(task_id: str) -> Dict[str, Any]:
+        """Poll target for async /intent execution. Returns the terminal
+        IntentResponse dict once the tree finishes, ``{"status": "running"}``
+        (with the task_state snapshot) while it's still ticking, or an
+        ``unknown`` failure once the result has expired / never existed."""
+        with _intent_lock:
+            stored = _intent_results.get(task_id)
+            running = (_intent_running == task_id)
+        if stored is not None:
+            return stored["resp"]
+        if running:
+            return {
+                "status": "running",
+                "task_id": task_id,
+                "task": get_task_state().snapshot(),
+            }
+        return {
+            "status": "failure",
+            "task_id": task_id,
+            "error": "unknown or expired task_id",
+            "tts_text": "",
+        }
 
     @app.post("/estop")
     def estop():

@@ -45,6 +45,9 @@ Adding an action here without a matching tree builder on the Pi is a bug."""
 
 NodeStatus = Literal["success", "failure", "running", "skipped"]
 TreeStatus = Literal["success", "failure", "partial"]
+# IntentResponse status: a verified tree can take minutes, so /intent may reply
+# "running" with a task_id the client polls on. Terminal values match TreeStatus.
+ResponseStatus = Literal["success", "failure", "partial", "running"]
 
 
 class Intent(BaseModel):
@@ -136,9 +139,20 @@ class TreeResult(BaseModel):
 
 
 class IntentResponse(BaseModel):
-    """Pi's reply to the client after the tree has finished (or failed)."""
+    """Pi's reply to the client after the tree has finished (or failed).
 
-    status: TreeStatus
+    When ``status == "running"`` the tree is still executing on the Pi (a
+    verified water can take minutes); the client polls
+    ``GET /intent_status/{task_id}`` until a terminal status. ``task_id`` is
+    set on every reply so the client can correlate / poll.
+    """
+
+    status: ResponseStatus
+    task_id: Optional[str] = Field(
+        default=None,
+        description="Server-side id for this execution. Present on async "
+        "('running') replies so the client can poll /intent_status/{task_id}.",
+    )
     tree: Optional[TreeResult] = None
     commands_published: List[str] = Field(
         default_factory=list,
@@ -165,6 +179,7 @@ __all__ = [
     "Action",
     "NodeStatus",
     "TreeStatus",
+    "ResponseStatus",
     "Intent",
     "IntentRequest",
     "NodeResult",
