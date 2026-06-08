@@ -1,7 +1,9 @@
-# GrowMate / VoiceBT — Leipzig research talk (Draft 1)
+# GrowMate — Leipzig presentation
+# Advances in Robotics & AI Workshop in Sustainable Agriculture
+# 12 May 2026
 
-**Audience:** Leipzig University — robotics / HRI faculty + peers
-**Format:** 8 slides, ~25 min talk + ~10 min Q&A
+**Audience:** Robotics & AI researchers, sustainable agriculture practitioners
+**Format:** 8 slides, ~20–25 min
 **Speaker:** Rishabh Jain (Maynooth University, MSc Robotics & Embedded AI)
 **Supervisor:** Dr Majid Sorouri
 
@@ -10,230 +12,275 @@
 ## Slide 1 — Title
 
 ```
-VoiceBT
-Inspectable Voice Control for Agricultural Robots
-through LLM-Constrained Behaviour Trees
+[PHOTO: elderly person tending a garden, or FarmBot in a
+ productive bed.  Warm, human, agricultural.]
 
-Rishabh Jain  ·  Maynooth University
-Supervisor: Dr Majid Sorouri
-[venue, date]
+    GrowMate
+    Transparent Voice-Robot Interaction through
+    LLM-Constructed Behaviour Trees
+    for Accessible Agricultural Robotics
 
-  github.com/rishabh12j/voice-farmbot
+    Rishabh Jain  ·  Maynooth University
+    Supervisor: Dr Majid Sorouri
+
+    Advances in Robotics & AI Workshop
+    in Sustainable Agriculture  ·  12 May 2026
 ```
 
-**Speaker notes (~30 s):** Frame the talk: a framework for **using on-device LLMs in safety-critical robot control without giving the LLM the steering wheel**. The instantiation is a FarmBot for elderly users; the contribution is the framework. Acknowledge MU + supervisor up front.
+**Speaker notes (~30 s):** Introduce yourself and the project in one sentence — GrowMate is a voice interface for agricultural robots designed for elderly users, where the LLM classifies intent and deterministic code constructs the safety-validated behaviour tree. Acknowledge supervisor and Maynooth.
 
 ---
 
-## Slide 2 — Why this problem, why now
+## Slide 2 — Why Elderly Users Can't Garden
 
 ```
-Two pressures, one gap:
+[DIAGRAM: three bulleted barriers, then three callout cards
+ below, then a closing line]
 
-· Edge LLMs are now small enough to live on a Pi
-  or a phone (Gemma 3n, Phi-3.5, Qwen 2.5 ≤ 4 B params)
+  Aging population barrier
+    Reduced strength, reach, and balance —
+    lifting pots and watering cans becomes impossible.
 
-· Agricultural robots increasingly target untrained
-  users — gardening as accessible activity for the
-  elderly and the disabled
+  Safety concerns
+    Fall risk when bending, reaching, or
+    working close to the ground.
 
-  → tempting to glue an LLM to a robot end-to-end
+  Cognitive load
+    Memory challenges make watering schedules
+    and task sequences difficult to keep up with.
 
-  → but: LLMs hallucinate, robots break things or people
+[THREE CALLOUT CARDS — equal width, distinct colour]
 
-We need the natural-language UX without the trust gap.
+  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+  │ Demographic    │  │ Intuitive      │  │ Research Gap   │
+  │ Need           │  │ Interaction    │  │                │
+  │                │  │                │  │ Current voice  │
+  │ 21% of the     │  │ 85% of elderly │  │ robots are     │
+  │ European       │  │ users prefer   │  │ rigid and      │
+  │ population is  │  │ voice over     │  │ platform-      │
+  │ 65+, facing    │  │ buttons.       │  │ specific.      │
+  │ mobility, not  │  │                │  │                │
+  │ cognitive,     │  │                │  │ No generalis-  │
+  │ decline.       │  │                │  │ able framework │
+  │                │  │                │  │ exists.        │
+  └────────────────┘  └────────────────┘  └────────────────┘
+
+  A perfect problem for an LLM-powered voice interface:
+  speak naturally, the robot does the physical work.
 ```
 
-**Speaker notes (~2 min):** Concrete framing: there's a real adoption story here that has nothing to do with research papers — voice control of personal-scale robots is one of the few HRI scenarios that's about to be both technically feasible and commercially salient at once. The unsolved part is what guarantees you give the user. State the audience: 9 June 2026 demo with Dundalk focus group, n=10 elderly. Honest moment: I don't know yet whether elders will *trust* the inspectable-tree feedback any more than they'd trust a black box; we'll measure that.
+**Speaker notes (~2.5 min):** Three barriers, three reasons this is the right moment. The barriers are physical (strength, reach), safety (falling), and cognitive (forgetting what needs doing). The three cards underneath turn this into a sized opportunity — 21 percent of Europe is over 65, 85 percent of elderly users prefer voice when asked, and the existing voice-robot literature does not yet offer a generalisable framework. The closing line is the bridge to the proposal: speech for the user, physical work for the robot, an inspectable plan in between.
 
 ---
 
-## Slide 3 — Related work, brief
+## Slide 3 — What we propose
 
 ```
-Voice → action pipelines
-  · Alexa-style end-to-end intent: opaque, no recourse
-  · Tool-calling LLMs (ReAct / function-calling):
-    structure leaks into the LLM, hard to verify
+[DIAGRAM: simple left-to-right flow]
 
-Behaviour trees in robotics
-  · Colledanchise & Ögren 2017 — modular, inspectable,
-    well-suited to discrete action sets
-  · Gugliermo et al. 2024 — evaluation framework
-    (DBSR / SNSR / USC) used here
+   Person speaks          GrowMate              FarmBot
+   naturally         ─────────────────►    does the work
+                          on a Pi
 
-Edge LLMs
-  · LiteRT-LM, MediaPipe Tasks, llama.cpp; Gemma 3n
-    benchmarks on phone-class hardware
+  "Water the tomatoes"   →  moves to plant, opens pump,
+                             waters for 6 s, closes pump
 
-Gap: a framework that uses an LLM where it shines
-(intent recognition over noisy speech) without
-letting it generate the *structure* that drives
-safety-critical actuators.
+  "The herbs look dry"   →  checks moisture, decides,
+                             asks user to confirm, then waters
+
+  "Stop"                 →  emergency stop, < 1 ms,
+                             bypasses all AI
+
+  Voice preferred by participants over buttons or apps.
+  "Would it be like speaking to Alexa?"
 ```
 
-**Speaker notes (~3 min):** Don't dwell on each citation — the audience knows BTs and LLMs. Spend time on the *gap*. Make explicit why neither extreme works: end-to-end LLM means no audit trail; tool-calling means the LLM still chooses the action graph and you're back to verifying its output. Mention Gugliermo et al. specifically because the eval metrics come from there.
+**Speaker notes (~2 min):** The core proposal: the user speaks naturally, GrowMate interprets the intent, and FarmBot acts. Three examples show the range — a direct command, an indirect observation that triggers a sensor read and a confirmation step, and a safety trigger that bypasses everything. The voice preference came out in our Dundalk focus group unprompted; several participants drew the Alexa comparison themselves. What GrowMate adds beyond Alexa is that it controls a physical robot, which means safety has to be built in — you cannot just pass the speech to an LLM and hope it does the right thing.
 
 ---
 
-## Slide 4 — VoiceBT, the framework
+## Slide 4 — The behaviour tree: from speech to action
 
 ```
-   audio
-     ↓
-   STT  (faster-whisper / Moonshine / Vosk)
-     ↓
-   ┌──────────────────── LLM ─────────────────────┐
-   │  Flat intent classifier — JSON only           │
-   │  {action ∈ FIXED_SET, target, response}       │
-   │  No nested structure.  No tree generation.    │
-   └──────────────────────────────────────────────┘
-     ↓
-   ┌────────── deterministic Python ──────────────┐
-   │  intent → tree (safety prefix → action       │
-   │  → respond), looked up by action name        │
-   └──────────────────────────────────────────────┘
-     ↓
-   BT executor — robot_action / fn_call / reason
-     ↓
-   ROS2 publisher → keyboard_topic
-     ↓
-   TTS  (Piper / Kokoro)
+[DIAGRAM: two-part visual]
 
-Claim 1: LLM never produces tree structure → no
-         hallucinated branches.
-Claim 2: Every robot action is preceded by safety
-         conditions in code → bounded blast radius.
-Claim 3: User sees the tree before it executes →
-         transparency for the human-in-the-loop.
+[LEFT HALF — how a tree is built]
+
+  User says: "Water the tomatoes"
+         ↓
+  LLM classifies intent:
+  { action: "water_plant", target: "tomatoes" }
+         ↓
+  Code builds the tree:
+
+  SEQUENCE
+  ├── check_available          ← is the system ready?
+  ├── get_plant("tomatoes")    ← fetch coordinates from API
+  ├── check_plant_found        ← does this plant exist?
+  ├── check_bounds(x, y, z)   ← is the location safe?
+  ├── move_to(x, y, z)        ← move gantry
+  ├── pump_on()               ← open water pump
+  ├── wait(6 s)
+  ├── pump_off()              ← close pump
+  └── respond("Watering the tomatoes!")
+
+[RIGHT HALF — three rules, large type]
+
+  Rule 1   LLM classifies.
+           Code builds.
+           No hallucinated branches.
+
+  Rule 2   Safety nodes go first — always.
+           In code, not in the LLM's output.
+           If any check fails, the sequence stops.
+
+  Rule 3   User sees this tree before
+           the robot moves.
 ```
 
-**Speaker notes (~4 min):** The single most important slide. Walk the diagram top to bottom. The "no nested structure" line is the contribution — early-version code had the LLM emit JSON trees and on-device 2-4B models produced valid JSON ~0% of the time. Switching to *flat* intent + deterministic templating is what made this reliable. Stress that "safety prefix" is non-negotiable: every move-to is preceded by `check_available`, `check_bounds`, `check_plant_found` — not because the LLM might forget to ask, but because the LLM doesn't get to put them there in the first place.
+**Speaker notes (~3 min):** Walk the left side top to bottom with the "water the tomatoes" example — it is concrete and the audience can follow every step. The key thing to stress is where the LLM stops: it returns a flat label ("water_plant") and a target ("tomatoes"). Everything below that line — the safety checks, the coordinate lookup, the pump sequence — is written by code, not by the LLM. The safety nodes (check_available, check_plant_found, check_bounds) are inserted by the tree builder unconditionally. The LLM cannot leave them out because it does not write them. Right side: three rules that follow from that design. Rule 2 is what keeps USC at zero — even when the LLM misclassifies, it produces a wrong action label, and the safety checks fail gracefully rather than sending a wrong command to the robot.
 
 ---
 
-## Slide 5 — Implementation: GrowMate on FarmBot Genesis XL
+## Slide 5 — System architecture
 
 ```
-Hardware:    FarmBot Genesis XL  (5691 × 2734 × 380 mm)
-             Raspberry Pi 5 (4 GB) — co-located on the bot
+[DIAGRAM: reproduce the three-layer architecture from the
+ interim report — User Interaction Layer (left), AI Processing
+ Core (centre), Robot Control Layer (right). Use the same
+ colour bands: orange / teal / yellow.]
 
-Models:      Gemma 3:4b           — Ollama, on Pi
-             faster-whisper tiny.en — CTranslate2 int8
-             Piper en_US-lessac-medium — ONNX
-             Kokoro 82M (optional, dev box)
+  ┌──────────────────┐ ┌─────────────────────────────────┐ ┌─────────┐
+  │ USER INTERACTION │ │ AI PROCESSING CORE              │ │ ROBOT   │
+  │     LAYER        │ │                                 │ │ CONTROL │
+  │                  │ │  ┌──────┐  ┌──────┐  ┌──────┐  │ │ LAYER   │
+  │  ┌────────────┐  │ │  │Speech│→ │Intent│→ │ BT   │  │ │         │
+  │  │   Voice    │──┼─┼─►│Engine│  │Class-│  │Engine│──┼─┼──►      │
+  │  │ Interface  │  │ │  │      │  │ifier │  │      │  │ │  ROBOT  │
+  │  └────────────┘  │ │  └──────┘  └──────┘  └──┬───┘  │ │         │
+  │                  │ │                          │      │ │         │
+  │     [phone]      │ │  ┌──────────────┐    ┌───▼───┐  │ │         │
+  │                  │ │  │   General    │◄───│Safety │──┼─┼──────  │
+  │  ┌────────────┐  │ │  │  Assistant   │    │Valid- │  │ │         │
+  │  │  Feedback  │◄─┼─┤  │ (LLM Reason) │    │ ator  │  │ │         │
+  │  │  Display   │  │ │  └──────┬───────┘    └───────┘  │ │         │
+  │  └────────────┘  │ │         │                       │ │         │
+  │                  │ │  ┌──────▼─────────────────┐     │ │         │
+  │       ◄──────────┼─┼──│ Feedback Engine        │     │ │         │
+  │                  │ │  │ Text to Audio          │     │ │         │
+  │                  │ │  └────────────────────────┘     │ │         │
+  └──────────────────┘ └─────────────────────────────────┘ └─────────┘
 
-Stack:       AURA FarmBot ROS 2 (upstream, read-only)
-             + growmate_voice ROS 2 package (this work)
-             + FastAPI web UI (browser mic, no native app)
-
-Topic discipline: keyboard_topic only — drop-in
-             replacement for AURA's keyboard_controller,
-             so the rest of the stack doesn't change.
+  Sits on top of AURA FarmBot ROS 2 — keyboard_topic only.
+  Nothing in the upstream stack changes.
 ```
 
-**Speaker notes (~2.5 min):** Note the architectural decision: this is *not* a fork of FarmBot. It's a sibling node that publishes the same command strings the existing keyboard controller emits. That makes regression risk minimal and lets the upstream maintainer ignore us. Mention the FastAPI UI replaces an earlier Gradio version; we ran into BrotliMiddleware/pathsend bugs in Gradio 6 that broke browser audio uploads. Brief moment of uncertainty: I'm still unsure whether the Pi will hit thermal limits during the 30-min demo with all three robots running concurrently — measuring this week.
+**Speaker notes (~3 min):** Three layers. The User Interaction Layer is just a browser microphone and an audio output — no app to install, works on a phone over the local network. The AI Processing Core is everything we built: the speech engine transcribes, the intent classifier (a small on-device LLM) extracts what the user wants, the behaviour tree engine assembles a plan from a typed node library, and the safety validator gates every action against preconditions before it reaches the robot. The general assistant is an LLM reasoning node available inside the tree for knowledge questions — "when should I plant basil" — without giving the LLM any control of the actuator. The Robot Control Layer is the existing AURA FarmBot ROS 2 stack, unmodified. GrowMate publishes to `keyboard_topic`, the same topic the existing keyboard controller uses. That decision means upstream updates do not break us, and we do not break upstream.
 
 ---
 
-## Slide 6 — Evaluation: 29-utterance corpus + Gugliermo metrics
+## Slide 6 — Evaluation
 
 ```
-Evaluation corpus
-  29 hand-authored utterances covering:
-    · single robot actions ("water the lettuce")
-    · multi-intent       ("water the tomatoes
-                           and then go home")
-    · indirect speech    ("the herbs look thirsty")
-    · knowledge queries  ("when should I plant basil")
-    · safety triggers    ("stop", "halt")
+[DIAGRAM: three large-number callouts, centred]
 
-Metrics (Gugliermo et al. 2024)
-  DBSR   Desired Behaviour Success Rate   96.6 %  (28/29)
-  SNSR   Single Node Success Rate         98.8 %  (162/164)
-  USC    Unsafe State Count                  0
-  Latency mean                          5,456 ms
-         (STT 1.1 s · LLM 3.8 s · BT < 50 ms · TTS 0.5 s)
+         0              96.6 %           98.8 %
+    Unsafe states        DBSR              SNSR
+      (USC)             28 / 29         162 / 164
 
-Forthcoming (9 Jun 2026, Dundalk)
-  System Usability Scale, n=10 elderly users,
-  3 groups × 30 min, semi-structured per-utterance log
+  29 test utterances across 7 categories
+  direct · indirect · sensor queries · knowledge ·
+  multi-step · safety-critical · emergency stops
+
+[DIAGRAM: latency bar, proportional]
+
+  Total mean: 5,456 ms
+  STT  ████░░░░░░░░░░░░░  1.1 s
+  LLM  ░░░░█████████████  3.8 s  ← dominates
+  BT   ░░░░░░░░░░░░░░░░█  <50 ms
+  TTS  ░░░░░░░░░░░░░░░░█  0.5 s
+
+  The one miss: LLM misclassified an indirect utterance.
+  Safety checks held.   USC stayed at 0.
 ```
 
-**Speaker notes (~3 min):** Don't restate numbers — let them sit on the slide. Talk to the *interesting* failure modes: the one DBSR miss was an indirect-speech utterance the LLM mapped to a wrong (but bounded) action — and *because the safety prefix held*, USC stayed at zero. That's the framework working as designed: the LLM made a recoverable mistake, not an unsafe one. The single SNSR miss was a transient FarmBot REST timeout, unrelated to the framework. The Dundalk study isn't the headline number — it's the qualitative material that goes into the paper's discussion section.
+**Speaker notes (~2.5 min):** Lead with USC=0 — that is the safety claim, and for an audience in sustainable agriculture with real plants and real equipment, it is the number that matters. The one failure in DBSR was a classification error on an indirect utterance ("the herbs look dry" mapped to the wrong sensor check), but because the safety layer sits in deterministic code rather than in the LLM output, no unsafe command reached the robot. The latency is honest — 5.4 seconds is borderline. The LLM alone takes 3.8 seconds on the Pi. That is the main engineering challenge going forward.
 
 ---
 
-## Slide 7 — Limitations + the phone-local track
+## Slide 7 — Next steps
 
 ```
-Honest gaps as of today:
+[DIAGRAM: simple timeline or three-column roadmap]
 
-· No session memory — "no, the herbs" after watering
-  the tomatoes is treated as a new utterance
-· No WiFi heartbeat / deadman — if the Pi loses
-  network mid-action, only the next safety check
-  catches it
-· LLM latency dominates — 3.8 s on a Pi 5; user
-  studies need TTFA < 2 s to feel responsive
-· n=10 user study limits statistical claims to
-  qualitative + descriptive
+  NOW                   JUNE 2026             AUG 2026
+  ────────────          ────────────          ────────────
+  System running        Demo day              Thesis
+  in simulation         Dundalk focus         submission
+  on Windows            group  n=10           19 Aug
 
-Phone-local track (in progress)
-  · LiteRT-LM + Gemma 3n E2B int4 on Pixel 8
-  · Same flat-intent prompt, same tree builder
-    (ported to Kotlin, mechanical)
-  · Pi side becomes a 30-line MQTT/HTTP shim
-  · Goal: TTFT measurements by mid-July, not a
-    deployed product
+  Evaluation            SUS usability         Physical
+  complete              study, elderly        deployment
+  (29 utterances)       participants          on Pi
+
+                        Ethics approval       Phone-local
+                        in progress           track:
+                                              small LLM
+                                              on phone
+                                              (< 2 s latency)
 ```
 
-**Speaker notes (~3 min):** Limitations stay unresolved on this slide — don't pair each one with a fix. The phone-local track is the strongest answer to "what's next" but it's *future work*, not a deliverable. State the deadline split: 9 June demo runs on the Pi; phone-local prototype is a thesis chapter, not a demo artefact. Genuine moment of uncertainty: I don't yet know whether the LiteRT-LM stack will hold up the prefill assumptions Google publishes once we throw a 1500-token system prompt at it.
+**Speaker notes (~2 min):** Two parallel tracks. The near-term track is the Dundalk demo on 9 June — ten older adults, three sessions, System Usability Scale plus a per-utterance log of what worked and what didn't. That is the qualitative evidence that the interface actually serves the people it is designed for. The longer-term track is the phone-local path: moving inference off the Pi and onto a phone using a smaller mobile-optimised LLM, which should bring latency below 2 seconds and remove the need for the Pi co-location entirely. That becomes a thesis chapter, not a June deliverable.
 
 ---
 
-## Slide 8 — What we'd like from this room
+## Slide 8 — Thank you
 
 ```
-Questions worth your time:
+[PHOTO: FarmBot Genesis XL in a productive garden bed —
+ something that feels like the end-goal: a garden cared for.]
 
-· Have you seen voice-control deployments where
-  the LLM was kept this far from the actuator?
-  What pitfalls did you hit?
+        GrowMate is open source.
 
-· The 29-utterance corpus is small. What evaluation
-  shape would you find more convincing?
+        github.com/rishabh12j/voice-farmbot
 
-· For the Dundalk study, is SUS the right instrument
-  for elderly HRI, or should we add NASA-TLX /
-  trust-in-automation scales?
+        Rishabh Jain
+        rishabh.jain.2025@mumail.ie
+        Maynooth University
+        Supervisor: Dr Majid Sorouri
 
-· If the framework ports cleanly to a phone, what's
-  the next domain you'd take it to?
-
-Thank you.
-
-  Rishabh Jain · rishabh.jain.2025@mumail.ie
-  github.com/rishabh12j/voice-farmbot
+  Questions welcome.
 ```
 
-**Speaker notes:** End on questions back to the room rather than a summary slide — turns the Q&A into a conversation rather than an interrogation. The repo URL is real; if anyone wants to skim the code afterwards they should be able to find the BT builders in `src/growmate_voice/growmate_voice/ai_core.py`.
+**Speaker notes:** End with the photo rather than a bullet list — the garden is what this is for. Leave repo URL on screen through Q&A. If anyone asks to see the BT builders, `ai_core.py` under `growmate_voice/` is the right file.
 
 ---
 
 ## Notes for the speaker
 
-- **Total time budget:** 30 s + 2 m + 3 m + 4 m + 2.5 m + 3 m + 3 m + 1.5 m ≈ 19.5 min. Leaves 10 min for Q&A in a 30-min slot, 5 min for slack in a 25-min slot.
-- **Slide 4 is the one to rehearse.** Everything else is window dressing on the diagram.
-- **Bring a backup PDF on a USB stick.** Conference projectors often refuse Markdown-rendered HTML.
-- **If you're given a 15-min slot:** drop slide 3 (related work) and compress slide 7 to two bullets.
-- **If you're given a 45-min slot:** add a live demo between slides 5 and 6 (not before, the audience needs the framework picture first); budget 6-8 minutes for it.
-- **Banned phrases the talk avoids:** "we propose a different approach", "the key finding is", "in conclusion", "seamlessly", "plays a crucial role".
+- **Story spine:** elderly people lose gardening → voice + robot can give it back → here is the system → here is the evidence → here is what comes next.
+- **Slide 4 (behaviour tree) is the one to rehearse.** Walk the "water the tomatoes" tree left-side top to bottom before talking about the rules on the right.
+- **Slide 5 (architecture) is the technical anchor.** Use the actual three-layer diagram from the interim report — it has been reviewed and the boxes are the right level of detail.
+- **Slide 5 leads with USC=0.** Agricultural audience cares about safety first.
+- **Time budget:** 30 s + 2.5 m + 2 m + 3 m + 3 m + 2.5 m + 2 m + 1 m ≈ 16.5 min. Comfortable in a 20-min slot, leaves real Q&A room.
+- **If given 15 min:** keep all slides, trim speaker notes; do not cut slide 2 (it is the why).
+- **Banned phrases:** "we propose a different approach", "the key finding is", "in conclusion", "seamlessly", "plays a crucial role".
 
 ## Production checklist
 
-- [ ] Replace `[venue, date]` on slide 1
-- [ ] Verify the architecture diagram renders cleanly when exported (ASCII-art tends to fall apart in PowerPoint — replace with a real diagram before the talk)
-- [ ] If presenting before the Dundalk study, soften slide 6's "Forthcoming" block to "Planned"
-- [ ] Pre-register the `[venue, date]` slide title with the host so it appears on their schedule correctly
-- [ ] Decide once: "VoiceBT framework" vs "GrowMate" — the framework is the contribution, GrowMate is one instantiation; keep that hierarchy consistent across all 8 slides
+**Photos**
+- [ ] Slide 1: elderly person gardening, or FarmBot in a productive bed
+- [ ] Slide 7: FarmBot in a productive garden — closing image
+
+**Diagrams** (replace ASCII with real graphics — Figma, draw.io, or Keynote shapes)
+- [ ] Slide 2: three barrier bullets + three callout cards (Demographic Need / Intuitive Interaction / Research Gap)
+- [ ] Slide 3: left-to-right speech → GrowMate → FarmBot flow with three example utterances
+- [ ] Slide 4: two-panel — left: annotated sequence tree for "water the tomatoes"; right: three rules in large type
+- [ ] Slide 5: reproduce the three-layer architecture from the interim report (User Interaction / AI Processing Core / Robot Control) — same boxes, same colour bands
+- [ ] Slide 6: three large-number callouts + proportional latency bar
+- [ ] Slide 7: three-column timeline (Now / June / August)
+
+**Content**
+- [ ] Confirm 21 % / 85 % statistics on slide 2 are sourced and citable
+- [ ] Confirm repo URL is public before the workshop
+- [ ] Backup PDF on USB stick

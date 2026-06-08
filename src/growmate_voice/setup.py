@@ -29,6 +29,8 @@ setup(
             'voice_app = growmate_voice.app:main',
             # Standalone voice-pipeline workbench on http://localhost:7870
             'voice_workbench = growmate_voice.stt_test:main',
+            # Daily/recurring command scheduler — replaces autonomous_controller
+            'voice_scheduler = growmate_voice.scheduler:main',
         ],
     },
 )
