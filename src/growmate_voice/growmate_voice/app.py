@@ -5262,6 +5262,17 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       const r = await fetch('/api/pi_status');
       if (!r.ok) return;
       const j = await r.json();
+      // Live gantry position — real-time on hardware (R82), target-snap in sim.
+      // Drive the map marker every poll, independent of any task, so it tracks
+      // named moves and jog too (the CSS glide on the marker smooths it).
+      const p = j?.position;
+      if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+        state.pos = {
+          x: p.x, y: p.y,
+          z: (typeof p.z === 'number') ? p.z : (state.pos.z || 0),
+        };
+        updateGantry();
+      }
       const task = j?.task;
       if (!task) return;
       const rev = task.revision != null
@@ -5345,7 +5356,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   }
 
   refreshPiStatus();
-  setInterval(refreshPiStatus, 1000);
+  setInterval(refreshPiStatus, 500);   // 2 Hz so the live gantry marker tracks smoothly
 
   // ----- Refresh "time ago" labels periodically -----
   setInterval(() => {

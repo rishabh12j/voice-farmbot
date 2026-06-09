@@ -59,17 +59,28 @@ class FarmBotROS2Bridge:
         topic: str = "keyboard_topic",
         verify_enabled: bool = True,
         busy_topic: str = "busy_state",
+        uart_topic: str = "uart_receive",
     ):
         self.topic = topic
         self.busy_topic = busy_topic
+        self.uart_topic = uart_topic
         self.verify_enabled = verify_enabled
         self.ros2_enabled = False
         self._node = None
         self._publisher = None
         self._busy_sub = None
+        self._uart_sub = None
         self._String = None
         self._Bool = None
         self.command_log: List[CommandRecord] = []
+
+        # Live gantry position for the UI map. Real mode parses the firmware's
+        # R82 position reports off /uart_receive (true position as it moves);
+        # sim mode derives it from the M commands we publish (target snap).
+        # None until the first report. Guarded by ``_busy_lock``.
+        self._pos_x: Optional[float] = None
+        self._pos_y: Optional[float] = None
+        self._pos_z: Optional[float] = None
 
         # Busy-state tracking for the tick-and-verify gate. ``_busy`` mirrors
         # the firmware's /busy_state; ``_completion_count`` ticks up on every
@@ -114,6 +125,10 @@ class FarmBotROS2Bridge:
             # action nodes can wait for real completion, not just publish.
             self._busy_sub = self._node.create_subscription(
                 Bool, self.busy_topic, self._on_busy, 10
+            )
+            # Live position: parse R82 reports off the UART feed for the map.
+            self._uart_sub = self._node.create_subscription(
+                String, self.uart_topic, self._on_uart, 10
             )
             self.ros2_enabled = True
             self._start_spin(rclpy)
@@ -194,6 +209,70 @@ class FarmBotROS2Bridge:
         with self._busy_lock:
             return self._completion_count
 
+    # ---------- Live position (UI map) ---------------------------------------
+
+    def _on_uart(self, msg) -> None:
+        """Parse R82 position reports off /uart_receive.
+
+        Format: ``R82 X1234.5 Y678.9 Z-12.3`` (mirrors the upstream
+        farmbot_controller parser). Any field may be absent; we keep the last
+        value for axes not present in a given report.
+        """
+        try:
+            data = getattr(msg, "data", None) or str(msg)
+            parts = data.split()
+            if not parts or parts[0] != "R82":
+                return
+            x = y = z = None
+            for tok in parts[1:]:
+                if len(tok) < 2:
+                    continue
+                axis = tok[0].upper()
+                try:
+                    val = float(tok[1:])
+                except ValueError:
+                    continue
+                if axis == "X":
+                    x = val
+                elif axis == "Y":
+                    y = val
+                elif axis == "Z":
+                    z = val
+            with self._busy_lock:
+                if x is not None:
+                    self._pos_x = x
+                if y is not None:
+                    self._pos_y = y
+                if z is not None:
+                    self._pos_z = z
+        except Exception:
+            pass
+
+    def _sim_update_position(self, command: str) -> None:
+        """Sim mode: derive position from the command we just published so the
+        UI map still follows in dev. ``M x y z`` snaps to the target; ``H_0``
+        returns to the origin."""
+        parts = command.split()
+        if not parts:
+            return
+        if parts[0] == "M" and len(parts) >= 4:
+            try:
+                x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+            except ValueError:
+                return
+            with self._busy_lock:
+                self._pos_x, self._pos_y, self._pos_z = x, y, z
+        elif parts[0] == "H_0":
+            with self._busy_lock:
+                self._pos_x = self._pos_y = self._pos_z = 0.0
+
+    def position(self) -> Optional[dict]:
+        """Last known gantry position, or None if never reported."""
+        with self._busy_lock:
+            if self._pos_x is None and self._pos_y is None and self._pos_z is None:
+                return None
+            return {"x": self._pos_x, "y": self._pos_y, "z": self._pos_z}
+
     def is_ready(self) -> bool:
         """True when either real ROS2 publisher is up, or sim mode is active.
 
@@ -228,6 +307,9 @@ class FarmBotROS2Bridge:
         else:
             print(f"  -> [SIM] FarmBot: {command}  ({description})")
             record = CommandRecord(command, "simulated", description)
+            # No firmware in sim, so reflect the move target as the position
+            # for the UI map.
+            self._sim_update_position(command)
             if track:
                 # Fake one busy cycle so a verified node sees a completion.
                 with self._busy_lock:
@@ -298,3 +380,4 @@ class FarmBotROS2Bridge:
             self._node = None
             self._publisher = None
             self._busy_sub = None
+            self._uart_sub = None

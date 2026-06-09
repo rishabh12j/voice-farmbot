@@ -595,6 +595,7 @@ def build_app(
             "topic": _bridge.topic,
             "config": str((config_path or DEFAULT_CONFIG)),
             "task": get_task_state().snapshot(),
+            "position": _bridge.position(),
         }
 
     @app.on_event("shutdown")
