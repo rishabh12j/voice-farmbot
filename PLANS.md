@@ -65,8 +65,10 @@ check_moisture, emergency_stop.
 
 ## 4. The plan — phases
 
-Each phase: deliverable, files, and exit criteria. Tags: 🔌 bridge plumbing,
-🌳 BT, 📜 schema, 🖥 app, 🤖 firmware/stack, 👁 vision.
+Working order (agreed): **water → camera → weeding → seeding.** Soil sensing
+folds into *water* (smart watering needs it); tool management folds into the
+front of *weeding* (first non-default tool, reused by seeding).
+Tags: 🔌 bridge plumbing, 🌳 BT, 📜 schema, 🖥 app, 🤖 firmware/stack, 👁 vision.
 
 ### Phase 0 — Close out the foundation on hardware (~2–3 days)
 The gate/map were sim-verified; make them honest on gh1.
@@ -75,48 +77,36 @@ The gate/map were sim-verified; make them honest on gh1.
 - **Flip `_MEMORY_FEATURES_ENABLED` ON** once a watered row only appears after firmware completion (today's-care + plant-query fast-path re-armed). 🖥
 - **Exit:** event log is provably honest; memory features back on.
 
-### Phase 1 — Real soil sensing (~1 week)
-Turn the placeholder soil sensor into a real reading. Reuses the exact
-bridge-subscription pattern from the gate.
-- 🔌 Bridge parses pin-read replies (`D_S_C` → firmware `R41 P<pin> V<val>`) off `/uart_receive`; exposes `last_reading(pin)`.
-- 🌳 `ReadSensor` captures the value onto the blackboard (replace the `"pending-subscription"` stub).
-- 📜 `SoilReading` field on the response; 🖥 `check_sensor` speaks a real number and the LLM reasons on it ("the soil is dry").
-- **Files:** farmbot_ros2_bridge.py, bt/action_nodes.py (`ReadSensor`), intent_server.py, schemas.py.
-- **Exit:** "check the soil on the tomatoes" → reports an actual moisture value.
+### Phase 1 — Water, made smart (~1.5 weeks)  ← NEXT
+Two sub-steps; the sensor plumbing here is the foundation everything later
+reuses (it's the same bridge-subscription pattern as the gate).
+- **1a — Real soil sensing.** 🔌 bridge parses pin-read replies (`D_S_C` → firmware `R41 P<pin> V<val>`) off `/uart_receive`, exposes `last_reading(pin)`; 🌳 `ReadSensor` captures the value (replace the `"pending-subscription"` stub); 📜 `SoilReading` field; 🖥 "check the soil on the tomatoes" speaks a real number.
+- **1b — Moisture-aware watering.** 🌳 `water_smart`: per matched plant, read soil → water only if below threshold → report skips; 🖥 "water the dry ones."
+- **Files:** farmbot_ros2_bridge.py, bt/action_nodes.py, bt/builder.py, intent_server.py, schemas.py.
+- **Exit:** real soil value spoken; "water the thirsty lettuce" reads each plant and waters selectively ("watered 3 of 8, the rest were moist").
 
-### Phase 2 — Moisture-aware watering (~3–4 days)
-- 🌳 New action `water_smart` (or `water_if_dry`): per matched plant, read soil → water only if below threshold → report what it skipped.
-- 🖥 "water the dry ones" / "water the thirsty plants".
-- **Exit:** "water the thirsty lettuce" → reads each, waters selectively, "watered 3 of 8, the rest were already moist."
+### Phase 2 — Camera / vision (~1.5 weeks)
+The vision foundation; weeding depends on it.
+- 👁 Wire the camera path ([camera_handler/](src/camera_handler/camera_handler/): `luxonis_camera`, `panorama`, `plant_detection`).
+- Capabilities: photo/panorama (have), **weed detection** (`I_4` → coordinates), **plant detection** (auto-find plants), **soil-height** measure.
+- 🖥 "find the plants" / "scan for weeds" → returns structured detections (coords) the BT can act on; optionally update the live map.
+- **Exit:** a scan returns plant/weed coordinates that a later phase can consume.
 
-### Phase 3 — Tool management + safety (~1 week)
-The prerequisite for every non-watering tool.
-- 🌳 New `CheckToolMounted` condition node; `MountTool`/`UnmountTool` actions (`T_n_1`/`T_n_2`, `D_C`).
-- Tool slots + positions in config (`T_n_0` from farmbot.yaml).
-- Extend the safety prefix: tool actions gate on the right tool being mounted.
-- **Exit:** the system can swap seeder ↔ sensor ↔ weeder, verify the mount, and refuse a tool action when the wrong/no tool is present.
+### Phase 3 — Weeding (~1.5 weeks)  [builds tool management first]
+First non-default tool → build tool management here and reuse it for seeding.
+- 🌳 **Tool management:** `CheckToolMounted` condition + `MountTool`/`UnmountTool` (`T_n_1`/`T_n_2`, `D_C`); tool slots/positions in config (`T_n_0`); safety prefix extended so tool actions gate on the right tool.
+- 🌳 `clear_weeds`: scan (Phase 2) → mount weeder → per weed: move → lower → remove → raise → unmount.
+- **Exit:** "clear the weeds in bed 2" → detects + physically removes, tool verified.
 
 ### Phase 4 — Seeding (~1 week)
-First brand-new verb. Stack already supports `P_3`.
-- 📜🌳 `seed <species>` action: mount seeder → (per Planning-stage slot) move → vacuum pick from tray (`D_V`) → inject → release; start by wrapping `P_3`, then per-plant.
-- Plant lifecycle: Planning → Sprouted stage transitions via map_handler.
+Reuses tool management; adds plant lifecycle.
+- 📜🌳 `seed <species>`: mount seeder → per Planning slot: move → vacuum pick from tray (`D_V`) → inject → release; wrap `P_3` first, then per-plant.
+- Plant lifecycle: Planning → Sprouted via map_handler.
 - **Exit:** "plant the lettuce bed" seeds the Planning plants.
 
-### Phase 5 — Weeding (~1 week)
-Biggest integration: vision + tool + motion. Hardware-capable; stack only
-*detects* today.
-- 👁 Weed detection via `I_4` / [camera_handler/plant_detection.py](src/camera_handler/camera_handler/plant_detection.py) → weed coordinates.
-- 🌳 `clear_weeds` action: scan → per weed: mount weeder → move → lower → remove → raise.
-- **Exit:** "clear the weeds in bed 2" → detects + physically removes.
-
-### Phase 6 — Vision-driven map building (stretch, ~1 week)
-- 👁 Use the camera + `plant_detection.py` to auto-detect plants / measure soil height → populate the map.
-- 🖥 "scan the bed and find the plants" → updates the live map.
-- **Exit:** the map can be (re)built from the camera, not just hand-authored YAML.
-
-### Phase 7 — Autonomy, evaluation, docs (ongoing)
+### Phase 5 — Autonomy, evaluation, docs (ongoing)
 - Regimens via [scheduler.py](src/growmate_voice/growmate_voice/scheduler.py): daily smart-water, weekly weed-scan.
-- Extend the V2 eval corpus to the new verbs (seed/weed/sense); track DBSR / SNSR / **USC=0** ([demo/eval_v2_results.md](demo/eval_v2_results.md)).
+- Extend the V2 eval corpus to the new verbs (sense/weed/seed); track DBSR / SNSR / **USC=0** ([demo/eval_v2_results.md](demo/eval_v2_results.md)).
 - Keep [documentation/](documentation/) + [demo/RUN_GUIDE.md](demo/RUN_GUIDE.md) current per phase.
 
 ---
@@ -129,13 +119,13 @@ Biggest integration: vision + tool + motion. Hardware-capable; stack only
 | Water (rigid) | ✅ | ✅ | ✅ | done |
 | Lights / photo / panorama | ✅ | ✅ | ✅ | done |
 | Weed **detect** | ✅ | ✅ | ✅ | done |
-| Soil moisture **read** | ✅ | ✅ | ⚠️ no value | **Phase 1** |
-| Moisture-aware watering | ✅ | ✅ (`P_5`) | ❌ | **Phase 2** |
+| Soil moisture **read** | ✅ | ✅ | ⚠️ no value | **Phase 1a** |
+| Moisture-aware watering | ✅ | ✅ (`P_5`) | ❌ | **Phase 1b** |
+| Plant detection / soil height | ✅ | ⚠️ partial | ❌ | **Phase 2** |
 | Tool mount / swap | ✅ | ✅ (`T_n`) | ❌ | **Phase 3** |
+| Weed **removal** | ✅ | ❌ | ❌ | **Phase 3** |
 | Seeding | ✅ | ✅ (`P_3`) | ❌ | **Phase 4** |
-| Weed **removal** | ✅ | ❌ | ❌ | **Phase 5** |
-| Plant detection / soil height | ✅ | ⚠️ partial | ❌ | **Phase 6** |
-| Scheduled regimens | ✅ | ⚠️ basic | ⚠️ basic | **Phase 7** |
+| Scheduled regimens | ✅ | ⚠️ basic | ⚠️ basic | **Phase 5** |
 
 ---
 
