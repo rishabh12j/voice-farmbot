@@ -21,9 +21,33 @@ from typing import Optional
 import py_trees
 
 from growmate_pi.garden_config import GardenConfig
+from growmate_pi.tool_state import get_tool_state
 
 
 # ---------- Conditions ---------------------------------------------------------
+
+
+class CheckToolMounted(py_trees.behaviour.Behaviour):
+    """SUCCESS iff ``tool_name`` is the tool ToolState believes is mounted.
+
+    Software gate before a tool-specific action — pairs with ``MountTool`` /
+    ``EnsureTool``. (The hardware can only confirm *a* tool is seated, not
+    which, so the source of truth is what we last mounted.)
+    """
+
+    def __init__(self, tool_name: str, name: Optional[str] = None):
+        super().__init__(name or f"CheckTool({tool_name})")
+        self._tool_name = tool_name
+        self._tool_state = get_tool_state()
+
+    def update(self):
+        if self._tool_state.is_mounted(self._tool_name):
+            self.feedback_message = f"{self._tool_name} mounted"
+            return py_trees.common.Status.SUCCESS
+        self.feedback_message = (
+            f"need {self._tool_name}, have {self._tool_state.current()}"
+        )
+        return py_trees.common.Status.FAILURE
 
 
 class CheckAvailable(py_trees.behaviour.Behaviour):

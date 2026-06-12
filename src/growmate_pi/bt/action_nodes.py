@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, Optional
 import py_trees
 
 from growmate_pi.task_state import get_task_state
+from growmate_pi.tool_state import get_tool_state
 
 
 # ---------- Per-command verify timeouts (tick-and-verify gate) ----------------
@@ -468,3 +469,90 @@ class ReadSensor(py_trees.behaviour.Behaviour):
             self.feedback_message = "sensor read timeout"
             return py_trees.common.Status.SUCCESS  # report cleanly; don't fail the tree
         return py_trees.common.Status.RUNNING
+
+
+# ---------- Tool-head change (UTM mount / unmount) ----------------------------
+
+# UTM tool-seated detection is on pin 63 (B–C bridge): 0 = a tool is mounted,
+# 1 = nothing mounted. The AURA mount/unmount runs a multi-move sequence, so
+# allow it plenty of time.
+TOOL_PIN = 63
+TOOL_CHANGE_TIMEOUT_S = 120.0
+
+
+class _ToolChange(py_trees.behaviour.Behaviour):
+    """Mount or unmount a tool head and confirm it via the UTM pin.
+
+    Publishes ``T<index>_1`` (mount) or ``T<index>_2`` (unmount) — the AURA
+    stack runs the move choreography and its own pin-63 check — plus a ``D_C``
+    that queues behind it to read pin 63 afterwards. Holds RUNNING until a
+    fresh pin-63 reading shows the expected state (0 mounted / 1 free), then
+    updates ``ToolState``. Sim fakes the pin so this resolves in dev.
+    """
+
+    def __init__(self, bridge, index: int, tool_name: str, mount: bool,
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+        super().__init__(name or f"{'Mount' if mount else 'Unmount'}({tool_name})")
+        self._bridge = bridge
+        self._index = int(index)
+        self._tool_name = tool_name
+        self._mount = bool(mount)
+        self._timeout_s = float(timeout_s)
+        self._task_state = get_task_state()
+        self._tool_state = get_tool_state()
+        self._expected = 0.0 if mount else 1.0  # pin 63
+        self._baseline: Optional[float] = None
+        self._published = False
+
+    def initialise(self):
+        self._baseline = time.monotonic()
+        rec = self._bridge.publish(f"T{self._index}_{'1' if self._mount else '2'}")
+        # D_C reads pin 63 after the mount sequence (FIFO behind it).
+        rec2 = self._bridge.publish("D_C")
+        self._published = (rec.status in ("sent", "simulated")
+                           and rec2.status in ("sent", "simulated"))
+
+    def update(self):
+        if not self._published:
+            self.feedback_message = "tool command publish failed"
+            return py_trees.common.Status.FAILURE
+        if self._task_state.estop_requested():
+            self.feedback_message = "estop requested mid tool-change"
+            return py_trees.common.Status.FAILURE
+
+        reading = self._bridge.last_reading(TOOL_PIN, newer_than=self._baseline)
+        if reading is not None:
+            if abs(reading[0] - self._expected) < 0.5:
+                if self._mount:
+                    self._tool_state.set(self._tool_name)
+                else:
+                    self._tool_state.clear()
+                self.feedback_message = (
+                    f"{'mounted' if self._mount else 'unmounted'} {self._tool_name}"
+                )
+                return py_trees.common.Status.SUCCESS
+            self.feedback_message = (
+                f"tool {'mount' if self._mount else 'unmount'} not confirmed "
+                f"(pin63={reading[0]:.0f})"
+            )
+            return py_trees.common.Status.FAILURE
+        if self._baseline is not None and (
+            time.monotonic() - self._baseline >= self._timeout_s
+        ):
+            self.feedback_message = "tool change timeout"
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+
+
+class MountTool(_ToolChange):
+    def __init__(self, bridge, index: int, tool_name: str,
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+        super().__init__(bridge, index, tool_name, mount=True,
+                         timeout_s=timeout_s, name=name)
+
+
+class UnmountTool(_ToolChange):
+    def __init__(self, bridge, index: int, tool_name: str,
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+        super().__init__(bridge, index, tool_name, mount=False,
+                         timeout_s=timeout_s, name=name)

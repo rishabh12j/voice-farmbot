@@ -102,6 +102,7 @@ class FarmBotROS2Bridge:
         self._busy = False
         self._completion_count = 0
         self._sim_busy_until: Optional[float] = None  # sim-mode fake cycle
+        self._sim_tool_mounted = False  # sim-mode UTM state (pin 63)
 
         # Background spin thread (real mode only) so subscription callbacks
         # fire — the node was previously publish-only and never spun.
@@ -295,13 +296,30 @@ class FarmBotROS2Bridge:
                 self._pos_x = self._pos_y = self._pos_z = 0.0
 
     def _sim_maybe_fake_reading(self, command: str) -> None:
-        """Sim: D_S_C has no firmware to answer, so fake a plausible soil
-        reading on pin 59 so ReadSensor resolves in dev."""
-        if command.strip() == "D_S_C":
+        """Sim: there's no firmware to answer pin reads, so fake them.
+
+        - ``D_S_C`` → a plausible soil reading on pin 59 (ReadSensor).
+        - ``T<n>_1`` / ``T<n>_2`` → flip the UTM mount state.
+        - ``D_C`` → report pin 63 from that state (0 = mounted, 1 = not),
+          which MountTool/UnmountTool wait on.
+        """
+        c = command.strip()
+        if c == "D_S_C":
             import random
             value = float(random.randint(*_SIM_SOIL_RANGE))
             with self._busy_lock:
                 self._pin_readings[_SOIL_PIN] = (value, time.monotonic())
+        elif c.startswith("T") and c[1:-2].isdigit() and c[-2:] in ("_1", "_2"):
+            self._sim_tool_mounted = c.endswith("_1")
+            with self._busy_lock:
+                self._pin_readings[63] = (
+                    0.0 if self._sim_tool_mounted else 1.0, time.monotonic()
+                )
+        elif c == "D_C":
+            with self._busy_lock:
+                self._pin_readings[63] = (
+                    0.0 if self._sim_tool_mounted else 1.0, time.monotonic()
+                )
 
     def position(self) -> Optional[dict]:
         """Last known gantry position, or None if never reported."""
