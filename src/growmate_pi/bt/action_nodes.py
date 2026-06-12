@@ -35,6 +35,23 @@ MOVE_TIMEOUT_S = 90.0
 PUMP_TIMEOUT_S = 15.0
 HOME_TIMEOUT_S = 120.0
 
+# Soil sensor — Farmduino analog pin 59. The raw 0–1023 reading's polarity/scale
+# need FIELD CALIBRATION; default assumption here is "higher = drier". Tune
+# SOIL_DRY_ABOVE / SOIL_WET_BELOW once measured on gh1.
+SOIL_PIN = 59
+SOIL_DRY_ABOVE = 600
+SOIL_WET_BELOW = 350
+SENSOR_TIMEOUT_S = 8.0
+
+
+def soil_label(value: float) -> str:
+    """Coarse moisture label from a raw analog reading (calibrate the bounds)."""
+    if value >= SOIL_DRY_ABOVE:
+        return "dry"
+    if value <= SOIL_WET_BELOW:
+        return "wet"
+    return "moist"
+
 
 # ---------- Generic verified command publisher --------------------------------
 
@@ -381,31 +398,73 @@ class EmergencyStop(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
 
-# ---------- Sensor read (placeholder for real read path) ----------------------
+# ---------- Sensor read (real reading via the bridge) -------------------------
 
 
 class ReadSensor(py_trees.behaviour.Behaviour):
-    """Publish ``D_S_C`` to read the soil sensor.
+    """Publish ``D_S_C`` and wait for the firmware's soil reading.
 
-    The real FarmBot replies on a separate topic — for now we just publish
-    the command and record SUCCESS. A future change will subscribe to the
-    reply topic and stash the value on the blackboard for ``llm_reason`` /
-    downstream reasoning.
+    The bridge parses ``R41 P<pin> V<val>`` off ``/uart_receive``; this node
+    publishes once, then holds RUNNING until a reading *fresher* than the
+    publish arrives (in sim the bridge fakes one immediately). It writes
+    ``{pin, value, status}`` to the blackboard under ``sensor_result`` and
+    appends a spoken summary to ``tts_text``. A timeout reports cleanly rather
+    than failing the whole tree.
     """
 
-    def __init__(self, bridge, name: str = "ReadSensor"):
+    def __init__(self, bridge, pin: int = SOIL_PIN,
+                 timeout_s: float = SENSOR_TIMEOUT_S, name: str = "ReadSensor"):
         super().__init__(name)
         self._bridge = bridge
+        self._pin = int(pin)
+        self._timeout_s = float(timeout_s)
+        self._task_state = get_task_state()
         self.blackboard = self.attach_blackboard_client(name=name)
-        self.blackboard.register_key(
-            "sensor_result", access=py_trees.common.Access.WRITE
-        )
+        self.blackboard.register_key("sensor_result", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key("tts_text", access=py_trees.common.Access.WRITE)
+        self._baseline: Optional[float] = None
+        self._published = False
+
+    def initialise(self):
+        # Capture the baseline BEFORE publishing so the sim's fake reply (set
+        # during publish) counts as fresh.
+        self._baseline = time.monotonic()
+        rec = self._bridge.publish("D_S_C")
+        self._published = rec.status in ("sent", "simulated")
+
+    def _append_tts(self, msg: str) -> None:
+        try:
+            existing = self.blackboard.tts_text
+        except KeyError:
+            existing = ""
+        self.blackboard.tts_text = f"{existing} {msg}".strip()
 
     def update(self):
-        record = self._bridge.publish("D_S_C")
-        if record.status in ("sent", "simulated"):
-            self.blackboard.sensor_result = {"raw": "pending-subscription"}
-            self.feedback_message = "D_S_C published"
+        if not self._published:
+            self.feedback_message = "D_S_C publish failed"
+            return py_trees.common.Status.FAILURE
+        if self._task_state.estop_requested():
+            self.feedback_message = "estop requested mid-read"
+            return py_trees.common.Status.FAILURE
+
+        reading = self._bridge.last_reading(self._pin, newer_than=self._baseline)
+        if reading is not None:
+            value = reading[0]
+            status = soil_label(value)
+            self.blackboard.sensor_result = {
+                "pin": self._pin, "value": value, "status": status,
+            }
+            self._append_tts(f"The soil reads {value:.0f} — that's {status}.")
+            self.feedback_message = f"pin {self._pin} = {value:.0f} ({status})"
             return py_trees.common.Status.SUCCESS
-        self.feedback_message = f"publish failed: {record.error}"
-        return py_trees.common.Status.FAILURE
+
+        if self._baseline is not None and (
+            time.monotonic() - self._baseline >= self._timeout_s
+        ):
+            self.blackboard.sensor_result = {
+                "pin": self._pin, "value": None, "status": "unknown",
+            }
+            self._append_tts("I couldn't get a soil reading just now.")
+            self.feedback_message = "sensor read timeout"
+            return py_trees.common.Status.SUCCESS  # report cleanly; don't fail the tree
+        return py_trees.common.Status.RUNNING

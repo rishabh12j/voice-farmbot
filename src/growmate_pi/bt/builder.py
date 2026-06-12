@@ -368,11 +368,14 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
                 ResolveTarget(garden, intent.target),
                 CheckPlantFound(),
                 CheckBounds(garden),
-                MoveTo(bridge),
+                # Verified move so the reading is taken once the gantry has
+                # actually arrived at the plant, not mid-travel.
+                MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S),
             ]
         )
+    # ReadSensor speaks the result ("the soil reads 512 — that's moist"), so no
+    # trailing generic Respond — that would talk over the real reading.
     children.append(ReadSensor(bridge))
-    children.append(Respond(intent.response))
     return _seq(f"Check sensor at {intent.target or 'current'}", *children)
 
 

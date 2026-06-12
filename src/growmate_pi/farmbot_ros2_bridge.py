@@ -21,13 +21,18 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 # Sim-mode fake busy-cycle duration. Short enough to keep verify_sim fast, long
 # enough that the 10 Hz executor sees at least one RUNNING tick before it
 # resolves — so the verify path is genuinely exercised in dev, not skipped.
 _SIM_BUSY_S = 0.2
+
+# Soil moisture sensor is Farmduino analog pin 59 (D_S_C -> F42 P59 M1 ->
+# R41 P59 V<value>). Sim fakes a reading in this raw-ADC band on D_S_C.
+_SOIL_PIN = 59
+_SIM_SOIL_RANGE = (250, 750)
 
 
 @dataclass
@@ -81,6 +86,11 @@ class FarmBotROS2Bridge:
         self._pos_x: Optional[float] = None
         self._pos_y: Optional[float] = None
         self._pos_z: Optional[float] = None
+
+        # Last analog pin readings from R41 reports: pin -> (value, monotonic
+        # ts). The soil sensor (pin 59) lands here; ReadSensor waits for a
+        # fresh entry. Guarded by ``_busy_lock``.
+        self._pin_readings: Dict[int, Tuple[float, float]] = {}
 
         # Busy-state tracking for the tick-and-verify gate. ``_busy`` mirrors
         # the firmware's /busy_state; ``_completion_count`` ticks up on every
@@ -212,39 +222,57 @@ class FarmBotROS2Bridge:
     # ---------- Live position (UI map) ---------------------------------------
 
     def _on_uart(self, msg) -> None:
-        """Parse R82 position reports off /uart_receive.
+        """Parse position (R82) and analog-pin (R41) reports off /uart_receive.
 
-        Format: ``R82 X1234.5 Y678.9 Z-12.3`` (mirrors the upstream
-        farmbot_controller parser). Any field may be absent; we keep the last
-        value for axes not present in a given report.
+        ``R82 X1234.5 Y678.9 Z-12.3`` → live gantry position (any axis may be
+        absent; we keep the last value per axis), mirrors the upstream parser.
+        ``R41 P59 V512`` → an analog pin read (the soil sensor is pin 59);
+        stored with a timestamp so ReadSensor can wait for a *fresh* one.
         """
         try:
             data = getattr(msg, "data", None) or str(msg)
             parts = data.split()
-            if not parts or parts[0] != "R82":
+            if not parts:
                 return
-            x = y = z = None
-            for tok in parts[1:]:
-                if len(tok) < 2:
-                    continue
-                axis = tok[0].upper()
-                try:
-                    val = float(tok[1:])
-                except ValueError:
-                    continue
-                if axis == "X":
-                    x = val
-                elif axis == "Y":
-                    y = val
-                elif axis == "Z":
-                    z = val
-            with self._busy_lock:
-                if x is not None:
-                    self._pos_x = x
-                if y is not None:
-                    self._pos_y = y
-                if z is not None:
-                    self._pos_z = z
+            if parts[0] == "R82":
+                x = y = z = None
+                for tok in parts[1:]:
+                    if len(tok) < 2:
+                        continue
+                    axis = tok[0].upper()
+                    try:
+                        val = float(tok[1:])
+                    except ValueError:
+                        continue
+                    if axis == "X":
+                        x = val
+                    elif axis == "Y":
+                        y = val
+                    elif axis == "Z":
+                        z = val
+                with self._busy_lock:
+                    if x is not None:
+                        self._pos_x = x
+                    if y is not None:
+                        self._pos_y = y
+                    if z is not None:
+                        self._pos_z = z
+            elif parts[0] == "R41":
+                pin = value = None
+                for tok in parts[1:]:
+                    if len(tok) < 2:
+                        continue
+                    try:
+                        num = float(tok[1:])
+                    except ValueError:
+                        continue
+                    if tok[0].upper() == "P":
+                        pin = int(num)
+                    elif tok[0].upper() == "V":
+                        value = num
+                if pin is not None and value is not None:
+                    with self._busy_lock:
+                        self._pin_readings[pin] = (value, time.monotonic())
         except Exception:
             pass
 
@@ -266,12 +294,37 @@ class FarmBotROS2Bridge:
             with self._busy_lock:
                 self._pos_x = self._pos_y = self._pos_z = 0.0
 
+    def _sim_maybe_fake_reading(self, command: str) -> None:
+        """Sim: D_S_C has no firmware to answer, so fake a plausible soil
+        reading on pin 59 so ReadSensor resolves in dev."""
+        if command.strip() == "D_S_C":
+            import random
+            value = float(random.randint(*_SIM_SOIL_RANGE))
+            with self._busy_lock:
+                self._pin_readings[_SOIL_PIN] = (value, time.monotonic())
+
     def position(self) -> Optional[dict]:
         """Last known gantry position, or None if never reported."""
         with self._busy_lock:
             if self._pos_x is None and self._pos_y is None and self._pos_z is None:
                 return None
             return {"x": self._pos_x, "y": self._pos_y, "z": self._pos_z}
+
+    def last_reading(
+        self, pin: int, newer_than: Optional[float] = None
+    ) -> Optional[Tuple[float, float]]:
+        """Most recent (value, monotonic_ts) for an analog pin, or None.
+
+        ``newer_than``: if given, only return a reading strictly newer than it,
+        so a caller can wait for a *fresh* read instead of a stale one.
+        """
+        with self._busy_lock:
+            entry = self._pin_readings.get(pin)
+        if entry is None:
+            return None
+        if newer_than is not None and entry[1] <= newer_than:
+            return None
+        return entry
 
     def is_ready(self) -> bool:
         """True when either real ROS2 publisher is up, or sim mode is active.
@@ -308,8 +361,9 @@ class FarmBotROS2Bridge:
             print(f"  -> [SIM] FarmBot: {command}  ({description})")
             record = CommandRecord(command, "simulated", description)
             # No firmware in sim, so reflect the move target as the position
-            # for the UI map.
+            # for the UI map, and fake a soil reading for D_S_C.
             self._sim_update_position(command)
+            self._sim_maybe_fake_reading(command)
             if track:
                 # Fake one busy cycle so a verified node sees a completion.
                 with self._busy_lock:
