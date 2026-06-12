@@ -411,7 +411,7 @@ cd C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice
 set PYTHONPATH=C:\Users\risha\growmate-bt\voice-farmbot\src
 python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.39:8000/intent
 
-python -m growmate_voice.app --pi-url http://192.168.0.54:8000/intent
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.137.161:8000/intent
 ```
 
 Look for `V2 mode: dispatching to Pi at ...` and `Pi ready: ...` in
