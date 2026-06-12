@@ -86,6 +86,7 @@ class AppState:
     tts_cache: Dict[str, Any] = field(default_factory=dict)
     history: History = field(default_factory=History)
     pi_url: Optional[str] = None  # V2: when set, the voice + button paths POST here
+    pi_verify_enabled: Optional[bool] = None  # Pi gate state; drives honest-or-blank memory features
     aicore: Optional[AICore] = None       # V2: LLM intent classifier for natural-language
     aicore_disabled: bool = False         # set true if Ollama unreachable, to skip retries
     model: str = "gemma3:4b"
@@ -111,16 +112,24 @@ _CONFIRM_AICORE_ACTIONS = {"water_all"}
 # Anything in this set ALWAYS bypasses confirm — emergency is instant.
 _NEVER_CONFIRM = {"estop", "reset", "emergency_stop"}
 
-# Day 10 ("today's care" panel) and Day 11 (fast-path plant queries) both
-# read from the per-plant event log + needs_attention list. After hardware
-# testing on farmbotdev (Jun 2026), the memory model showed real flaws:
-# P_4 watered_all rows landed even when the BT didn't actually finish, and
-# fast-path date queries were getting mis-routed via the matcher into
-# water_all confirms. Pausing both until the event-log model gets a proper
-# "tick-and-verify" gate (see PLANS.md follow-up). Flip back to True to
-# re-enable both at once.
-_MEMORY_FEATURES_ENABLED = False
+# Day 10 ("today's care" panel) and Day 11 (fast-path plant queries) read the
+# per-plant event log. They were parked because the log over-claimed (rows
+# landed on publish, not on real completion) — confidently-wrong is worse than
+# blank for a memory-impaired user. The tick-and-verify gate fixed the root
+# cause (a `watered` row now means the firmware finished). Re-enabled, BUT
+# gated live on the Pi's verify_enabled (honest-or-blank): the features only
+# surface when the gate is active, so a --no-verify run can never show
+# confidently-wrong "you watered it" data. This flag is the master kill-switch;
+# the live honesty gate is _memory_features_on().
+_MEMORY_FEATURES_ENABLED = True
 _PENDING_TTL_S = 10.0
+
+
+def _memory_features_on() -> bool:
+    """True only when memory features are safe to show: master switch on, a Pi
+    is configured, and it reports the verify gate active (honest event log)."""
+    return bool(_MEMORY_FEATURES_ENABLED and _STATE.pi_url
+                and _STATE.pi_verify_enabled is True)
 
 
 # --------------------------------------------------------------------------- init
@@ -659,8 +668,11 @@ def api_pi_status() -> Dict[str, Any]:
     """
     body = _pi_get("/status")
     if body is None:
+        _STATE.pi_verify_enabled = None  # unknown -> memory features stay blank
         return {"ok": False, "task": {"task_active": False},
                 "error": "Pi not configured or unreachable"}
+    # Cache the gate state so the memory features (honest-or-blank) can read it.
+    _STATE.pi_verify_enabled = bool(body.get("verify_enabled"))
     return body
 
 
@@ -1399,7 +1411,7 @@ def _fast_path_plant_query(transcript: str) -> Optional[Dict[str, Any]]:
     Returning None falls through to the normal AICore path — used both for
     'pattern didn't match' and 'Pi unreachable, let LLM make something up'.
     """
-    if not _MEMORY_FEATURES_ENABLED:
+    if not _memory_features_on():
         return None
     t = (transcript or "").strip()
     if not t:
@@ -4716,7 +4728,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     careBadge.dataset.tone = flagged ? 'warn' : 'ok';
 
     careFacts.innerHTML = '';
-    if (state.last_watered_human) {
+    if (_memoryOn && state.last_watered_human) {
+      // Only show a watering date when the log is honest (gate active).
       const src = state.last_watered_source === 'water_all'
         ? ' (from watering all)' : '';
       careFacts.appendChild(_factRow('Last watered', state.last_watered_human + src));
@@ -5262,6 +5275,10 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       const r = await fetch('/api/pi_status');
       if (!r.ok) return;
       const j = await r.json();
+      // Honest-or-blank memory features: track the Pi's verify gate live. When
+      // it flips, refresh the today's-care panel so it shows/blanks promptly.
+      const memOn = (j && j.verify_enabled === true);
+      if (memOn !== _memoryOn) { _memoryOn = memOn; refreshTodayCare(); }
       // Live gantry position — real-time on hardware (R82), target-snap in sim.
       // Drive the map marker every poll, independent of any task, so it tracks
       // named moves and jog too (the CSS glide on the marker smooths it).
@@ -5380,6 +5397,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
   // --- Day 10: Today's care --------------------------------------------
   const todayCard         = document.getElementById('todayCard');
+  const todayCard         = document.getElementById('todayCard');
   const todaySummary      = document.getElementById('todaySummary');
   const todaySummaryText  = document.getElementById('todaySummaryText');
   const todayList         = document.getElementById('todayList');
@@ -5433,14 +5451,21 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   // Day 10 today's-care panel parked — keep the function as a no-op so
   // any caller (finishCommand, init) stays a single line and is easy to
   // re-arm once the event-log verify gate lands.
-  const MEMORY_FEATURES_ENABLED = false;
+  // Master kill-switch; the LIVE honesty gate is _memoryOn, driven from the
+  // Pi's verify_enabled in refreshPiStatus. Honest-or-blank: the panel shows
+  // only when the event log is trustworthy (the verify gate is active).
+  const MEMORY_FEATURES_ENABLED = true;
+  let _memoryOn = false;
   async function refreshTodayCare() {
-    if (!MEMORY_FEATURES_ENABLED) return;
+    if (!MEMORY_FEATURES_ENABLED || !_memoryOn) {
+      if (todayCard) todayCard.hidden = true;   // no honest log -> no panel
+      return;
+    }
+    if (todayCard) todayCard.hidden = false;
     try {
       const r = await fetch('/api/plants/needs_attention');
       if (!r.ok) return;
-      const data = await r.json();
-      _renderTodayCare(data);
+      _renderTodayCare(await r.json());
     } catch (_) { /* offline: leave the previous render in place */ }
   }
 
