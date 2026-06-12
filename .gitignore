@@ -29,6 +29,7 @@ tools/_*.py
 R_Jain_EE650_Project.zip
 demo/Interim_Report_*.pdf
 *.pdf
+*.pptx
 
 # Virtual environments
 venv/
