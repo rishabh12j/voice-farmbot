@@ -296,7 +296,12 @@ MSc Thesis, Maynooth University. Supervisor: Dr Majid Sorouri.
 
 ## Upstream
 
-The robot control stack in `src/` (except `src/growmate_voice/`) is the
+The robot control stack in `src/` (except `src/growmate_voice/` and
+`src/growmate_pi/`) is the
 [AURA FarmBot ROS2](https://github.com/PetriJF/FarmBot_ROS2) project,
 developed at Maynooth University. See `documentation/` for the upstream docs.
-GrowMate does not modify any upstream package.
+GrowMate is additive and does not re-architect the control stack. The one
+exception is a single upstream **bug fix**: `map_handler/tool_sequencer.py`
+`__get_release_direction` checked `dir == 1` four times, so any tool with a
+release direction other than 1 crashed the mount sequence — corrected to map
+1/2/3/4 (worth reporting upstream).

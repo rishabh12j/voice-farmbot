@@ -90,20 +90,21 @@ class ToolExchanger:
     
     def __get_release_direction(self, dir: int):
         '''
-        Gets the coordinate increments for the release of each tool based 
-        on the mounting orientation
+        Gets the coordinate increments for the release of each tool based
+        on the mounting orientation. 1: -x, 2: +x, 3: -y, 4: +y.
         '''
-        if dir < 1 or dir > 4: 
+        # Bugfix: the original had `if dir == 1` four times, so dir 2/3/4 fell
+        # through to None and crashed mount/unmount. Mapped correctly here.
+        increments = {
+            1: (-100.0, 0.0),
+            2: (100.0, 0.0),
+            3: (0.0, -100.0),
+            4: (0.0, 100.0),
+        }
+        if dir not in increments:
             self.node_.get_logger().error('Release direction for the tool unrecognized! Check configuration!')
-            return
-        if dir == 1:
-            return -100.0, 0.0
-        if dir == 1:
-            return 100.0, 0.0
-        if dir == 1:
-            return 0.0, -100.0
-        if dir == 1:
-            return 0.0, 100.0
+            return 0.0, 0.0
+        return increments[dir]
 
     def __check_tool_details(self, cmd: ToolDetails, x_inc: float, y_inc: float):
         '''
