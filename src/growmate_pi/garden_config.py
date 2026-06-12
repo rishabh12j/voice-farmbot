@@ -39,6 +39,7 @@ class GardenConfig:
         self.locations: List[Dict] = self.config.get("garden", {}).get("locations", [])
         self.safety: Dict = self.config.get("safety", {})
         self.schedule: Dict = self.config.get("schedule", {})
+        self.tools: Dict = self.config.get("tools", {})
 
         self._lookup: Dict[str, Tuple[Dict, str]] = {}
         for p in self.plants:
@@ -92,3 +93,12 @@ class GardenConfig:
 
     def watering_time(self) -> str:
         return str(self.schedule.get("watering_time", "08:00"))
+
+    def tools_by_name(self) -> Dict[str, int]:
+        """Map logical tool name -> UTM index, for MountTool / EnsureTool."""
+        out: Dict[str, int] = {}
+        for name, cfg in (self.tools or {}).items():
+            idx = (cfg or {}).get("index")
+            if idx is not None:
+                out[name] = int(idx)
+        return out

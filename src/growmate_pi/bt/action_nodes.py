@@ -556,3 +556,80 @@ class UnmountTool(_ToolChange):
                  timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
         super().__init__(bridge, index, tool_name, mount=False,
                          timeout_s=timeout_s, name=name)
+
+
+class EnsureTool(py_trees.behaviour.Behaviour):
+    """Guarantee ``tool_name`` is the mounted head, swapping only if needed.
+
+    Instant SUCCESS (no motion) when ToolState already says it's mounted —
+    that's the point, no redundant swaps. Otherwise it unmounts the current
+    head (if any) and mounts the target, confirming via pin 63 like MountTool.
+    Prepend it to any tool-specific action. ``tools_by_name`` is the
+    config name->index map (``GardenConfig.tools_by_name()``).
+    """
+
+    def __init__(self, bridge, tool_name: str, tools_by_name: Dict[str, int],
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+        super().__init__(name or f"EnsureTool({tool_name})")
+        self._bridge = bridge
+        self._target = tool_name
+        self._by_name = dict(tools_by_name or {})
+        self._timeout_s = float(timeout_s)
+        self._task_state = get_task_state()
+        self._tool_state = get_tool_state()
+        self._noop = False
+        self._published = False
+        self._baseline: Optional[float] = None
+        self._err: Optional[str] = None
+
+    def initialise(self):
+        self._noop = False
+        self._published = False
+        self._err = None
+        self._baseline = None
+        current = self._tool_state.current()
+        if current == self._target:
+            self._noop = True
+            return
+        target_index = self._by_name.get(self._target)
+        if target_index is None:
+            self._err = f"no configured index for tool '{self._target}'"
+            return
+        self._baseline = time.monotonic()
+        ok = True
+        if current is not None and current in self._by_name:
+            r = self._bridge.publish(f"T{self._by_name[current]}_2")  # unmount current
+            ok = ok and r.status in ("sent", "simulated")
+        rm = self._bridge.publish(f"T{target_index}_1")               # mount target
+        rd = self._bridge.publish("D_C")
+        self._published = (ok and rm.status in ("sent", "simulated")
+                           and rd.status in ("sent", "simulated"))
+
+    def update(self):
+        if self._noop:
+            self.feedback_message = f"{self._target} already mounted"
+            return py_trees.common.Status.SUCCESS
+        if self._err:
+            self.feedback_message = self._err
+            return py_trees.common.Status.FAILURE
+        if not self._published:
+            self.feedback_message = "tool command publish failed"
+            return py_trees.common.Status.FAILURE
+        if self._task_state.estop_requested():
+            self.feedback_message = "estop requested mid tool-change"
+            return py_trees.common.Status.FAILURE
+
+        reading = self._bridge.last_reading(TOOL_PIN, newer_than=self._baseline)
+        if reading is not None:
+            if abs(reading[0]) < 0.5:  # pin 63 == 0 -> mounted
+                self._tool_state.set(self._target)
+                self.feedback_message = f"mounted {self._target}"
+                return py_trees.common.Status.SUCCESS
+            self.feedback_message = f"mount not confirmed (pin63={reading[0]:.0f})"
+            return py_trees.common.Status.FAILURE
+        if self._baseline is not None and (
+            time.monotonic() - self._baseline >= self._timeout_s
+        ):
+            self.feedback_message = "tool change timeout"
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING

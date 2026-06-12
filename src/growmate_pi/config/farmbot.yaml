@@ -172,6 +172,21 @@ commands:
     - code: "I_4"
       description: "Detect weeds"
 
+# Tool heads on the Universal Tool Mount (UTM).
+# growmate_pi uses `index` at runtime (it publishes T<index>_1 / _2). The
+# x/y/z/release_dir are for the one-time `T_<index>_0` registration into the
+# active map — the AURA stack reads positions from there for the mount moves.
+#
+# *** PLACEHOLDER positions — MEASURE ON gh1 AND REPLACE. *** Jog the empty UTM
+# onto each tool, read the live position (curl /status -> position), and set
+# release_dir (1=-x, 2=+x, 3=-y, 4=+y). Until then hardware mounts won't seat;
+# sim fakes the mount so the swap logic is testable now.
+tools:
+  watering_nozzle: {index: 1, x: 0.0, y: 0.0, z: -200.0, release_dir: 3}
+  soil_sensor:     {index: 2, x: 0.0, y: 0.0, z: -200.0, release_dir: 3}
+  seeder:          {index: 3, x: 0.0, y: 0.0, z: -200.0, release_dir: 3}
+  weeder:          {index: 4, x: 0.0, y: 0.0, z: -200.0, release_dir: 3}
+
 # Safety rules
 safety:
   emergency_phrases:

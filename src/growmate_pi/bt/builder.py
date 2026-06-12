@@ -25,6 +25,7 @@ from growmate_pi.schemas import Intent
 from growmate_pi.bt.action_nodes import (
     CheckEstop,
     EmergencyStop,
+    EnsureTool,
     HOME_TIMEOUT_S,
     LogPlantEvent,
     MOVE_TIMEOUT_S,
@@ -361,7 +362,13 @@ def _tree_scan_weeds(bridge, intent: Intent) -> py_trees.behaviour.Behaviour:
 
 
 def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
-    children = [CheckAvailable(bridge)]
+    # The soil probe is a tool head — make sure it's mounted before reading
+    # (no-op if it already is). Move to the plant afterwards so the probe goes
+    # in at the right spot.
+    children = [
+        CheckAvailable(bridge),
+        EnsureTool(bridge, "soil_sensor", garden.tools_by_name()),
+    ]
     if intent.target:
         children.extend(
             [
