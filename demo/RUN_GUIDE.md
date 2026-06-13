@@ -402,6 +402,44 @@ Full gate checklist (single-move test, honest-log water, timeout, e-stop, and
 the position-arrival follow-up) lives in
 **[verify_gate_hardware.md](verify_gate_hardware.md)**.
 
+### 2.2 One-command launch (bringup + intent server + scheduler)
+
+Instead of running bringup (§1.6), the intent server (§2), and the watering
+scheduler in separate terminals, one launch file starts the whole
+per-greenhouse stack. Source ROS 2 + the Rishabh workspace **in the right
+order first** (§1.3a), then:
+
+```bash
+cd ~/Rishabh_Growmate_FarmBot
+ros2 launch ./launch/greenhouse.launch.py
+```
+
+It starts: `no_camera` bringup → (8 s later) the intent server from the venv →
+(20 s later) the daily watering scheduler. Override paths/port if your layout
+differs:
+
+```bash
+ros2 launch ./launch/greenhouse.launch.py \
+    venv_python:=$HOME/Rishabh_Growmate_FarmBot/venv/bin/python \
+    src:=$HOME/Rishabh_Growmate_FarmBot/src port:=8000
+```
+
+The launch inherits whatever you sourced — so the §1.3a source order still
+matters. If `/busy_state` isn't up yet, run the intent server by hand with
+`--no-verify` instead (the launch defaults the gate on).
+
+**Daily watering scheduler** (started by the launch, or run separately):
+
+```bash
+PYTHONPATH=src venv/bin/python -m growmate_pi.scheduler            # daily at schedule.watering_time
+PYTHONPATH=src venv/bin/python -m growmate_pi.scheduler --now      # water now, once
+PYTHONPATH=src venv/bin/python -m growmate_pi.scheduler --dry-run  # show water needed + plan only
+```
+
+It reads this greenhouse's map, reports the water needed today (sum of per-plant
+`water_quantity`), then waters all plants their configured amount and homes the
+gantry — once per day, 30-min catch-up. Each greenhouse's Pi runs its own.
+
 ---
 
 ## 3. Launch the voice app (Windows)
