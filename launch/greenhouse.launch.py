@@ -37,7 +37,11 @@ from launch.actions import (
     TimerAction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    EnvironmentVariable,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+)
 from launch_ros.substitutions import FindPackageShare
 
 # launch/ sits directly under the repo root; derive venv + src defaults.
@@ -48,6 +52,10 @@ def generate_launch_description() -> LaunchDescription:
     venv_python = LaunchConfiguration("venv_python")
     src = LaunchConfiguration("src")
     port = LaunchConfiguration("port")
+
+    # PREPEND src to the inherited PYTHONPATH — do NOT replace it, or we lose the
+    # ROS python path (rclpy) and the intent server silently falls back to sim.
+    pythonpath = [src, ":", EnvironmentVariable("PYTHONPATH", default_value="")]
 
     args = [
         DeclareLaunchArgument(
@@ -80,7 +88,7 @@ def generate_launch_description() -> LaunchDescription:
     intent_server = TimerAction(period=8.0, actions=[
         ExecuteProcess(
             cmd=[venv_python, "-m", "growmate_pi.intent_server", "--port", port],
-            additional_env={"PYTHONPATH": src},
+            additional_env={"PYTHONPATH": pythonpath},
             name="growmate_intent_server",
             output="screen",
         )
@@ -91,7 +99,7 @@ def generate_launch_description() -> LaunchDescription:
         ExecuteProcess(
             cmd=[venv_python, "-m", "growmate_pi.scheduler",
                  "--intent-url", ["http://localhost:", port]],
-            additional_env={"PYTHONPATH": src},
+            additional_env={"PYTHONPATH": pythonpath},
             name="growmate_scheduler",
             output="screen",
         )
