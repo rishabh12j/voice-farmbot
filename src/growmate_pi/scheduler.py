@@ -78,10 +78,13 @@ def _mark_watered() -> None:
 
 
 def _is_due(hour: int, minute: int) -> bool:
+    """Due only within the catch-up window *after* the scheduled time:
+    [scheduled, scheduled + _CATCHUP_MIN]. So a reboot a few minutes late still
+    fires, but launching hours later does NOT trigger a surprise watering."""
     now = datetime.now()
     scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    cutoff = scheduled - timedelta(minutes=_CATCHUP_MIN)
-    return cutoff <= now and now >= scheduled
+    window_end = scheduled + timedelta(minutes=_CATCHUP_MIN)
+    return scheduled <= now <= window_end
 
 
 def _water_needed(base_url: str) -> Optional[Dict]:

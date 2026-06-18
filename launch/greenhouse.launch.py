@@ -36,6 +36,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     EnvironmentVariable,
@@ -72,6 +73,11 @@ def generate_launch_description() -> LaunchDescription:
             "port", default_value="8000",
             description="Intent server port (scheduler talks to localhost:port).",
         ),
+        DeclareLaunchArgument(
+            "scheduler", default_value="true",
+            description="Run the daily watering scheduler. Set false to bring up "
+                        "bringup + intent server only (e.g. while testing tools).",
+        ),
     ]
 
     # 1. AURA bringup (no camera — watering doesn't need vision).
@@ -95,6 +101,7 @@ def generate_launch_description() -> LaunchDescription:
     ])
 
     # 3. Daily watering scheduler — talks to the local intent server.
+    #    Skipped when scheduler:=false (bringup + intent server only).
     scheduler = TimerAction(period=20.0, actions=[
         ExecuteProcess(
             cmd=[venv_python, "-m", "growmate_pi.scheduler",
@@ -102,6 +109,7 @@ def generate_launch_description() -> LaunchDescription:
             additional_env={"PYTHONPATH": pythonpath},
             name="growmate_scheduler",
             output="screen",
+            condition=IfCondition(LaunchConfiguration("scheduler")),
         )
     ])
 
