@@ -181,13 +181,48 @@ def _species_forms(target: str) -> set:
     return forms
 
 
+# Plants within this many mm of X are treated as one column. Bigger than the
+# within-column X scatter, smaller than the gap between columns. Tune to layout.
+_BAND_TOL_MM = 150.0
+
+
+def _snake_order(plants: List[Dict[str, Any]],
+                 band_tol: float = _BAND_TOL_MM) -> List[Dict[str, Any]]:
+    """Order plants for the quickest deterministic gantry sweep (boustrophedon).
+
+    Band the plants into X-columns (a new column starts when X jumps by more
+    than ``band_tol``), walk the columns left-to-right, and sweep Y within each
+    column — alternating the Y direction every column ("snake"). The heavy X
+    axis makes a single monotonic pass while the light Y axis does the fanning,
+    and because direction flips each column the gantry enters every column at
+    the end nearest where it left the previous one (no full-height Y returns).
+    """
+    if not plants:
+        return []
+    by_x = sorted(plants, key=lambda p: (p["x"], p["y"]))
+    out: List[Dict[str, Any]] = []
+    band: List[Dict[str, Any]] = []
+    last_x = None
+    descending = False  # first column sweeps Y ascending, then alternate
+    for p in by_x:
+        if last_x is not None and p["x"] - last_x > band_tol:
+            band.sort(key=lambda q: q["y"], reverse=descending)
+            out.extend(band)
+            band = []
+            descending = not descending
+        band.append(p)
+        last_x = p["x"]
+    band.sort(key=lambda q: q["y"], reverse=descending)
+    out.extend(band)
+    return out
+
+
 def find_plants_by_species(target: str) -> List[Dict[str, Any]]:
     """Return all active_map plants whose species/type/name matches ``target``.
 
-    Sorted column-by-column (primary X, secondary Y) so the gantry sweeps
-    up the short Y axis within each X column. Empty list if no plants match
-    (caller decides whether that's a no-match failure tree or a different
-    fallback).
+    Ordered by ``_snake_order`` (band-by-X, snaked-Y) for the quickest sweep.
+    Empty list if no plants match (caller decides whether that's a no-match
+    failure tree or a different fallback).
     """
     forms = _species_forms(target)
     if not forms:
@@ -201,22 +236,20 @@ def find_plants_by_species(target: str) -> List[Dict[str, Any]]:
         pname = (p.get("name") or "").lower()
         if any(f in species or f in ptype or f in pname for f in forms):
             matches.append(p)
-    matches.sort(key=lambda p: (p["x"], p["y"]))
-    return matches
+    return _snake_order(matches)
 
 
 def find_all_plants_in_garden() -> List[Dict[str, Any]]:
-    """Return every plant in the active map, column-sorted (X then Y).
+    """Return every plant in the active map, snake-ordered for the fastest walk.
 
-    Used by the multi-plant ``water_all`` tree so "water everything"
-    walks each plant individually with per-leaf event-log writes and
-    estop checkpoints, rather than firing the firmware-level P_4
-    one-shot. Same column-order convention as ``find_plants_by_species``.
+    Used by the multi-plant ``water_all`` tree so "water everything" walks each
+    plant individually (per-leaf event-log writes + estop checkpoints) rather
+    than firing the firmware-level P_4 one-shot. Order is ``_snake_order``
+    (band-by-X column, alternating Y direction).
     """
     data = _load_plants_from_map_handler()
     plants = list(data.get("plants") or [])
-    plants.sort(key=lambda p: (p["x"], p["y"]))
-    return plants
+    return _snake_order(plants)
 
 
 def list_species_in_garden() -> List[str]:
