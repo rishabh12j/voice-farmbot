@@ -122,9 +122,11 @@ class UARTController(Node):
         Timer callback that reads from UART and handles the response
         codes and commands.
         '''
-        # Read from serial
-        line = self.ser_.readline().decode('utf-8').rstrip()
-        
+        # Read from serial. Decode tolerantly: a stray non-UTF-8 byte (line
+        # noise, or the Farmduino resetting when the port is opened) must not
+        # kill the node — drop the bad byte and keep reading.
+        line = self.ser_.readline().decode('utf-8', errors='ignore').rstrip()
+
         # If a command is read, handle it
         if line:
             self.get_logger().info(f'Received message: {line}')
