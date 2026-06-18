@@ -184,11 +184,10 @@ def _species_forms(target: str) -> set:
 def find_plants_by_species(target: str) -> List[Dict[str, Any]]:
     """Return all active_map plants whose species/type/name matches ``target``.
 
-    Sorted row-by-row (primary Y, secondary X) so the gantry sweeps along
-    the long X axis within each Y band — that's the most efficient pattern
-    for the FarmBot Genesis XL and the most visually obvious on a demo
-    video. Empty list if no plants match (caller decides whether that's a
-    no-match failure tree or a different fallback).
+    Sorted column-by-column (primary X, secondary Y) so the gantry sweeps
+    up the short Y axis within each X column. Empty list if no plants match
+    (caller decides whether that's a no-match failure tree or a different
+    fallback).
     """
     forms = _species_forms(target)
     if not forms:
@@ -202,21 +201,21 @@ def find_plants_by_species(target: str) -> List[Dict[str, Any]]:
         pname = (p.get("name") or "").lower()
         if any(f in species or f in ptype or f in pname for f in forms):
             matches.append(p)
-    matches.sort(key=lambda p: (p["y"], p["x"]))
+    matches.sort(key=lambda p: (p["x"], p["y"]))
     return matches
 
 
 def find_all_plants_in_garden() -> List[Dict[str, Any]]:
-    """Return every plant in the active map, row-sorted (Y then X).
+    """Return every plant in the active map, column-sorted (X then Y).
 
     Used by the multi-plant ``water_all`` tree so "water everything"
     walks each plant individually with per-leaf event-log writes and
     estop checkpoints, rather than firing the firmware-level P_4
-    one-shot. Same row-order convention as ``find_plants_by_species``.
+    one-shot. Same column-order convention as ``find_plants_by_species``.
     """
     data = _load_plants_from_map_handler()
     plants = list(data.get("plants") or [])
-    plants.sort(key=lambda p: (p["y"], p["x"]))
+    plants.sort(key=lambda p: (p["x"], p["y"]))
     return plants
 
 

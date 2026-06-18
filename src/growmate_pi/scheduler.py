@@ -1,19 +1,16 @@
 """Daily watering scheduler — one greenhouse (this Pi's local intent server).
 
 Each FarmBot/greenhouse runs its own Pi, so the scheduler is per-greenhouse:
-it talks to the *local* intent server. Once per day at the scheduled time it:
-
-1. reads this greenhouse's map (``GET /plants``) and works out the water needed
-   today — the sum of per-plant ``water_quantity`` (seconds);
-2. waters every plant their configured amount and sends the gantry home, by
-   POSTing ``[water_all, go_home]`` to ``/intent`` (``water_all`` applies the
-   per-plant amounts — the BT-safe path to P_4 — and is logged honestly via the
-   tick-and-verify gate; ``go_home`` is H_0 afterwards);
-3. records that it watered today so a restart can't double-water.
+it talks to the *local* intent server. It's just a daily trigger for watering —
+once per day at the scheduled time it POSTs ``[water_all, go_home]`` to
+``/intent`` (``water_all`` is the BT-safe path to P_4 — waters every plant its
+configured amount, logged honestly via the tick-and-verify gate; ``go_home`` is
+H_0 afterwards), then records that it watered today so a restart can't
+double-water.
 
 Correctness:
 * single source for the time (``farmbot.yaml`` → ``schedule.watering_time``);
-* 30-minute catch-up so a reboot near the time still fires;
+* 30-minute catch-up window so a reboot near the time still fires;
 * at most once per day.
 
 Usage::
@@ -32,14 +29,9 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Tuple
 
 import yaml
-
-try:
-    import httpx
-except ImportError:  # safe to import without httpx (dry-run/tests)
-    httpx = None  # type: ignore[assignment]
 
 from growmate_pi.pi_client import post_intent
 from growmate_pi.schemas import Intent
@@ -47,7 +39,6 @@ from growmate_pi.schemas import Intent
 _STATE_FILE = Path.home() / ".growmate_pi" / "last_watered.txt"
 _CATCHUP_MIN = 30
 _CHECK_INTERVAL_S = 60
-_DEFAULT_WATER_Q = 6  # seconds, if a plant row has no water_quantity
 DEFAULT_BASE_URL = "http://localhost:8000"
 
 log = logging.getLogger("growmate_pi.scheduler")
@@ -87,47 +78,11 @@ def _is_due(hour: int, minute: int) -> bool:
     return scheduled <= now <= window_end
 
 
-def _water_needed(base_url: str) -> Optional[Dict]:
-    """GET /plants and total the per-plant water_quantity. None on failure."""
-    if httpx is None:
-        return None
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.get(f"{base_url}/plants")
-            r.raise_for_status()
-            body = r.json()
-    except Exception as exc:
-        log.error("Couldn't read /plants from %s: %s", base_url, exc)
-        return None
-    plants = body.get("plants") or []
-    total = 0.0
-    for p in plants:
-        try:
-            total += float(p.get("water_quantity") or _DEFAULT_WATER_Q)
-        except (TypeError, ValueError):
-            total += _DEFAULT_WATER_Q
-    return {"count": len(plants), "total_seconds": round(total, 1),
-            "source": body.get("source")}
-
-
 def _fire(base_url: str, dry_run: bool) -> bool:
-    """Water all plants (their configured amounts) then go home. True on ok."""
-    need = _water_needed(base_url)
-    if need is not None:
-        log.info("%d plants, ~%.0fs of water today (map: %s)",
-                 need["count"], need["total_seconds"], need.get("source"))
-        if need["count"] == 0:
-            log.info("No plants in the map — skipping")
-            return True
-    else:
-        log.warning("Couldn't read the map; watering anyway")
-
+    """Water all plants then go home (the BT-safe path to P_4). True on ok."""
     if dry_run:
         log.info("DRY RUN: would water_all then go_home via %s/intent", base_url)
         return True
-    if httpx is None:
-        log.error("httpx not installed — cannot fire. pip install httpx")
-        return False
 
     try:
         reply = post_intent(
