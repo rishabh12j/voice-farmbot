@@ -83,7 +83,13 @@ class Panorama:
         '''
         # Loading the camera calibration information
         self.config_data = self.load_from_yaml(self.config_directory_, self.calib_file_)
-        
+        if self.config_data is None:
+            # No camera_calibration.yaml yet — don't dereference None (which would
+            # kill camera_controller). Tell the user to calibrate first and bail.
+            self.node_.get_logger().warn(
+                'No camera calibration found (run I_0 first). Skipping stitch.')
+            return
+
         # If the map dimensions were not set at the start of the run, load them from the active map
         if self.map_x == -1.0 or self.map_y == -1.0:
             # Load map instance

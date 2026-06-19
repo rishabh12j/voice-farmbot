@@ -87,7 +87,10 @@ class CalibrateCamera:
         self.pattern = {
             'size': (5, 7),
             'type': cv2.CALIB_CB_ASYMMETRIC_GRID,
-            'row_circle_separation': 30,
+            # Same-row (horizontal) circle spacing in mm. Card is a calib.io 5x7
+            # asymmetric grid with 15 mm *diagonal* (nearest-neighbour) spacing;
+            # for a 45-degree-staggered grid the same-row spacing is 15*sqrt(2).
+            'row_circle_separation': 15 * math.sqrt(2),  # ~21.21 mm
         }
         self.dot_images = {
             AXIS_INDEX['init']: {},
