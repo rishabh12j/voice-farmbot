@@ -134,6 +134,17 @@ class Panorama:
         self.initialize_map_if_needed(map_path)
         map_image = cv2.imread(map_path, cv2.IMREAD_UNCHANGED)  # Ensures map_image is read with alpha channel
 
+        if map_image is None:
+            # Canvas couldn't be created/read — at a fine coord_scale the full-bed
+            # map is gigapixel-sized and imwrite fails. Don't crash camera_controller.
+            self.node_.get_logger().error(
+                'Panorama map canvas unavailable at %s. At coord_scale=%.3f mm/px the '
+                'full-bed map is ~%dx%d px, too large to allocate/write. The panorama '
+                'needs a downscaled map resolution. Skipping stitch.'
+                % (map_path, self.config_data['coord_scale'],
+                   self.map_size_x_px, self.map_size_y_px))
+            return
+
         # Ensure map_image has 4 channels
         if map_image.shape[2] != 4:
             map_image = cv2.cvtColor(map_image, cv2.COLOR_BGR2BGRA)
