@@ -27,8 +27,8 @@ POSITION_COUNT = 3
 # view of the card at the home corner (Z=0 was raised too high -> oblique/blurry).
 RELATIVE_MOVEMENTS = [
     {'x': 0, 'y': 0, 'z': -250},
-    {'x': 0, 'y': 50, 'z': -250},
-    {'x': 50, 'y': 50, 'z': -250},
+    {'x': 0, 'y': 25, 'z': -250},
+    {'x': 25, 'y': 25, 'z': -250},
 ]
 
 class CalibrateCamera:
