@@ -207,7 +207,9 @@ class CalibrateCamera:
         }
 
         img = img.copy()
-        img = cv2.bitwise_not(img)
+        # Do NOT invert (bitwise_not): the card is dark circles on white, which is
+        # exactly what SimpleBlobDetector expects (dark blobs). Inverting made the
+        # circles white -> the detector found nothing -> "object not detected".
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = cv2.medianBlur(img, block_size['blur'])
 
@@ -234,8 +236,22 @@ class CalibrateCamera:
         large = img.shape[0] > 1200
         if large and downsample:
             img = cv2.pyrDown(img)
+        # Tuned blob detector: findCirclesGrid's default detector filters out the
+        # large dark circles on this card. Allow big blobs; relax convexity/inertia.
+        params = cv2.SimpleBlobDetector_Params()
+        params.filterByArea = True
+        params.minArea = 50
+        params.maxArea = 100000
+        params.filterByCircularity = True
+        params.minCircularity = 0.6
+        params.filterByConvexity = False
+        params.filterByInertia = False
+        params.minThreshold = 10
+        params.maxThreshold = 220
+        detector = cv2.SimpleBlobDetector_create(params)
         try:
-            ret, centers = cv2.findCirclesGrid(img, pattern_size, flags=flags)
+            ret, centers = cv2.findCirclesGrid(img, pattern_size, flags=flags,
+                                               blobDetector=detector)
         except Exception as exception:
             self.node_.get_logger().error(exception)
             ret, centers = False, None
