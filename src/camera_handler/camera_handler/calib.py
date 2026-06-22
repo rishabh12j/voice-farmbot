@@ -22,10 +22,13 @@ AXIS_COLORS = [
 
 # Make sure the number of relative movements is equal to the position count!!
 POSITION_COUNT = 3
+# Absolute capture positions for camera calibration (init, +50 Y, +50 X). Z is
+# lowered to -250 so the camera sits close enough for a sharp, top-down, framed
+# view of the card at the home corner (Z=0 was raised too high -> oblique/blurry).
 RELATIVE_MOVEMENTS = [
-    {'x': 0, 'y': 0, 'z': 0},
-    {'x': 0, 'y': 50, 'z': 0},
-    {'x': 50, 'y': 50, 'z': 0},
+    {'x': 0, 'y': 0, 'z': -250},
+    {'x': 0, 'y': 50, 'z': -250},
+    {'x': 50, 'y': 50, 'z': -250},
 ]
 
 class CalibrateCamera:
