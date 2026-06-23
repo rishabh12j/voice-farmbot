@@ -9,6 +9,12 @@ from camera_handler.calib import CalibrateCamera
 from camera_handler.plant_detection import PlantDetection
 import math
 
+# Cap the panorama scan extent (mm) — keeps a full-bed run from overwhelming the
+# Pi (hundreds of stitches). Set to None for the full bed.
+PANORAMA_MAX_X_MM = 1500.0
+PANORAMA_MAX_Y_MM = None
+
+
 class CameraController(Node):
     # Node contructor
     def __init__(self):
@@ -118,12 +124,19 @@ class CameraController(Node):
         self.get_logger().info(f'Panorama increments {x_inc}, {y_inc}')
 
         if self.panorama_.map_x != -1.0 and self.panorama_.map_y != -1.0:
-            self.get_logger().info(f'Panorama max_x: {self.panorama_.map_x}, map_y: {self.panorama_.map_y}')
-            x_pos_count = math.ceil(self.panorama_.map_x / x_inc)
-            y_pos_count = math.ceil(self.panorama_.map_y / y_inc)
+            # Optionally cap the scan extent (quick tests / avoid overwhelming the Pi).
+            x_extent = self.panorama_.map_x
+            y_extent = self.panorama_.map_y
+            if PANORAMA_MAX_X_MM is not None:
+                x_extent = min(x_extent, PANORAMA_MAX_X_MM)
+            if PANORAMA_MAX_Y_MM is not None:
+                y_extent = min(y_extent, PANORAMA_MAX_Y_MM)
+            self.get_logger().info(f'Panorama scan extent x:{x_extent}, y:{y_extent}')
+            x_pos_count = math.ceil(x_extent / x_inc)
+            y_pos_count = math.ceil(y_extent / y_inc)
 
-            x_inc = self.panorama_.map_x / x_pos_count
-            y_inc = self.panorama_.map_y / y_pos_count
+            x_inc = x_extent / x_pos_count
+            y_inc = y_extent / y_pos_count
             num = int(1)
 
             for y_pos in range(y_pos_count + 1):
