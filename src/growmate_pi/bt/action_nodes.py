@@ -471,6 +471,146 @@ class ReadSensor(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.RUNNING
 
 
+# ---------- Smart watering (sense per plant, water only the dry ones) ----------
+
+
+class RecordSoil(py_trees.behaviour.Behaviour):
+    """Read the soil sensor and store the value for a specific plant.
+
+    Like :class:`ReadSensor` but writes the reading into a shared ``readings``
+    dict keyed by plant index (so a later watering pass can decide per plant)
+    and speaks a per-plant line. Used by ``water_smart``'s sensing pass. Holds
+    RUNNING until a fresh reading arrives (sim fakes one on publish); a timeout
+    records ``None`` and reports cleanly so one bad read doesn't fail the tree.
+    """
+
+    def __init__(self, bridge, readings: Dict[int, Optional[float]], key: int,
+                 plant_name: str, pin: int = SOIL_PIN,
+                 timeout_s: float = SENSOR_TIMEOUT_S, name: Optional[str] = None):
+        super().__init__(name or f"RecordSoil({plant_name})")
+        self._bridge = bridge
+        self._readings = readings
+        self._key = int(key)
+        self._plant_name = plant_name
+        self._pin = int(pin)
+        self._timeout_s = float(timeout_s)
+        self._task_state = get_task_state()
+        self.blackboard = self.attach_blackboard_client(name=self.name)
+        self.blackboard.register_key("tts_text", access=py_trees.common.Access.WRITE)
+        self._baseline: Optional[float] = None
+        self._published = False
+
+    def initialise(self):
+        self._baseline = time.monotonic()
+        rec = self._bridge.publish("D_S_C")
+        self._published = rec.status in ("sent", "simulated")
+
+    def _append_tts(self, msg: str) -> None:
+        try:
+            existing = self.blackboard.tts_text
+        except KeyError:
+            existing = ""
+        self.blackboard.tts_text = f"{existing} {msg}".strip()
+
+    def update(self):
+        if not self._published:
+            self.feedback_message = "D_S_C publish failed"
+            return py_trees.common.Status.FAILURE
+        if self._task_state.estop_requested():
+            self.feedback_message = "estop requested mid-read"
+            return py_trees.common.Status.FAILURE
+        reading = self._bridge.last_reading(self._pin, newer_than=self._baseline)
+        if reading is not None:
+            value = float(reading[0])
+            self._readings[self._key] = value
+            label = soil_label(value)
+            self._append_tts(f"{self._plant_name} reads {value:.0f} — {label}.")
+            self.feedback_message = f"{self._plant_name}: {value:.0f} ({label})"
+            return py_trees.common.Status.SUCCESS
+        if self._baseline is not None and (
+            time.monotonic() - self._baseline >= self._timeout_s
+        ):
+            self._readings[self._key] = None  # unknown read
+            self._append_tts(f"Couldn't read {self._plant_name}'s soil.")
+            self.feedback_message = "read timeout"
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.RUNNING
+
+
+class CheckDry(py_trees.behaviour.Behaviour):
+    """Condition: SUCCESS if this plant's stored reading says it needs water.
+
+    Dry (``value >= SOIL_DRY_ABOVE``) -> SUCCESS. Unknown (``None``, a failed
+    read) -> SUCCESS too: don't leave a plant thirsty because a read glitched.
+    Moist/wet -> FAILURE (the Selector falls through to :class:`NoteSkip`).
+    """
+
+    def __init__(self, readings: Dict[int, Optional[float]], key: int,
+                 dry_above: float = SOIL_DRY_ABOVE, name: Optional[str] = None):
+        super().__init__(name or f"CheckDry({key})")
+        self._readings = readings
+        self._key = int(key)
+        self._dry_above = float(dry_above)
+
+    def update(self):
+        value = self._readings.get(self._key)
+        if value is None:
+            self.feedback_message = "unknown read — watering to be safe"
+            return py_trees.common.Status.SUCCESS
+        if value >= self._dry_above:
+            self.feedback_message = f"dry ({value:.0f})"
+            return py_trees.common.Status.SUCCESS
+        self.feedback_message = f"moist enough ({value:.0f})"
+        return py_trees.common.Status.FAILURE
+
+
+class NoteSkip(py_trees.behaviour.Behaviour):
+    """Record that a plant was skipped (moist enough). Counts; always SUCCESS."""
+
+    def __init__(self, counters: Dict[str, Any], plant_name: str,
+                 name: Optional[str] = None):
+        super().__init__(name or f"Skip({plant_name})")
+        self._counters = counters
+        self._plant_name = plant_name
+
+    def update(self):
+        self._counters["skipped"] = self._counters.get("skipped", 0) + 1
+        self.feedback_message = f"skipped {self._plant_name} (moist)"
+        return py_trees.common.Status.SUCCESS
+
+
+class SummariseSmart(py_trees.behaviour.Behaviour):
+    """Speak the smart-water summary: how many were watered vs left moist."""
+
+    def __init__(self, counters: Dict[str, Any], total: int, target: str,
+                 name: str = "SummariseSmart"):
+        super().__init__(name)
+        self._counters = counters
+        self._total = int(total)
+        self._target = target
+        self.blackboard = self.attach_blackboard_client(name=name)
+        self.blackboard.register_key("tts_text", access=py_trees.common.Access.WRITE)
+
+    def update(self):
+        watered = int(self._counters.get("watered", 0))
+        skipped = int(self._counters.get("skipped", 0))
+        if watered == 0:
+            msg = (f"All {self._total} {self._target} were moist enough — "
+                   "none needed water.")
+        elif skipped == 0:
+            msg = f"Watered all {watered} {self._target} — they were dry."
+        else:
+            msg = (f"Watered {watered} of {self._total} {self._target}; "
+                   f"the other {skipped} were moist enough.")
+        try:
+            existing = self.blackboard.tts_text
+        except KeyError:
+            existing = ""
+        self.blackboard.tts_text = f"{existing} {msg}".strip()
+        self.feedback_message = msg
+        return py_trees.common.Status.SUCCESS
+
+
 # ---------- Tool-head change (UTM mount / unmount) ----------------------------
 
 # UTM tool-seated detection is on pin 63 (B–C bridge): 0 = a tool is mounted,

@@ -30,8 +30,8 @@ SCENARIOS: list[IntentRequest] = [
         client_id="sim",
     ),
     IntentRequest(
-        intents=[Intent(action="move", target="herbs", response="Moving to herbs.")],
-        raw_text="move to the herbs",
+        intents=[Intent(action="move", target="lettuce", response="Moving to the lettuce.")],
+        raw_text="move to the lettuce",
         client_id="sim",
     ),
     IntentRequest(
@@ -47,6 +47,12 @@ SCENARIOS: list[IntentRequest] = [
     IntentRequest(
         intents=[Intent(action="check_sensor", target="lettuce", response="Checking lettuce.")],
         raw_text="check on the lettuce",
+        client_id="sim",
+    ),
+    IntentRequest(
+        intents=[Intent(action="water_smart", target="marigold",
+                        response="Checking which marigolds need water.")],
+        raw_text="water the dry marigolds",
         client_id="sim",
     ),
     IntentRequest(
@@ -88,12 +94,17 @@ def main() -> int:
         print(f"  Status   : {result.status}")
         print(f"  Commands : {[r.command for r in bridge.command_log]}")
         print(f"  TTS      : {tts!r}")
-        if result.status == "failure" and "bananas" not in req.raw_text:
+        is_refusal = "bananas" in req.raw_text
+        if is_refusal:
+            # No-match is a CLEAN refusal: success + an "I don't see any" message,
+            # not a hard failure (Q-design — see _tree_water).
+            if result.status != "success" or "don't see" not in tts.lower():
+                failures += 1
+                print("  -> expected clean refusal (success + \"I don't see any\"), "
+                      f"got {result.status} / {tts!r}")
+        elif result.status == "failure":
             failures += 1
-            print(f"  -> UNEXPECTED FAILURE")
-        if "bananas" in req.raw_text and result.status != "failure":
-            failures += 1
-            print(f"  -> EXPECTED failure for unknown plant, got {result.status}")
+            print("  -> UNEXPECTED FAILURE")
 
     print(f"\n{'-' * 60}")
     print(f"Failures: {failures}/{len(SCENARIOS)}")

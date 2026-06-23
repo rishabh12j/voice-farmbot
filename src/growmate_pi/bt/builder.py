@@ -23,6 +23,7 @@ from growmate_pi.garden_config import GardenConfig
 from growmate_pi.schemas import Intent
 
 from growmate_pi.bt.action_nodes import (
+    CheckDry,
     CheckEstop,
     EmergencyStop,
     EnsureTool,
@@ -30,11 +31,14 @@ from growmate_pi.bt.action_nodes import (
     LogPlantEvent,
     MOVE_TIMEOUT_S,
     MoveTo,
+    NoteSkip,
     PUMP_TIMEOUT_S,
     PublishCmd,
     ReadSensor,
+    RecordSoil,
     Respond,
     StepNotify,
+    SummariseSmart,
     TaskBoundary,
     Wait,
 )
@@ -305,6 +309,111 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
     return _seq(label, *children)
 
 
+def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Phase 1b: read each target plant's soil, water only the dry ones.
+
+    Two passes — the soil probe and the watering nozzle are different tool heads,
+    so we don't swap per plant. Pass 1: mount the probe, visit each plant, read
+    soil (stored per plant). Pass 2: mount the nozzle, water only plants that
+    read dry (or that we couldn't read). Honest per-plant log + a summary of how
+    many were watered vs left moist. Same safety prefix + tick-and-verify as the
+    other water trees.
+
+    Falls back cleanly on no target / no map matches, like ``_tree_water``.
+    """
+    from growmate_pi.intent_server import find_plants_by_species
+
+    target = (intent.target or "").strip()
+    if not target:
+        return _seq(
+            "Water smart (no target)",
+            Respond("Tell me which plants to check, e.g. 'water the dry tomatoes'."),
+        )
+
+    matches = find_plants_by_species(target)
+    if not matches:
+        return _seq(
+            f"Water smart {target} (no match)",
+            Respond(f"I don't see any {target} in this garden. "
+                    "Tell me a different plant."),
+        )
+
+    def _plant_duration(p: Dict[str, Any]) -> int:
+        try:
+            return int(float(p.get("water_quantity") or 6.0))
+        except Exception:
+            return 6
+
+    tools = garden.tools_by_name()
+    task_id = _uuid.uuid4().hex[:8]
+    total = len(matches)
+    # Shared between the two passes: per-plant readings + watered/skipped tallies.
+    state: Dict[str, Any] = {"readings": {}, "watered": 0, "skipped": 0}
+    label = f"Smart-watering {total} {target}"
+
+    children: List[py_trees.behaviour.Behaviour] = [
+        TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
+                     name=f"BeginTask({total})"),
+        CheckAvailable(bridge),
+        Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
+        # --- Pass 1: sense every plant with the soil probe ---
+        EnsureTool(bridge, "soil_sensor", tools),
+    ]
+    for i, plant in enumerate(matches, start=1):
+        x, y = float(plant["x"]), float(plant["y"])
+        pname = str(plant.get("name") or f"plant {plant.get('index', '?')}")
+        pidx = int(plant.get("index", i))
+        children.extend([
+            CheckEstop(name=f"CheckEstop.sense({i})"),
+            StepNotify(i, f"checking {pname} ({i}/{total})", name=f"Sense({i}/{total})"),
+            MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   name=f"MoveTo.sense({pname})"),
+            RecordSoil(bridge, state["readings"], pidx, pname),
+        ])
+
+    # --- Pass 2: water only the dry ones with the nozzle ---
+    children.append(EnsureTool(bridge, "watering_nozzle", tools))
+    for i, plant in enumerate(matches, start=1):
+        x, y = float(plant["x"]), float(plant["y"])
+        pname = str(plant.get("name") or f"plant {plant.get('index', '?')}")
+        pidx = int(plant.get("index", i))
+        dur = _plant_duration(plant)
+
+        def _make_log_fn(p_idx: int, p_name: str) -> Callable[[], None]:
+            def _fn() -> None:
+                from growmate_pi.intent_server import _event_log
+                state["watered"] += 1
+                if _event_log is not None:
+                    _event_log.log(
+                        event_type="watered", plant_index=p_idx, plant_name=p_name,
+                        payload={"source": "water_smart", "task_id": task_id})
+            return _fn
+
+        water_seq = _seq(
+            f"WaterIfDry({pname})",
+            CheckDry(state["readings"], pidx, name=f"CheckDry({pname})"),
+            CheckEstop(name=f"CheckEstop.water({i})"),
+            StepNotify(i, f"watering {pname} ({i}/{total})", name=f"Water({i}/{total})"),
+            MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   name=f"MoveTo.water({pname})"),
+            PublishCmd("D_W_1", bridge, verify=True, timeout_s=PUMP_TIMEOUT_S,
+                       name=f"PumpOn({i})"),
+            Wait(dur, name=f"Pulse({dur}s, {i})"),
+            PublishCmd("D_W_0", bridge, verify=True, timeout_s=PUMP_TIMEOUT_S,
+                       name=f"PumpOff({i})"),
+            LogPlantEvent(_make_log_fn(pidx, pname), name=f"LogWatered({i})"),
+        )
+        # Selector: water if dry, else note the skip — either way SUCCESS so the
+        # parent sequence proceeds to the next plant.
+        per_plant = py_trees.composites.Selector(name=f"Plant({i}/{total})", memory=True)
+        per_plant.add_children([water_seq, NoteSkip(state, pname, name=f"Skip({pname})")])
+        children.append(per_plant)
+
+    children.append(SummariseSmart(state, total, target))
+    children.append(TaskBoundary("end", name="EndTask"))
+    return _seq(label, *children)
+
+
 def _tree_go_home(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     return _seq(
         "Go home",
@@ -431,6 +540,8 @@ def build_subtree(
         return _tree_water(bridge, garden, intent)
     if a == "water_all":
         return _tree_water_all(bridge, garden, intent)
+    if a == "water_smart":
+        return _tree_water_smart(bridge, garden, intent)
     if a == "go_home":
         return _tree_go_home(bridge, garden, intent)
     if a == "light_on":

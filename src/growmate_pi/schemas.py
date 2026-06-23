@@ -28,6 +28,7 @@ Action = Literal[
     "move",
     "water",
     "water_all",
+    "water_smart",
     "go_home",
     "light_on",
     "light_off",
