@@ -321,22 +321,30 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
 
     Falls back cleanly on no target / no map matches, like ``_tree_water``.
     """
-    from growmate_pi.intent_server import find_plants_by_species
+    from growmate_pi.intent_server import (
+        find_all_plants_in_garden,
+        find_plants_by_species,
+    )
 
     target = (intent.target or "").strip()
-    if not target:
-        return _seq(
-            "Water smart (no target)",
-            Respond("Tell me which plants to check, e.g. 'water the dry tomatoes'."),
-        )
-
-    matches = find_plants_by_species(target)
-    if not matches:
-        return _seq(
-            f"Water smart {target} (no match)",
-            Respond(f"I don't see any {target} in this garden. "
-                    "Tell me a different plant."),
-        )
+    if target:
+        matches = find_plants_by_species(target)
+        if not matches:
+            return _seq(
+                f"Water smart {target} (no match)",
+                Respond(f"I don't see any {target} in this garden. "
+                        "Tell me a different plant."),
+            )
+        scope = target
+    else:
+        # "water the dry ones" with no species -> check every plant.
+        matches = find_all_plants_in_garden()
+        if not matches:
+            return _seq(
+                "Water smart (empty map)",
+                Respond("I don't have any plants in the map to check."),
+            )
+        scope = "plants"
 
     def _plant_duration(p: Dict[str, Any]) -> int:
         try:
@@ -349,7 +357,7 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
     total = len(matches)
     # Shared between the two passes: per-plant readings + watered/skipped tallies.
     state: Dict[str, Any] = {"readings": {}, "watered": 0, "skipped": 0}
-    label = f"Smart-watering {total} {target}"
+    label = f"Smart-watering {total} {scope}"
 
     children: List[py_trees.behaviour.Behaviour] = [
         TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
@@ -409,7 +417,7 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         per_plant.add_children([water_seq, NoteSkip(state, pname, name=f"Skip({pname})")])
         children.append(per_plant)
 
-    children.append(SummariseSmart(state, total, target))
+    children.append(SummariseSmart(state, total, scope))
     children.append(TaskBoundary("end", name="EndTask"))
     return _seq(label, *children)
 

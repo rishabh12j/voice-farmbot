@@ -88,9 +88,10 @@ class OllamaClient:
             return None
 
 class AICore:
-    ACTIONS = ["move", "water", "water_all", "go_home", "light_on", "light_off",
-               "photo", "panorama", "scan_weeds", "check_sensor", "check_moisture",
-               "emergency_stop", "general_question"]
+    ACTIONS = ["move", "water", "water_all", "water_smart", "go_home",
+               "light_on", "light_off", "photo", "panorama", "scan_weeds",
+               "check_sensor", "check_moisture", "emergency_stop",
+               "general_question"]
 
     def __init__(self, config_path, model="gemma3:4b", ollama_url="http://localhost:11434"):
         self.garden = GardenConfig(config_path)
@@ -105,7 +106,7 @@ GARDEN MAP (use these exact names for targets):
 {self.garden.get_plant_list()}
 
 AVAILABLE ACTIONS:
-  ROBOT: move, water, water_all, go_home, light_on, light_off, photo, panorama, scan_weeds, check_sensor, check_moisture
+  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, check_sensor, check_moisture
   KNOWLEDGE: general_question
 
 OUTPUT FORMAT -- always return JSON:
@@ -120,6 +121,7 @@ RULES:
 6. "how is the soil at X" = check_sensor with target X
 7. "X and then Y" or "X then Y" = two intents: [X, Y]
 8. Each intent gets its own friendly response.
+9. "water the DRY/thirsty ones", "only water what needs it", "water X if it's dry" = water_smart (reads soil per plant, waters only the dry ones). Plain "water the X" / "water everything" stays water / water_all.
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
@@ -129,6 +131,9 @@ EXAMPLES:
 "how are the tomatoes looking" -> {{"intents": [{{"action":"check_sensor","target":"tomatoes","question":null,"response":"Let me check on the tomatoes."}}]}}
 "is the soil moist enough" -> {{"intents": [{{"action":"check_moisture","target":null,"question":null,"response":"Checking soil moisture."}}]}}
 "water everything" -> {{"intents": [{{"action":"water_all","target":null,"question":null,"response":"Watering all plants."}}]}}
+"water the dry tomatoes" -> {{"intents": [{{"action":"water_smart","target":"tomatoes","question":null,"response":"Checking which tomatoes are dry and watering those."}}]}}
+"only water the ones that need it" -> {{"intents": [{{"action":"water_smart","target":null,"question":null,"response":"Watering only the plants that are dry."}}]}}
+"water the thirsty plants" -> {{"intents": [{{"action":"water_smart","target":null,"question":null,"response":"Watering the dry ones."}}]}}
 "turn on lights" -> {{"intents": [{{"action":"light_on","target":null,"question":null,"response":"Lights on!"}}]}}
 "turn off lights" -> {{"intents": [{{"action":"light_off","target":null,"question":null,"response":"Lights off."}}]}}
 "take a photo" -> {{"intents": [{{"action":"photo","target":null,"question":null,"response":"Taking a photo."}}]}}
