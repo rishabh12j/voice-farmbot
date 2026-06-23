@@ -62,6 +62,19 @@ SCENARIOS: list[IntentRequest] = [
         client_id="sim",
     ),
     IntentRequest(
+        # No scan on record -> clean "scan first" (success).
+        intents=[Intent(action="find_plants", target=None, response="Finding plants.")],
+        raw_text="find the plants",
+        client_id="sim",
+    ),
+    IntentRequest(
+        # Nothing staged -> clean "find first" (success).
+        intents=[Intent(action="label_plants", target="left lettuce",
+                        response="Labeling.")],
+        raw_text="the left bed is lettuce",
+        client_id="sim",
+    ),
+    IntentRequest(
         intents=[
             Intent(action="water", target="tomatoes", response="Watering tomatoes."),
             Intent(action="go_home", target=None, response="Now heading home."),

@@ -36,6 +36,8 @@ Action = Literal[
     "panorama",
     "scan_weeds",
     "clear_weeds",
+    "find_plants",
+    "label_plants",
     "check_sensor",
     "check_moisture",
     "emergency_stop",

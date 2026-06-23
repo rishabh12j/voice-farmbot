@@ -560,6 +560,105 @@ def _tree_clear_weeds(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
     return _seq(label, *children)
 
 
+def _tree_find_plants(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Phase 2: stage vision-detected plants for voice labelling.
+
+    Reads the last scan's detections (find_detected_plants -> robot mm), stores
+    them as 'pending', and asks the user to name them by region. Species comes
+    from the follow-up label_plants ("the left bed is lettuce"); vision supplied
+    position + canopy size. If nothing's detected, asks for a scan first.
+    """
+    from growmate_pi.intent_server import find_detected_plants, write_pending_plants
+
+    plants = find_detected_plants()
+    if not plants:
+        return _seq(
+            "Find plants (none detected)",
+            CheckAvailable(bridge),
+            Respond("I don't see any detected plants yet — scan the bed first, "
+                    "then ask me to find the plants."),
+        )
+    write_pending_plants(plants)
+    n = len(plants)
+    return _seq(
+        f"Find plants ({n})",
+        CheckAvailable(bridge),
+        Respond(f"I found {n} plants. Tell me what they are — for example, "
+                f"'the left bed is lettuce' or 'they're all tomatoes'."),
+    )
+
+
+def _tree_label_plants(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Phase 2: assign a species to a region of pending plants and add them.
+
+    Pairs with find_plants: takes a species (intent.target / params['species'])
+    and an optional region (params['region']: left/middle/right/front/back/all),
+    selects the matching pending plants, adds each to the map via P_1, and drops
+    them from pending. Repeat until the map is built. The species the user speaks;
+    vision already gave the position + canopy size.
+    """
+    from growmate_pi.intent_server import (
+        filter_plants_by_region,
+        read_pending_plants,
+        write_pending_plants,
+    )
+
+    # Keep the LLM flat: it puts the whole phrase in `target` (e.g. "left
+    # lettuce", "all tomatoes", "mixed pepper"); parse region + species here.
+    _REGIONS = {"left", "leftmost", "right", "rightmost", "middle", "centre",
+                "center", "front", "back", "all", "everything", "rest"}
+    _FILLERS = {"the", "bed", "beds", "is", "are", "be", "they", "they're",
+                "them", "ones", "one", "plants", "plant", "row", "section", "a"}
+    raw = str(intent.target or (intent.params or {}).get("species") or "").lower()
+    region = (intent.params or {}).get("region")  # explicit param wins if present
+    species_tokens = []
+    for tok in raw.replace(",", " ").split():
+        if tok in _REGIONS and region is None:
+            region = tok
+        elif tok not in _FILLERS:
+            species_tokens.append(tok)
+    species = " ".join(species_tokens).strip()
+
+    pending = read_pending_plants()
+    if not pending:
+        return _seq(
+            "Label plants (nothing pending)",
+            Respond("There's nothing to label yet — say 'find the plants' first."),
+        )
+    if not species:
+        return _seq(
+            "Label plants (no species)",
+            Respond("Tell me the species too, like 'the left bed is lettuce'."),
+        )
+
+    selected = filter_plants_by_region(pending, region, garden.workspace)
+    if not selected:
+        where = f"the {region}" if region else "that area"
+        return _seq(
+            "Label plants (region empty)",
+            Respond(f"I don't have any plants to label in {where}."),
+        )
+
+    # P_1 plant_name is space-split by the controller, so keep it one token.
+    name = species.replace(" ", "_")
+    children: List[py_trees.behaviour.Behaviour] = [CheckAvailable(bridge)]
+    for p in selected:
+        # P_1 x y z exclusion_r canopy_r water_qty max_z plant_name growth_stage
+        cmd = (f"P_1 {p['x']:.1f} {p['y']:.1f} 0.0 50.0 "
+               f"{float(p.get('radius', 30.0)):.1f} 2.0 100.0 {name} Seedling")
+        children.append(PublishCmd(cmd, bridge,
+                                   name=f"AddPlant({p['x']:.0f},{p['y']:.0f})"))
+
+    remaining = [p for p in pending if p not in selected]
+    write_pending_plants(remaining)
+
+    added, left = len(selected), len(remaining)
+    msg = f"Added {added} {species}."
+    msg += f" {left} plants left to label." if left else " That's everything — map updated."
+    children.append(Respond(msg, name="Summarise"))
+    return _seq(f"Label {added} as {species}", *children)
+
+
 def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     # The soil probe is a tool head — make sure it's mounted before reading
     # (no-op if it already is). Move to the plant afterwards so the probe goes
@@ -646,6 +745,10 @@ def build_subtree(
         return _tree_scan_weeds(bridge, intent)
     if a == "clear_weeds":
         return _tree_clear_weeds(bridge, garden, intent)
+    if a == "find_plants":
+        return _tree_find_plants(bridge, garden, intent)
+    if a == "label_plants":
+        return _tree_label_plants(bridge, garden, intent)
     if a == "check_sensor":
         return _tree_check_sensor(bridge, garden, intent)
     if a == "check_moisture":

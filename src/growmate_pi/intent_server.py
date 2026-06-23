@@ -292,6 +292,79 @@ def find_weeds() -> List[Dict[str, Any]]:
     return _snake_order(weeds)
 
 
+def find_detected_plants() -> List[Dict[str, Any]]:
+    """Every detected canopy (robot mm) from the last scan, deduped + snake-ordered.
+
+    Reads the plant-detection output (other_plants.yaml + known_plants.yaml,
+    written by I_4) and merges them — when building a map every green circle is a
+    candidate plant. Dedups detections that overlap (same plant seen in adjacent
+    camera FOVs). Empty if no scan has run.
+    """
+    out: List[Dict[str, Any]] = []
+    for fname in ("other_plants.yaml", "known_plants.yaml"):
+        path = _camera_handler_config(fname)
+        if path is None:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = _yaml.safe_load(f) or []
+        except Exception:
+            continue
+        for entry in data:
+            try:
+                (cx, cy), radius = entry[0], entry[1]
+                out.append({"x": float(cx), "y": float(cy), "radius": float(radius)})
+            except Exception:
+                continue
+    deduped: List[Dict[str, Any]] = []
+    for p in out:
+        r = max(p["radius"], 50.0)
+        if not any((p["x"] - q["x"]) ** 2 + (p["y"] - q["y"]) ** 2 < r * r
+                   for q in deduped):
+            deduped.append(p)
+    return _snake_order(deduped)
+
+
+# --- Voice plant-labelling: staged ("pending") detections between find_plants
+# and label_plants. Per-Pi state (not in git), inspectable. -------------------
+_PENDING_PLANTS_PATH = Path.home() / ".growmate_pi" / "pending_plants.yaml"
+
+
+def read_pending_plants() -> List[Dict[str, Any]]:
+    try:
+        with open(_PENDING_PLANTS_PATH, "r", encoding="utf-8") as f:
+            return _yaml.safe_load(f) or []
+    except Exception:
+        return []
+
+
+def write_pending_plants(plants: List[Dict[str, Any]]) -> None:
+    _PENDING_PLANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_PENDING_PLANTS_PATH, "w", encoding="utf-8") as f:
+        _yaml.safe_dump(list(plants), f)
+
+
+def filter_plants_by_region(plants: List[Dict[str, Any]], region: Optional[str],
+                            workspace: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Select pending plants by a spoken region word. None/'all' -> everything."""
+    r = (region or "").lower().strip()
+    if not r or r in ("all", "everything", "the rest", "rest", "them", "the lot"):
+        return list(plants)
+    x_max = float(workspace.get("x_max", 5691.2))
+    y_max = float(workspace.get("y_max", 2734.0))
+    if any(k in r for k in ("left", "leftmost")):
+        return [p for p in plants if p["x"] < x_max / 3.0]
+    if any(k in r for k in ("right", "rightmost")):
+        return [p for p in plants if p["x"] > 2.0 * x_max / 3.0]
+    if any(k in r for k in ("middle", "centre", "center")):
+        return [p for p in plants if x_max / 3.0 <= p["x"] <= 2.0 * x_max / 3.0]
+    if "front" in r:
+        return [p for p in plants if p["y"] < y_max / 2.0]
+    if "back" in r:
+        return [p for p in plants if p["y"] >= y_max / 2.0]
+    return []  # unknown region word -> nothing; caller reports
+
+
 def list_species_in_garden() -> List[str]:
     """All distinct plant species/type slugs currently in the active map.
 
