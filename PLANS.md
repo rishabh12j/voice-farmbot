@@ -56,10 +56,22 @@ Every new capability MUST preserve these, or it undermines the contribution:
 - **Live map** — gantry marker tracks the robot via `/uart_receive` R82
   (target-snap in sim).
 - **Multi-plant watering** with progress overlay + e-stop, honest per-plant log.
+- **Snake (boustrophedon) traversal** — `water_all`/species water walk plants
+  band-by-X, alternating Y, for the shortest deterministic gantry path.
+- **Per-greenhouse scheduler + single launch** (`greenhouse.launch.py`,
+  `scheduler:=false` for tool work).
+- **Hardware bringup on two FarmBots** (gh1 + farmbotdev): fixed the sim-vs-real
+  bridge fallback (PYTHONPATH), the UART UTF-8 decode crash, and the
+  tool-sequencer release-direction bug.
+- **Tool-head layer** built (MountTool/UnmountTool/EnsureTool/CheckToolMounted)
+  and **gh1 tool bays calibrated + registered** (soil_sensor, watering_nozzle).
+- **Camera working on gh1**: `I_0` circle-grid calibration succeeds
+  (`camera_calibration.yaml`), `I_1`/`I_2` panorama stitches at a sane
+  downscaled map resolution (was a gigapixel canvas).
 
 Capabilities today: move, jog, water `<species>`, water_all, go_home, lights,
-photo, panorama, scan_weeds (detect only), check_sensor (publishes, no value),
-check_moisture, emergency_stop.
+photo, panorama (working), scan_weeds (detect only), check_sensor, check_moisture,
+emergency_stop, tool mount/unmount (sim + bays registered).
 
 ---
 
@@ -76,6 +88,13 @@ The gate/map were sim-verified; make them honest on gh1.
 - Confirm `R82` cadence; tune the live-map poll if it streams.
 - **Flip `_MEMORY_FEATURES_ENABLED` ON** once a watered row only appears after firmware completion (today's-care + plant-query fast-path re-armed). 🖥
 - **Exit:** event log is provably honest; memory features back on.
+
+> **⬅ CURRENT FOCUS (2026-06):** Phase 1b `water_smart` is being built + sim-
+> verified now (hardware-free). Phase 2 camera is largely done on gh1
+> (calibration + panorama); remaining: confirm `I_4` weed-detect returns
+> coordinates. Phase 3 tool layer is built + gh1 bays registered; remaining:
+> confirm `T_1_1` physically mounts on hardware (test on farmbotdev). Next
+> convergence point is Phase 3 `clear_weeds` (needs camera detect + tool mount).
 
 ### Phase 1 — Water, made smart (~1.5 weeks)  ← NEXT
 Two sub-steps; the sensor plumbing here is the foundation everything later
@@ -119,10 +138,12 @@ Reuses tool management; adds plant lifecycle.
 | Water (rigid) | ✅ | ✅ | ✅ | done |
 | Lights / photo / panorama | ✅ | ✅ | ✅ | done |
 | Weed **detect** | ✅ | ✅ | ✅ | done |
-| Soil moisture **read** | ✅ | ✅ | ⚠️ no value | **Phase 1a** |
-| Moisture-aware watering | ✅ | ✅ (`P_5`) | ❌ | **Phase 1b** |
+| Soil moisture **read** | ✅ | ✅ | ⚠️ sim (R41 parsed) | **Phase 1a** |
+| Moisture-aware watering | ✅ | ✅ (`P_5`) | 🔨 building (`water_smart`) | **Phase 1b** |
+| Camera calibration | ✅ | ✅ | ✅ (`I_0`) | done |
+| Panorama stitch | ✅ | ✅ | ✅ (downscaled) | done |
 | Plant detection / soil height | ✅ | ⚠️ partial | ❌ | **Phase 2** |
-| Tool mount / swap | ✅ | ✅ (`T_n`) | ❌ | **Phase 3** |
+| Tool mount / swap | ✅ | ✅ (`T_n`) | ⚠️ sim + gh1 bays registered | **Phase 3** |
 | Weed **removal** | ✅ | ❌ | ❌ | **Phase 3** |
 | Seeding | ✅ | ✅ (`P_3`) | ❌ | **Phase 4** |
 | Scheduled regimens | ✅ | ⚠️ basic | ⚠️ basic | **Phase 5** |
