@@ -8,6 +8,13 @@ from sensor_msgs.msg import Image
 import math
 from rclpy.node import Node
 
+# Panorama map resolution (mm per MAP pixel). The camera's coord_scale can be
+# very fine (sub-mm/px), which would make a full-bed canvas gigapixel-sized and
+# impossible to write. The map is rendered at this coarser resolution and each
+# camera frame is downscaled to match. Lower = sharper map but bigger/slower.
+MAP_MM_PER_PX = 2.0
+
+
 class Panorama:
     '''
     Class used for taking pictures from the farmbot and stitching them into
@@ -103,12 +110,13 @@ class Panorama:
 
                 self.node_.get_logger().info('Loading map dimensions from active map file')
         
-        # Set the map size relative to pixels
-        self.map_size_x_px = int(self.map_x / self.config_data['coord_scale'])
-        self.map_size_y_px = int(self.map_y / self.config_data['coord_scale'])
-        
-        x_px = int(x / self.config_data['coord_scale'])
-        y_px = int(y / self.config_data['coord_scale'])
+        # Map canvas size + placement use the (coarse) map resolution, not the
+        # camera's fine coord_scale, so the full-bed canvas stays a sane size.
+        self.map_size_x_px = int(self.map_x / MAP_MM_PER_PX)
+        self.map_size_y_px = int(self.map_y / MAP_MM_PER_PX)
+
+        x_px = int(x / MAP_MM_PER_PX)
+        y_px = int(y / MAP_MM_PER_PX)
         
         if self.rgb_image_ is None:
             self.node_.get_logger().warn('RGB image is not available.')
@@ -122,8 +130,15 @@ class Panorama:
         if processed_image.shape[2] != 4:
             processed_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2BGRA)
 
+        # Downscale the camera frame from its (fine) coord_scale to the (coarse)
+        # map resolution so it pastes at the correct physical size on the map.
+        map_scale = self.config_data['coord_scale'] / MAP_MM_PER_PX
+        if map_scale < 0.999:
+            processed_image = cv2.resize(processed_image, None, fx=map_scale,
+                                         fy=map_scale, interpolation=cv2.INTER_AREA)
+
         # Get the dimensions of the processed image
-        new_img_height, new_img_width = processed_image.shape[:2] 
+        new_img_height, new_img_width = processed_image.shape[:2]
         
         if new_img_width == 0 or new_img_height == 0:
             self.node_.get_logger().warn('Processed image has zero width or height.')
