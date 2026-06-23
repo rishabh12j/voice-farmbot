@@ -252,6 +252,46 @@ def find_all_plants_in_garden() -> List[Dict[str, Any]]:
     return _snake_order(plants)
 
 
+def _camera_handler_config(filename: str) -> Optional[Path]:
+    """Locate a file in the camera_handler config dir (install share or src)."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        cand = Path(get_package_share_directory("camera_handler")) / "config" / filename
+        if cand.exists():
+            return cand
+    except Exception:
+        pass
+    here = Path(__file__).resolve()
+    cand = here.parents[1] / "camera_handler" / "camera_handler" / "config" / filename
+    return cand if cand.exists() else None
+
+
+def find_weeds() -> List[Dict[str, Any]]:
+    """Weed coordinates (robot mm) from the last detection (other_plants.yaml).
+
+    Weed detection (I_4) appends circles ``[[x, y], radius, is_known(False),
+    within100]`` in robot coordinates. Returns ``[{x, y, radius}]`` snake-ordered
+    for the shortest removal pass. Empty if no detection has run yet — the
+    clear_weeds tree then asks the user to scan first.
+    """
+    path = _camera_handler_config("other_plants.yaml")
+    if path is None:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _yaml.safe_load(f) or []
+    except Exception:
+        return []
+    weeds: List[Dict[str, Any]] = []
+    for entry in data:
+        try:
+            (cx, cy), radius = entry[0], entry[1]
+            weeds.append({"x": float(cx), "y": float(cy), "radius": float(radius)})
+        except Exception:
+            continue
+    return _snake_order(weeds)
+
+
 def list_species_in_garden() -> List[str]:
     """All distinct plant species/type slugs currently in the active map.
 

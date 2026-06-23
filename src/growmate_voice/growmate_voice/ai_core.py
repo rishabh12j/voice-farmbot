@@ -90,7 +90,7 @@ class OllamaClient:
 class AICore:
     ACTIONS = ["move", "water", "water_all", "water_smart", "go_home",
                "light_on", "light_off", "photo", "panorama", "scan_weeds",
-               "check_sensor", "check_moisture", "emergency_stop",
+               "clear_weeds", "check_sensor", "check_moisture", "emergency_stop",
                "general_question"]
 
     def __init__(self, config_path, model="gemma3:4b", ollama_url="http://localhost:11434"):
@@ -106,7 +106,7 @@ GARDEN MAP (use these exact names for targets):
 {self.garden.get_plant_list()}
 
 AVAILABLE ACTIONS:
-  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, check_sensor, check_moisture
+  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, check_sensor, check_moisture
   KNOWLEDGE: general_question
 
 OUTPUT FORMAT -- always return JSON:
@@ -122,6 +122,7 @@ RULES:
 7. "X and then Y" or "X then Y" = two intents: [X, Y]
 8. Each intent gets its own friendly response.
 9. "water the DRY/thirsty ones", "only water what needs it", "water X if it's dry" = water_smart (reads soil per plant, waters only the dry ones). Plain "water the X" / "water everything" stays water / water_all.
+10. "scan/look/check for weeds" = scan_weeds (detect only). "clear/pull/remove/get rid of the weeds", "do the weeding" = clear_weeds (physically removes detected weeds).
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
@@ -138,6 +139,9 @@ EXAMPLES:
 "turn off lights" -> {{"intents": [{{"action":"light_off","target":null,"question":null,"response":"Lights off."}}]}}
 "take a photo" -> {{"intents": [{{"action":"photo","target":null,"question":null,"response":"Taking a photo."}}]}}
 "scan for weeds" -> {{"intents": [{{"action":"scan_weeds","target":null,"question":null,"response":"Scanning for weeds."}}]}}
+"clear the weeds" -> {{"intents": [{{"action":"clear_weeds","target":null,"question":null,"response":"Clearing the weeds."}}]}}
+"pull the weeds in bed 2" -> {{"intents": [{{"action":"clear_weeds","target":"bed 2","question":null,"response":"Removing the weeds."}}]}}
+"scan for weeds then clear them" -> {{"intents": [{{"action":"scan_weeds","target":null,"question":null,"response":"Scanning first."}},{{"action":"clear_weeds","target":null,"question":null,"response":"Now clearing them."}}]}}
 "check moisture levels" -> {{"intents": [{{"action":"check_moisture","target":null,"question":null,"response":"Checking moisture."}}]}}
 "when should I plant basil" -> {{"intents": [{{"action":"general_question","target":"basil","question":"When should I plant basil in {self.garden.location_context}?","response":"Let me look that up."}}]}}
 "the tomatoes look thirsty" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Tomatoes need water, on it!"}}]}}

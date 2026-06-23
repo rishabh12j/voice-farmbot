@@ -36,6 +36,11 @@ MOVE_TIMEOUT_S = 90.0
 PUMP_TIMEOUT_S = 15.0
 HOME_TIMEOUT_S = 120.0
 
+# Depth (mm, negative = into soil) the weeder plunges to uproot a weed. Needs
+# FIELD CALIBRATION per bed/tool; conservative default. clear_weeds: move over
+# the weed at z=0 -> plunge to this -> raise back to z=0.
+WEED_PLUNGE_Z = -150.0
+
 # Soil sensor — Farmduino analog pin 59. The raw 0–1023 reading's polarity/scale
 # need FIELD CALIBRATION; default assumption here is "higher = drier". Tune
 # SOIL_DRY_ABOVE / SOIL_WET_BELOW once measured on gh1.

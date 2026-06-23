@@ -56,6 +56,12 @@ SCENARIOS: list[IntentRequest] = [
         client_id="sim",
     ),
     IntentRequest(
+        # No detection on record -> clean "scan first" refusal (success).
+        intents=[Intent(action="clear_weeds", target=None, response="Clearing weeds.")],
+        raw_text="clear the weeds",
+        client_id="sim",
+    ),
+    IntentRequest(
         intents=[
             Intent(action="water", target="tomatoes", response="Watering tomatoes."),
             Intent(action="go_home", target=None, response="Now heading home."),

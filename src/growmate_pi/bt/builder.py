@@ -41,6 +41,7 @@ from growmate_pi.bt.action_nodes import (
     SummariseSmart,
     TaskBoundary,
     Wait,
+    WEED_PLUNGE_Z,
 )
 from growmate_pi.bt.condition_nodes import (
     CheckAvailable,
@@ -478,6 +479,87 @@ def _tree_scan_weeds(bridge, intent: Intent) -> py_trees.behaviour.Behaviour:
     )
 
 
+def _tree_clear_weeds(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Phase 3: physically remove detected weeds with the weeder tool.
+
+    Reads the weeds from the last detection (``find_weeds`` -> other_plants.yaml,
+    robot mm), mounts the weeder, and for each in-bounds weed: move over it at
+    z=0 -> plunge to WEED_PLUNGE_Z -> raise. Honest per-weed log + a summary.
+    If no weeds are on record it asks for a scan first rather than guessing.
+    Full safety prefix + tick-and-verify on every move, e-stop checkpoints.
+    """
+    from growmate_pi.intent_server import find_weeds
+
+    weeds = find_weeds()
+    if not weeds:
+        return _seq(
+            "Clear weeds (none on record)",
+            CheckAvailable(bridge),
+            Respond("I don't have any weeds on record yet — say 'scan for weeds' "
+                    "first, then ask me to clear them."),
+        )
+
+    # Detection can occasionally place a circle off-bed; only act on in-bounds
+    # weeds (safety — the BT never drives the gantry out of the workspace).
+    x_max = float(garden.workspace.get("x_max", 5691.2))
+    y_max = float(garden.workspace.get("y_max", 2734.0))
+    in_bounds = [w for w in weeds if 0.0 <= w["x"] <= x_max and 0.0 <= w["y"] <= y_max]
+    skipped_oob = len(weeds) - len(in_bounds)
+    if not in_bounds:
+        return _seq(
+            "Clear weeds (all out of bounds)",
+            CheckAvailable(bridge),
+            Respond("The weeds I found are outside the bed bounds — skipping for "
+                    "safety. Try scanning again."),
+        )
+
+    tools = garden.tools_by_name()
+    task_id = _uuid.uuid4().hex[:8]
+    total = len(in_bounds)
+    label = f"Clearing {total} weeds"
+
+    children: List[py_trees.behaviour.Behaviour] = [
+        TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
+                     name=f"BeginTask({total})"),
+        CheckAvailable(bridge),
+        Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
+        EnsureTool(bridge, "weeder", tools),
+    ]
+
+    for i, weed in enumerate(in_bounds, start=1):
+        x, y = weed["x"], weed["y"]
+
+        def _make_log_fn(wx: float, wy: float) -> Callable[[], None]:
+            def _fn() -> None:
+                from growmate_pi.intent_server import _event_log
+                if _event_log is not None:
+                    _event_log.log(
+                        event_type="weeded", plant_index=0,
+                        plant_name=f"weed @({wx:.0f},{wy:.0f})",
+                        payload={"source": "clear_weeds", "task_id": task_id,
+                                 "x": wx, "y": wy})
+            return _fn
+
+        children.extend([
+            CheckEstop(name=f"CheckEstop({i})"),
+            StepNotify(i, f"weed {i}/{total}", name=f"Weed({i}/{total})"),
+            MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   name=f"OverWeed({i})"),
+            MoveTo(bridge, x=x, y=y, z=WEED_PLUNGE_Z, verify=True,
+                   timeout_s=MOVE_TIMEOUT_S, name=f"Plunge({i})"),
+            MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   name=f"Raise({i})"),
+            LogPlantEvent(_make_log_fn(x, y), name=f"LogWeeded({i})"),
+        ])
+
+    summary = f"Cleared {total} weeds."
+    if skipped_oob:
+        summary += f" Skipped {skipped_oob} outside the bed."
+    children.append(Respond(summary, name="Summarise"))
+    children.append(TaskBoundary("end", name="EndTask"))
+    return _seq(label, *children)
+
+
 def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     # The soil probe is a tool head — make sure it's mounted before reading
     # (no-op if it already is). Move to the plant afterwards so the probe goes
@@ -562,6 +644,8 @@ def build_subtree(
         return _tree_panorama(bridge, intent)
     if a == "scan_weeds":
         return _tree_scan_weeds(bridge, intent)
+    if a == "clear_weeds":
+        return _tree_clear_weeds(bridge, garden, intent)
     if a == "check_sensor":
         return _tree_check_sensor(bridge, garden, intent)
     if a == "check_moisture":
