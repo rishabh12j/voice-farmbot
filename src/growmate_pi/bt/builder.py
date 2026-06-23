@@ -57,6 +57,16 @@ from growmate_pi.bt.condition_nodes import (
 # estop during this window still halts within one tick.
 _ANNOUNCE_PAUSE_S = 2.5
 
+# Bed-scan grid (scan_bed). Step ~= camera FOV at the calibration height so the
+# whole bed is covered; SCAN_Z MUST match the I_0 calibration height or the
+# pixel->mm scale won't hold. Slow (small FOV) — a one-time setup; cap the extent
+# via SCAN_MAX_*_MM for quick/partial runs.
+SCAN_STEP_MM = 160.0
+SCAN_Z = -250.0
+SCAN_DWELL_S = 2.0       # let detection finish at a static spot before moving on
+SCAN_MAX_X_MM: Optional[float] = None
+SCAN_MAX_Y_MM: Optional[float] = None
+
 
 def _seq(name: str, *children) -> py_trees.composites.Sequence:
     s = py_trees.composites.Sequence(name=name, memory=True)
@@ -560,6 +570,61 @@ def _tree_clear_weeds(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
     return _seq(label, *children)
 
 
+def _tree_scan_bed(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Phase 2: scan the bed, detecting plants at each grid position.
+
+    Walks a snake grid at SCAN_STEP_MM: MoveTo (verified) -> I_4 (detect at the
+    current position) -> short dwell, so the detection output accumulates plant
+    positions across the whole bed. Clears the previous scan first. Feeds
+    find_plants -> voice labelling. Slow (the camera FOV is small) — a one-time
+    map-setup pass; cap the extent with SCAN_MAX_*_MM for quick/partial runs.
+    """
+    import math as _math
+    from growmate_pi.intent_server import clear_detections
+
+    x_max = float(garden.workspace.get("x_max", 5691.2))
+    y_max = float(garden.workspace.get("y_max", 2734.0))
+    if SCAN_MAX_X_MM is not None:
+        x_max = min(x_max, SCAN_MAX_X_MM)
+    if SCAN_MAX_Y_MM is not None:
+        y_max = min(y_max, SCAN_MAX_Y_MM)
+
+    nx = max(1, int(_math.ceil(x_max / SCAN_STEP_MM)))
+    ny = max(1, int(_math.ceil(y_max / SCAN_STEP_MM)))
+    positions: List[tuple] = []
+    for ix in range(nx + 1):
+        x = min(ix * SCAN_STEP_MM, x_max)
+        rows = range(ny + 1) if ix % 2 == 0 else range(ny, -1, -1)  # snake
+        for iy in rows:
+            positions.append((x, min(iy * SCAN_STEP_MM, y_max)))
+
+    clear_detections()  # start the scan from a clean slate
+    task_id = _uuid.uuid4().hex[:8]
+    total = len(positions)
+    label = f"Scanning the bed ({total} spots)"
+
+    children: List[py_trees.behaviour.Behaviour] = [
+        TaskBoundary("start", task_id=task_id, label=label, total_steps=total,
+                     name=f"BeginTask({total})"),
+        CheckAvailable(bridge),
+        Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
+    ]
+    for i, (x, y) in enumerate(positions, start=1):
+        children.extend([
+            CheckEstop(name=f"CheckEstop({i})"),
+            StepNotify(i, f"scanning {i}/{total}", name=f"Scan({i}/{total})"),
+            MoveTo(bridge, x=x, y=y, z=SCAN_Z, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   name=f"MoveTo.scan({i})"),
+            PublishCmd("I_4", bridge, name=f"Detect({i})"),
+            Wait(SCAN_DWELL_S, name=f"Dwell({i})"),
+        ])
+    children.append(Respond(
+        "I've scanned the bed. Say 'find the plants' to label what I found.",
+        name="Summarise"))
+    children.append(TaskBoundary("end", name="EndTask"))
+    return _seq(label, *children)
+
+
 def _tree_find_plants(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     """Phase 2: stage vision-detected plants for voice labelling.
 
@@ -745,6 +810,8 @@ def build_subtree(
         return _tree_scan_weeds(bridge, intent)
     if a == "clear_weeds":
         return _tree_clear_weeds(bridge, garden, intent)
+    if a == "scan_bed":
+        return _tree_scan_bed(bridge, garden, intent)
     if a == "find_plants":
         return _tree_find_plants(bridge, garden, intent)
     if a == "label_plants":

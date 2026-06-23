@@ -90,8 +90,9 @@ class OllamaClient:
 class AICore:
     ACTIONS = ["move", "water", "water_all", "water_smart", "go_home",
                "light_on", "light_off", "photo", "panorama", "scan_weeds",
-               "clear_weeds", "find_plants", "label_plants", "check_sensor",
-               "check_moisture", "emergency_stop", "general_question"]
+               "clear_weeds", "scan_bed", "find_plants", "label_plants",
+               "check_sensor", "check_moisture", "emergency_stop",
+               "general_question"]
 
     def __init__(self, config_path, model="gemma3:4b", ollama_url="http://localhost:11434"):
         self.garden = GardenConfig(config_path)
@@ -106,7 +107,7 @@ GARDEN MAP (use these exact names for targets):
 {self.garden.get_plant_list()}
 
 AVAILABLE ACTIONS:
-  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, find_plants, label_plants, check_sensor, check_moisture
+  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture
   KNOWLEDGE: general_question
 
 OUTPUT FORMAT -- always return JSON:
@@ -123,7 +124,7 @@ RULES:
 8. Each intent gets its own friendly response.
 9. "water the DRY/thirsty ones", "only water what needs it", "water X if it's dry" = water_smart (reads soil per plant, waters only the dry ones). Plain "water the X" / "water everything" stays water / water_all.
 10. "scan/look/check for weeds" = scan_weeds (detect only). "clear/pull/remove/get rid of the weeds", "do the weeding" = clear_weeds (physically removes detected weeds).
-11. "find/map the plants", "set up the map" = find_plants (vision finds plant positions to label). Then labelling replies like "the left bed is lettuce", "they're all tomatoes", "the middle are scallions" = label_plants, with target = the region+species phrase exactly ("left lettuce", "all tomatoes", "middle scallions"). Region words: left/middle/right/front/back/all.
+11. Map building flow: "scan the bed", "map the bed", "set up the map" = scan_bed (camera scans the bed to detect plants). Then "find the plants", "what did you find" = find_plants (stage detections for labelling). Then labelling replies like "the left bed is lettuce", "they're all tomatoes", "the middle are scallions" = label_plants, with target = the region+species phrase exactly ("left lettuce", "all tomatoes", "middle scallions"). Region words: left/middle/right/front/back/all.
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
@@ -143,6 +144,7 @@ EXAMPLES:
 "clear the weeds" -> {{"intents": [{{"action":"clear_weeds","target":null,"question":null,"response":"Clearing the weeds."}}]}}
 "pull the weeds in bed 2" -> {{"intents": [{{"action":"clear_weeds","target":"bed 2","question":null,"response":"Removing the weeds."}}]}}
 "scan for weeds then clear them" -> {{"intents": [{{"action":"scan_weeds","target":null,"question":null,"response":"Scanning first."}},{{"action":"clear_weeds","target":null,"question":null,"response":"Now clearing them."}}]}}
+"scan the bed" -> {{"intents": [{{"action":"scan_bed","target":null,"question":null,"response":"Scanning the bed for plants."}}]}}
 "find the plants" -> {{"intents": [{{"action":"find_plants","target":null,"question":null,"response":"Let me find the plants."}}]}}
 "the left bed is lettuce" -> {{"intents": [{{"action":"label_plants","target":"left lettuce","question":null,"response":"Labeling the left as lettuce."}}]}}
 "they're all tomatoes" -> {{"intents": [{{"action":"label_plants","target":"all tomatoes","question":null,"response":"Labeling them all as tomatoes."}}]}}

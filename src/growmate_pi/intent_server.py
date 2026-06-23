@@ -325,6 +325,17 @@ def find_detected_plants() -> List[Dict[str, Any]]:
     return _snake_order(deduped)
 
 
+def clear_detections() -> None:
+    """Delete the previous scan's detection files so a new scan starts fresh."""
+    for fname in ("other_plants.yaml", "known_plants.yaml"):
+        path = _camera_handler_config(fname)
+        if path is not None:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
 # --- Voice plant-labelling: staged ("pending") detections between find_plants
 # and label_plants. Per-Pi state (not in git), inspectable. -------------------
 _PENDING_PLANTS_PATH = Path.home() / ".growmate_pi" / "pending_plants.yaml"
