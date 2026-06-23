@@ -14,7 +14,13 @@ ROS-side bringup and the venv-side services together.
 Run (after sourcing ROS 2 + the Rishabh workspace IN THE RIGHT ORDER — see
 RUN_GUIDE 1.3a):
 
-    ros2 launch ./launch/greenhouse.launch.py
+    ros2 launch ./launch/greenhouse.launch.py                       # gh1 (default)
+
+Pick the greenhouse with the `config` arg (per-greenhouse plants / tool-bay
+positions / location / schedule):
+
+    ros2 launch ./launch/greenhouse.launch.py \
+        config:=$PWD/src/growmate_pi/config/farmbotdev.yaml        # the other one
 
 Override paths/port if your layout differs, e.g.:
 
@@ -53,6 +59,7 @@ def generate_launch_description() -> LaunchDescription:
     venv_python = LaunchConfiguration("venv_python")
     src = LaunchConfiguration("src")
     port = LaunchConfiguration("port")
+    config = LaunchConfiguration("config")
 
     # PREPEND src to the inherited PYTHONPATH — do NOT replace it, or we lose the
     # ROS python path (rclpy) and the intent server silently falls back to sim.
@@ -74,6 +81,13 @@ def generate_launch_description() -> LaunchDescription:
             description="Intent server port (scheduler talks to localhost:port).",
         ),
         DeclareLaunchArgument(
+            "config",
+            default_value=os.path.join(_REPO, "src", "growmate_pi", "config", "gh1.yaml"),
+            description="Per-greenhouse config — gh1.yaml (default) or "
+                        "farmbotdev.yaml. Sets plants, tool-bay positions, "
+                        "location, schedule. e.g. config:=.../farmbotdev.yaml.",
+        ),
+        DeclareLaunchArgument(
             "scheduler", default_value="true",
             description="Run the daily watering scheduler. Set false to bring up "
                         "bringup + intent server only (e.g. while testing tools).",
@@ -93,7 +107,8 @@ def generate_launch_description() -> LaunchDescription:
     #    Delayed so bringup has a head start.
     intent_server = TimerAction(period=8.0, actions=[
         ExecuteProcess(
-            cmd=[venv_python, "-m", "growmate_pi.intent_server", "--port", port],
+            cmd=[venv_python, "-m", "growmate_pi.intent_server",
+                 "--port", port, "--config", config],
             additional_env={"PYTHONPATH": pythonpath},
             name="growmate_intent_server",
             output="screen",
@@ -105,7 +120,7 @@ def generate_launch_description() -> LaunchDescription:
     scheduler = TimerAction(period=20.0, actions=[
         ExecuteProcess(
             cmd=[venv_python, "-m", "growmate_pi.scheduler",
-                 "--intent-url", ["http://localhost:", port]],
+                 "--intent-url", ["http://localhost:", port], "--config", config],
             additional_env={"PYTHONPATH": pythonpath},
             name="growmate_scheduler",
             output="screen",

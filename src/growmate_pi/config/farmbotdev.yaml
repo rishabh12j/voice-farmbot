@@ -1,0 +1,130 @@
+# GrowMate Garden Configuration — greenhouse "farmbotdev" (35-plant)
+# Per-greenhouse config. Select it with the launch `config` arg
+# (ros2 launch ./launch/greenhouse.launch.py config:=.../farmbotdev.yaml) or
+# `--config .../farmbotdev.yaml` on the intent server / scheduler.
+#
+# *** TEMPLATE — fill the sections marked TODO on the farmbotdev hardware. ***
+# What's greenhouse-specific (must be set here): garden.plants (voice targeting),
+# tools (bay positions), location. What's shared with gh1 and copied as-is:
+# workspace (Genesis XL), commands, safety, schedule.
+#
+# Note: actual watering walks the plants in farmbotdev's own active_map.yaml
+# (per-Pi). garden.plants below is only for resolving "move to the tomatoes"
+# style voice targets by name.
+
+robot:
+  name: "GrowMate"
+  model: "FarmBot Genesis XL"
+  workspace:
+    x_max: 5691.2  # mm — long axis (Genesis XL). TODO: confirm on farmbotdev.
+    y_max: 2734.0  # mm — short axis
+    z_min: -500    # mm (negative = into soil)
+    z_max: 0
+
+garden:
+  plants:
+    # TODO: populate from farmbotdev's plants (one representative entry per
+    # species for voice targeting). Example shape:
+    # - name: tomatoes
+    #   aliases: [the tomatoes, tomato bed]
+    #   position: {x: 0, y: 0, z: 0}   # central plant of that species
+    #   water_quantity: 2
+    #   stage: seedling
+    []
+
+  locations:
+    - name: home
+      aliases: [home position, start, origin, starting position]
+      position: {x: 0, y: 0, z: 0}
+
+# FarmBot ROS2 command reference (shared — same AURA stack as gh1).
+commands:
+  movement:
+    - code: "M {x} {y} {z}"
+      description: "Move gantry to absolute position"
+    - code: "M_S {x} {y} {z} {speed}"
+      description: "Move gantry to position at speed (%)"
+    - code: "H_0"
+      description: "Go to home position"
+
+  estop:
+    - code: "e"
+      description: "Emergency stop - halts everything"
+    - code: "E"
+      description: "Reset emergency stop"
+
+  plants:
+    - code: "P_4"
+      description: "Water all plants regardless of moisture"
+    - code: "P_5"
+      description: "Water all plants based on moisture levels"
+    - code: "P_9"
+      description: "Check moisture levels around all plants"
+
+  devices:
+    - code: "D_W_1"
+      description: "Turn water pump ON"
+    - code: "D_W_0"
+      description: "Turn water pump OFF"
+    - code: "D_L_1"
+      description: "Turn LED strip ON"
+    - code: "D_L_0"
+      description: "Turn LED strip OFF"
+    - code: "D_V_1"
+      description: "Turn vacuum pump ON"
+    - code: "D_V_0"
+      description: "Turn vacuum pump OFF"
+    - code: "D_S_C"
+      description: "Read soil sensor"
+    - code: "D_C"
+      description: "Check if tool is mounted"
+
+  vision:
+    - code: "I_1"
+      description: "Take photo at current position"
+    - code: "I_2"
+      description: "Create panorama of whole bed"
+    - code: "I_4"
+      description: "Detect weeds"
+
+# Tool heads on the Universal Tool Mount (UTM). `index` is used at runtime
+# (T<index>_1 / _2); x/y/z/release_dir are for the one-time T<index>_0
+# registration into farmbotdev's active map.
+# *** TODO: measure farmbotdev's own bays with tools/calibrate_tools.py — these
+# are PLACEHOLDERS (gh1's positions will be wrong for this greenhouse). ***
+tools:
+  soil_sensor:     {index: 1, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
+  watering_nozzle: {index: 2, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
+  seeder:          {index: 3, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
+  weeder:          {index: 4, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
+
+# Safety rules (shared with gh1).
+safety:
+  emergency_phrases:
+    - stop
+    - halt
+    - emergency
+    - emergency stop
+    - freeze
+    - abort
+  workspace_bounds:
+    x: [0, 5691.2]
+    y: [0, 2734.0]
+    z: [-500, 0]
+  dangerous_commands:
+    - "P_3"  # Seeding all - resource intensive
+  always_confirm:
+    - water_all
+    - calibrate
+
+# Daily watering time.
+schedule:
+  watering_time: "08:00"
+
+# Location context for weather and plant advice queries.
+# TODO: set farmbotdev's greenhouse location.
+location:
+  name: "TODO"
+  country: "Ireland"
+  latitude: 53.385
+  longitude: -6.601

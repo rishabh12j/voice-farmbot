@@ -1,8 +1,8 @@
-# GrowMate Garden Configuration — LEGACY DEFAULT (mirrors gh1.yaml).
-# Per-greenhouse configs now live in config/gh1.yaml and config/farmbotdev.yaml,
-# selected by the launch `config` arg (or --config). This file remains the
-# no-arg fallback and the desktop client's config; keep it in sync with gh1.yaml
-# (or migrate the client to gh1.yaml) — edit gh1.yaml as gh1's source of truth.
+# GrowMate Garden Configuration — greenhouse "gh1" (Maynooth, 54-plant)
+# Per-greenhouse config. Select it with the launch `config` arg or
+# `--config .../gh1.yaml` on the intent server / scheduler. The second
+# greenhouse uses config/farmbotdev.yaml. (config/farmbot.yaml is the legacy
+# default and mirrors this file for the desktop client.)
 
 robot:
   name: "GrowMate"
