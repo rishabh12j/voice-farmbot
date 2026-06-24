@@ -623,6 +623,7 @@ class SummariseSmart(py_trees.behaviour.Behaviour):
 # allow it plenty of time.
 TOOL_PIN = 63
 TOOL_CHANGE_TIMEOUT_S = 120.0
+TOOL_POLL_INTERVAL_S = 3.0  # how often to re-read pin 63 during the choreography
 
 
 class _ToolChange(py_trees.behaviour.Behaviour):
@@ -634,6 +635,8 @@ class _ToolChange(py_trees.behaviour.Behaviour):
     fresh pin-63 reading shows the expected state (0 mounted / 1 free), then
     updates ``ToolState``. Sim fakes the pin so this resolves in dev.
     """
+
+    _POLL_INTERVAL_S = TOOL_POLL_INTERVAL_S
 
     def __init__(self, bridge, index: int, tool_name: str, mount: bool,
                  timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
@@ -650,12 +653,14 @@ class _ToolChange(py_trees.behaviour.Behaviour):
         self._published = False
 
     def initialise(self):
-        self._baseline = time.monotonic()
+        self._start = time.monotonic()
         rec = self._bridge.publish(f"T{self._index}_{'1' if self._mount else '2'}")
-        # D_C reads pin 63 after the mount sequence (FIFO behind it).
-        rec2 = self._bridge.publish("D_C")
-        self._published = (rec.status in ("sent", "simulated")
-                           and rec2.status in ("sent", "simulated"))
+        self._published = rec.status in ("sent", "simulated")
+        # Poll pin 63 with periodic D_C reads. The mount choreography takes
+        # ~15-25 s, so an early "not seated" reading means "keep waiting", NOT
+        # failure. _last_poll = 0 forces a read on the first tick.
+        self._last_poll = 0.0
+        self._poll_baseline = self._start
 
     def update(self):
         if not self._published:
@@ -665,26 +670,30 @@ class _ToolChange(py_trees.behaviour.Behaviour):
             self.feedback_message = "estop requested mid tool-change"
             return py_trees.common.Status.FAILURE
 
-        reading = self._bridge.last_reading(TOOL_PIN, newer_than=self._baseline)
-        if reading is not None:
-            if abs(reading[0] - self._expected) < 0.5:
-                if self._mount:
-                    self._tool_state.set(self._tool_name)
-                else:
-                    self._tool_state.clear()
-                self.feedback_message = (
-                    f"{'mounted' if self._mount else 'unmounted'} {self._tool_name}"
-                )
-                return py_trees.common.Status.SUCCESS
+        now = time.monotonic()
+        # Re-issue D_C every few seconds so we get a FRESH pin-63 reading as the
+        # choreography progresses (the AURA sequence also self-checks at its end).
+        if now - self._last_poll >= self._POLL_INTERVAL_S:
+            self._poll_baseline = now
+            self._bridge.publish("D_C")
+            self._last_poll = now
+
+        reading = self._bridge.last_reading(TOOL_PIN, newer_than=self._poll_baseline)
+        if reading is not None and abs(reading[0] - self._expected) < 0.5:
+            if self._mount:
+                self._tool_state.set(self._tool_name)
+            else:
+                self._tool_state.clear()
             self.feedback_message = (
-                f"tool {'mount' if self._mount else 'unmount'} not confirmed "
-                f"(pin63={reading[0]:.0f})"
+                f"{'mounted' if self._mount else 'unmounted'} {self._tool_name}"
             )
-            return py_trees.common.Status.FAILURE
-        if self._baseline is not None and (
-            time.monotonic() - self._baseline >= self._timeout_s
-        ):
-            self.feedback_message = "tool change timeout"
+            return py_trees.common.Status.SUCCESS
+
+        if now - self._start >= self._timeout_s:
+            last = f" (pin63={reading[0]:.0f})" if reading is not None else ""
+            self.feedback_message = (
+                f"tool {'mount' if self._mount else 'unmount'} timed out{last}"
+            )
             return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
 
