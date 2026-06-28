@@ -1,18 +1,20 @@
-# CLAUDE.md
+@AGENTS.md
 
-This project's agent context, architecture, the research contract (invariants
-that must not be broken), conventions, and dev/run workflow live in
-**[AGENTS.md](AGENTS.md)** — a single source of truth shared by all agent
-tooling. Read it first.
+# Claude-specific notes
 
-Quick reminders (full detail in AGENTS.md):
+The shared project context — the research contract (invariants that must not be
+broken), repo layout, conventions, and workflow — is imported from `AGENTS.md`
+above and is binding. Below is only Claude-specific behaviour.
 
-- **The LLM only does flat intent classification.** All structure + safety live
-  in the deterministic behaviour tree. New capability = one `schemas.Action`
-  value + one `_tree_*` builder with the safety prefix — never new LLM structure.
-- **Sim-verify before hardware:** `PYTHONPATH=src python3 -m growmate_pi.verify_sim`
-  (expect `Failures: 0/N`).
-- **Additive to the AURA stack** — publish only to `keyboard_topic`; edit
-  upstream packages only for minimal, documented bugfixes.
-- Keep **USC (unsafe-state count) = 0**; honour the **honest-or-blank** rule
-  (nothing logged/spoken as done before firmware confirmation).
+- **Verify before you commit.** Run the sim harness and expect `Failures: 0/N`
+  before committing/pushing any builder/node/schema change. On Windows it runs
+  under WSL:
+  `wsl -d Ubuntu-22.04 -- bash -lc "cd <repo> && PYTHONPATH=src ./venv-wsl/bin/python3 -m growmate_pi.verify_sim"`.
+- **Use plan mode for wide-blast-radius edits** — `schemas.py` (the wire
+  contract), any AURA-stack package, or the BT safety prefix. Propose before
+  refactoring.
+- **Run long tasks in the background.** `verify_sim` is slow (the `water_all`
+  scenario pulses 54 plants in real time); use background execution rather than
+  blocking.
+- Keep edits **additive to AURA**; if an upstream package must change, make it a
+  minimal, clearly-labelled bugfix in the commit message.
