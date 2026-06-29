@@ -17,8 +17,12 @@
 #   2. Reorders AMENT_PREFIX_PATH so all /Rishabh_Growmate_FarmBot/
 #      entries come first, all other entries (FarmBot_ROS2 included)
 #      come after. So Rishabh wins where it has packages; FarmBot_ROS2
-#      still supplies anything Rishabh doesn't (hardware_communication,
-#      farmbot_hri, etc.).
+#      still supplies anything Rishabh doesn't (farmbot_hardware_comm,
+#      farmbot_hri, etc.). NOTE: this fork replaces upstream's
+#      farmbot_hardware_comm with its own farmbot_command_handler, so that
+#      role is [rishabh]; farmbot_hardware_comm/farmbot_hri only resolve if
+#      the standalone ~/FarmBot_ROS2 is built + sourced (they are unused by
+#      this fork, so [missing] is harmless).
 #   3. Adds Rishabh's src/ to PYTHONPATH so growmate_pi imports cleanly.
 #   4. Prints the AMENT_PREFIX_PATH head + a for-loop showing which
 #      workspace each FarmBot package now resolves to — so you can
@@ -62,7 +66,7 @@ echo "AMENT_PREFIX_PATH head:"
 echo "$AMENT_PREFIX_PATH" | tr ':' '\n' | head -8 | sed 's/^/  /'
 echo "---"
 echo "Package resolutions:"
-for pkg in farmbot_bringup farmbot_controllers farmbot_command_handler farmbot_interfaces map_handler hardware_communication farmbot_hri; do
+for pkg in farmbot_bringup farmbot_controllers farmbot_command_handler farmbot_interfaces map_handler camera_handler farmbot_hardware_comm farmbot_hri; do
     prefix=$(ros2 pkg prefix $pkg 2>/dev/null || echo NOT-FOUND)
     # tag with a short marker so it's obvious where each one is coming from
     case "$prefix" in
