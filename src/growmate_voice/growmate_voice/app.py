@@ -347,6 +347,25 @@ def _do_emit(emissions: List[str], action: str, label: str, source: str = "butto
     return payload
 
 
+# When the Pi is configured as the brain but a dispatch fails (network drop,
+# Pi down mid-demo), we must NOT fall back to a local, unverified emit — that
+# would let the app claim "watering" while nothing reached the robot (the
+# honest-or-blank rule). Speak a clear, non-technical message and record it as
+# an error, never a success. Shared by the button and voice dispatch paths.
+_PI_UNREACHABLE_TTS = ("I've lost the connection to the robot. "
+                       "Please check it's switched on, then try again.")
+
+
+def _pi_unreachable_payload(action: Optional[str], source: str,
+                            detail: str = "") -> Dict[str, Any]:
+    _record(source, action, [], "error",
+            f"pi unreachable: {detail}" if detail else "pi unreachable")
+    payload = _position_payload(last_cmd=_PI_UNREACHABLE_TTS)
+    payload["tts_text"] = _PI_UNREACHABLE_TTS
+    payload["error"] = True
+    return payload
+
+
 def _dispatch_via_pi(action: str, source: str,
                      step_mm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Send the action to the Pi intent server as an Intent JSON POST.
@@ -358,8 +377,12 @@ def _dispatch_via_pi(action: str, source: str,
     ``step_mm`` overrides the default jog step (used by /api/jog so the user
     can pick 10/50/100/500 mm). Voice jog still uses _VOICE_STEP_MM.
     """
-    if _STATE.pi_url is None or not _PI_CLIENT_AVAILABLE:
-        return None
+    if _STATE.pi_url is None:
+        return None  # pure local dev — local fallback is intended
+    if not _PI_CLIENT_AVAILABLE:
+        # Pi configured but its client library didn't import — a misconfig,
+        # not a reason to fake success on a local emit.
+        return _pi_unreachable_payload(action, source, "pi client library missing")
 
     base = _STATE.pi_url.rsplit("/intent", 1)[0]
     try:
@@ -439,8 +462,11 @@ def _dispatch_via_pi(action: str, source: str,
         )
         return payload
     except Exception as exc:
-        log.warning("Pi dispatch failed for '%s': %s — falling back to local", action, exc)
-        return None
+        # pi_url is set (guarded at the top), so a failure here means the Pi
+        # is unreachable. Do NOT fall back to a local unverified emit — surface
+        # the loss honestly instead (honest-or-blank).
+        log.warning("Pi dispatch failed for '%s': %s — reporting unreachable", action, exc)
+        return _pi_unreachable_payload(action, source, str(exc))
 
 
 def _execute_action(action: str, source: str,
@@ -1603,10 +1629,16 @@ def _dispatch_via_aicore(
                                raw_text=transcript, client_id="growmate_voice.app",
                                wait_for_completion=False)
     except Exception as exc:
-        log.warning("AICore dispatch to Pi failed: %s", exc)
+        # Pi unreachable mid-request: speak a clear, non-technical error rather
+        # than going silent with a raw exception string. No local fallback —
+        # nothing was verified, so we say so (honest-or-blank).
+        log.warning("AICore dispatch to Pi failed: %s — reporting unreachable", exc)
         _record(source, intents[0].get("action"), [], "error",
-                f"Pi error: {exc}", transcript=transcript)
-        return _position_payload(last_cmd=f"(Pi error: {exc})")
+                f"pi unreachable: {exc}", transcript=transcript)
+        payload = _position_payload(last_cmd=_PI_UNREACHABLE_TTS)
+        payload["tts_text"] = _PI_UNREACHABLE_TTS
+        payload["error"] = True
+        return payload
 
     status = "sent" if reply.status == "success" else reply.status
     cmds = reply.commands_published or []
@@ -1615,7 +1647,16 @@ def _dispatch_via_aicore(
     # LLM-generated intent responses. The raw command list goes into the
     # history record for traceability but never into last_cmd.
     spoken = (reply.tts_text or " ".join(i.get("response", "") for i in intents)).strip()
-    friendly = spoken or f"Done ({actions})."
+    # Honest fallback when neither the Pi nor the LLM gave us words: only claim
+    # "done" for a terminal status (the tree finished — post verify-gate). While
+    # the tree is still "running" a completion claim would be a lie, so stay
+    # forward-tense.
+    if spoken:
+        friendly = spoken
+    elif reply.status == "running":
+        friendly = "Working on it."
+    else:
+        friendly = f"Done ({actions})."
     _record(source, intents[0].get("action"), cmds, status,
             f"{' | '.join(cmds) or '(no cmds)'} [{status}]",
             transcript=transcript)
