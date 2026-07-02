@@ -163,6 +163,7 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
 
     task_id = _uuid.uuid4().hex[:8]
     total = len(matches)
+    tools = garden.tools_by_name()
     label = f"Watering {total} {target}" if total > 1 else f"Watering one {target}"
 
     children: List[py_trees.behaviour.Behaviour] = [
@@ -175,6 +176,11 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         # so an estop press during the announcement still halts within
         # ~100 ms.
         Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
+        # Auto-mount the watering nozzle (idempotent: no-op if already on).
+        # Verifies via pin 63 like MountTool, so a failed mount returns
+        # FAILURE and aborts the water before any pump fires — the safety
+        # prefix (CheckToolMounted) made real, not assumed.
+        EnsureTool(bridge, "watering_nozzle", tools),
     ]
 
     for i, plant in enumerate(matches, start=1):
@@ -252,11 +258,13 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
     """
     from growmate_pi.intent_server import find_all_plants_in_garden
 
+    tools = garden.tools_by_name()
     plants = find_all_plants_in_garden()
     if not plants:
         return _seq(
             "Water all (P_4 fallback)",
             CheckAvailable(bridge),
+            EnsureTool(bridge, "watering_nozzle", tools),
             PublishCmd("P_4", bridge, name="WaterAllPlants"),
             Respond(intent.response or "Watering all plants."),
         )
@@ -277,6 +285,9 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         CheckAvailable(bridge),
         # Same speak-then-move pause as _tree_water. See comment there.
         Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
+        # Auto-mount the watering nozzle before the walk (idempotent; verified
+        # via pin 63). See _tree_water for the safety rationale.
+        EnsureTool(bridge, "watering_nozzle", tools),
     ]
 
     for i, plant in enumerate(plants, start=1):

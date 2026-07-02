@@ -113,6 +113,20 @@ def main() -> int:
         print(f"  Status   : {result.status}")
         print(f"  Commands : {[r.command for r in bridge.command_log]}")
         print(f"  TTS      : {tts!r}")
+        cmds = [r.command for r in bridge.command_log]
+        # Task 1 (tool-mount in the demo): plain watering must auto-mount the
+        # nozzle (T<idx>_1) BEFORE the first move. Checked on the first water
+        # scenario, where the tool state starts empty so a real mount is
+        # emitted (later water scenarios no-op because the nozzle is already on).
+        if req.raw_text == "water the tomatoes":
+            first_move = next((k for k, c in enumerate(cmds) if c.startswith("M ")), None)
+            mount = next((k for k, c in enumerate(cmds)
+                          if c.startswith("T") and c.endswith("_1")), None)
+            if mount is None or first_move is None or mount > first_move:
+                failures += 1
+                print("  -> expected nozzle mount (T*_1) BEFORE first move; "
+                      f"mount={mount} first_move={first_move}")
+
         is_refusal = "bananas" in req.raw_text
         if is_refusal:
             # No-match is a CLEAN refusal: success + an "I don't see any" message,
