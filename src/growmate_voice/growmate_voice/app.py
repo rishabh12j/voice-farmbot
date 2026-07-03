@@ -95,6 +95,10 @@ class AppState:
     whisper_model: str = "small.en"       # Day 4: bumped from tiny.en for elderly accuracy
     whisper_prompt: Optional[str] = None  # plant-name biasing, built at first STT call
     pending_confirms: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Day 5
+    # Session memory: the last robot command this session dispatched, so
+    # pronouns/ellipsis ("water it again", "do that again") resolve against
+    # what the user actually just did. {"action", "target", "ts"}.
+    last_intent: Optional[Dict[str, Any]] = None
 
 
 _STATE = AppState()
@@ -745,6 +749,66 @@ def _known_species_in_garden() -> List[str]:
     _SPECIES_CACHE["species"] = species
     _SPECIES_CACHE["fetched_at"] = now
     return species
+
+
+# Garden care digest (the Pi's per-species memory) — cached like the species
+# list so hot voice paths don't HTTP-hop the Pi per utterance.
+_CARE_CACHE: Dict[str, Any] = {"care": None, "fetched_at": 0.0}
+_CARE_TTL_S = 30.0
+
+
+def _garden_care_summary() -> Dict[str, Any]:
+    """Per-species care digest from the Pi (/plants/care_summary), cached.
+
+    This is the garden MEMORY the classifier infers from: counts, who needs
+    water, when species were last watered, last soil readings. Empty dict when
+    no Pi is configured — the classifier then runs without a memory section.
+    """
+    now = time.monotonic()
+    cached = _CARE_CACHE.get("care")
+    if cached is not None and (now - _CARE_CACHE.get("fetched_at", 0.0)) < _CARE_TTL_S:
+        return cached  # type: ignore[return-value]
+    body = _pi_get("/plants/care_summary")
+    care = (body or {}).get("species") or {}
+    if not isinstance(care, dict):
+        care = {}
+    _CARE_CACHE["care"] = care
+    _CARE_CACHE["fetched_at"] = now
+    return care
+
+
+def _classify_memory() -> Dict[str, Any]:
+    """Assemble the memory context handed to the intent classifier.
+
+    Two layers of the same (action, when, entity, effect) idea:
+      - last_command: this session's most recent robot command (pronouns).
+      - care: the Pi's per-species digest mined from the honest event log.
+    """
+    memory: Dict[str, Any] = {}
+    if _STATE.last_intent:
+        memory["last_command"] = dict(_STATE.last_intent)
+    care = _garden_care_summary()
+    if care:
+        memory["care"] = care
+    return memory
+
+
+def _remember_dispatched_intents(intents: List[Dict[str, Any]]) -> None:
+    """Record the last ROBOT command of a successful dispatch (session memory).
+
+    general_question doesn't move the robot, so it never overwrites the last
+    actionable command — "water the basil" ... "how tall does basil grow?" ...
+    "do it again" still means water the basil.
+    """
+    for i in reversed(intents):
+        action = (i.get("action") or "").strip()
+        if action and action != "general_question":
+            _STATE.last_intent = {
+                "action": action,
+                "target": (i.get("target") or None),
+                "ts": time.time(),
+            }
+            return
 
 
 def _detect_species_in_transcript(transcript: str) -> Optional[str]:
@@ -1492,10 +1556,13 @@ def _dispatch_via_aicore(
                 "AICore unavailable", transcript=transcript)
         return _position_payload(last_cmd=f"(LLM unavailable for: {transcript})")
 
-    # Ground classification in the live garden (the Pi's active_map species),
-    # so the brain infers targets from what is actually planted rather than a
-    # static config superset. Empty list -> falls back to the config map.
-    intents = ai._classify(transcript, live_plants=_known_species_in_garden()) or []
+    # Ground classification in the live garden (the Pi's active_map species)
+    # AND the memory context (session last-command + per-species care digest),
+    # so the brain infers from what is planted, what was just done, and what
+    # the honest log says happened. Falls back gracefully when the Pi is away.
+    intents = ai._classify(transcript,
+                           live_plants=_known_species_in_garden(),
+                           memory=_classify_memory()) or []
     if not intents:
         _record(source, None, [], "ignored",
                 "No intents from LLM", transcript=transcript)
@@ -1648,6 +1715,10 @@ def _dispatch_via_aicore(
         return payload
 
     status = "sent" if reply.status == "success" else reply.status
+    # Session memory: the dispatch reached the Pi and was accepted — remember
+    # the last robot command so follow-ups ("water it again") resolve.
+    if reply.status in ("success", "running", "partial"):
+        _remember_dispatched_intents(intents)
     cmds = reply.commands_published or []
     actions = ",".join(i.get("action", "?") for i in intents)
     # Friendly user-facing string: use Pi's spoken text if any, then the

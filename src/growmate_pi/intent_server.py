@@ -462,7 +462,7 @@ def _execute_intent_tree(req: IntentRequest, task_id: str) -> IntentResponse:
     # didn't fail outright. Best-effort.
     if not req.emergency:
         for intent_obj in req.intents:
-            _log_intent_outcome(intent_obj, status_str)
+            _log_intent_outcome(intent_obj, status_str, bridge=bridge)
 
     return IntentResponse(
         status=status_str,
@@ -673,8 +673,14 @@ def _derive_plant_state(plant: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _log_intent_outcome(intent: Intent, tree_status: str) -> None:
-    """Append an event row for one successfully-executed intent."""
+def _log_intent_outcome(intent: Intent, tree_status: str, bridge=None) -> None:
+    """Append an event row for one successfully-executed intent.
+
+    Memory contract: a row is ``(action, when, entity, effect)``. The first
+    three were always recorded; the EFFECT slot is filled here — for sensing
+    intents the actual soil reading (the value ``_derive_plant_state`` reads
+    back as ``last_sensed_moisture``, which was silently always None before).
+    """
     if _event_log is None or tree_status not in ("success", "partial"):
         return
     event_type = _INTENT_EVENT_MAP.get(intent.action)
@@ -691,6 +697,16 @@ def _log_intent_outcome(intent: Intent, tree_status: str) -> None:
         data = _load_plants_from_map_handler()
         if data.get("count"):
             payload["plant_count"] = data["count"]
+    # Effect: the soil value this sensing pass actually read (pin 59). The
+    # ReadSensor leaf already parsed it off /uart_receive into the bridge.
+    if bridge is not None and event_type in ("sensed", "moisture_check"):
+        try:
+            from growmate_pi.bt.action_nodes import SOIL_PIN
+            reading = bridge.last_reading(SOIL_PIN)
+            if reading is not None:
+                payload["moisture"] = reading[0]
+        except Exception:
+            pass  # effect capture is best-effort, never blocks the row
     try:
         _event_log.log(
             event_type=event_type,
@@ -831,6 +847,50 @@ def build_app(
             "plants": flagged[:limit],
             "count": min(len(flagged), limit),
             "total_in_garden": len(plants_list),
+        }
+
+    @app.get("/plants/care_summary")
+    def plants_care_summary():
+        """Compact per-species care digest — the garden MEMORY for inference.
+
+        One line per species: how many plants, how many currently need water,
+        when the species was last watered, and the most recent soil reading.
+        Small enough to inject into the intent-classifier prompt, so the LLM
+        resolves vague speech ("the thirsty ones", "how's the garden") against
+        what has actually been DONE and MEASURED — the (action, when, entity,
+        effect) log queried per species.
+        """
+        data = _load_plants_from_map_handler()
+        plants_list = data.get("plants") or []
+        by_species: Dict[str, Dict[str, Any]] = {}
+        for p in plants_list:
+            sp = (p.get("species") or p.get("type") or p.get("name") or "").lower().strip()
+            if not sp:
+                continue
+            row = by_species.setdefault(sp, {
+                "count": 0, "need_water": 0,
+                "last_watered_ts": None, "last_watered_human": None,
+                "last_soil": None, "last_soil_ts": None,
+            })
+            row["count"] += 1
+            state = _derive_plant_state(p)
+            if state.get("attention_flag"):
+                row["need_water"] += 1
+            ts = state.get("last_watered_ts")
+            if ts and (row["last_watered_ts"] is None or ts > row["last_watered_ts"]):
+                row["last_watered_ts"] = ts
+                row["last_watered_human"] = state.get("last_watered_human")
+            sensed = state.get("last_sensed_payload") or {}
+            moisture = state.get("last_sensed_moisture")
+            s_ts = sensed.get("ts")
+            if moisture is not None and (row["last_soil_ts"] is None
+                                         or (s_ts or 0) >= (row["last_soil_ts"] or 0)):
+                row["last_soil"] = moisture
+                row["last_soil_ts"] = s_ts
+        return {
+            "species": by_species,
+            "total_plants": len(plants_list),
+            "generated_at_ms": int(time.time() * 1000),
         }
 
     @app.get("/plants/{idx}/history")

@@ -316,6 +316,32 @@ def scenario_gibberish(s: Suite) -> None:
             str(pos)[:150])
 
 
+def scenario_pronoun_memory(s: Suite) -> None:
+    print("\n=== 12. Session memory: 'water them again' resolves the pronoun ===")
+    # Establish the memory: water a SMALL bed (spearmint = 3 plants, below the
+    # multi-plant confirm threshold) and let it finish so the session's
+    # last-command is set and the run isn't racing a live task.
+    body = s.text("water the spearmint")
+    res = body.get("result") or {}
+    if res.get("requires_confirm"):   # threshold could change — just answer
+        s.confirm(res.get("confirm_id") or "", yes=True)
+    task = s.wait_task(lambda t: t.get("task_active"), timeout_s=30)
+    s.check("NLP", "setup: watering the spearmint started", task is not None, str(task))
+    s.wait_task(lambda t: not t.get("task_active"), timeout_s=120)
+
+    # Now the follow-up with no plant named at all:
+    body = s.text("water them again")
+    res = body.get("result") or {}
+    if res.get("requires_confirm"):
+        s.confirm(res.get("confirm_id") or "", yes=True)
+    task = s.wait_task(lambda t: t.get("task_active"), timeout_s=30)
+    label = (task or {}).get("task_label") or ""
+    s.check("NLP", "'water them again' resolved to the spearmint (memory)",
+            task is not None and "spearmint" in label.lower(),
+            f"task_label={label!r}")
+    s.wait_task(lambda t: not t.get("task_active"), timeout_s=120)
+
+
 def scenario_multi_intent(s: Suite) -> None:
     print("\n=== 11. Multi-intent: 'water the tomatoes and then go home' ===")
     body = s.text("water the tomatoes and then go home")
@@ -377,6 +403,7 @@ def main(argv=None) -> int:
         (scenario_fast_path, False),
         (scenario_gibberish, True),
         (scenario_multi_intent, True),
+        (scenario_pronoun_memory, True),
     ]
     for fn, needs_llm in scenarios:
         if needs_llm and not llm_ok:

@@ -222,8 +222,10 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
 
         # Per-leaf event-log writer — bound to this specific plant. Runs
         # AFTER the pump-off so the row only exists if the cycle truly
-        # completed; that's the Tier B "honest log" payoff.
-        def _make_log_fn(p_idx: int, p_name: str) -> Callable[[], None]:
+        # completed; that's the Tier B "honest log" payoff. duration_s is the
+        # EFFECT slot of the memory row (how much water this plant received).
+        def _make_log_fn(p_idx: int, p_name: str,
+                         p_dur: int) -> Callable[[], None]:
             def _fn() -> None:
                 # Local import for the same circular-avoidance reason as above.
                 from growmate_pi.intent_server import _event_log
@@ -233,7 +235,8 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
                     event_type="watered",
                     plant_index=p_idx,
                     plant_name=p_name,
-                    payload={"source": "multi_plant_water", "task_id": task_id},
+                    payload={"source": "multi_plant_water", "task_id": task_id,
+                             "duration_s": p_dur},
                 )
             return _fn
 
@@ -247,7 +250,7 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
             Wait(duration, name=f"Pulse({duration}s, {i})"),
             PublishCmd("D_W_0", bridge, verify=True,
                        timeout_s=PUMP_TIMEOUT_S, name=f"PumpOff({i})"),
-            LogPlantEvent(_make_log_fn(plant_index, plant_name),
+            LogPlantEvent(_make_log_fn(plant_index, plant_name, duration),
                           name=f"LogWatered({i})"),
         ])
 
@@ -327,7 +330,8 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         plant_index = int(plant.get("index", 0))
         step_label = f"{plant_name} ({i}/{total})"
 
-        def _make_log_fn(p_idx: int, p_name: str) -> Callable[[], None]:
+        def _make_log_fn(p_idx: int, p_name: str,
+                         p_dur: int) -> Callable[[], None]:
             def _fn() -> None:
                 from growmate_pi.intent_server import _event_log
                 if _event_log is None:
@@ -336,7 +340,8 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
                     event_type="watered",
                     plant_index=p_idx,
                     plant_name=p_name,
-                    payload={"source": "water_all", "task_id": task_id},
+                    payload={"source": "water_all", "task_id": task_id,
+                             "duration_s": p_dur},
                 )
             return _fn
 
@@ -350,7 +355,7 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
             Wait(duration, name=f"Pulse({duration}s, {i})"),
             PublishCmd("D_W_0", bridge, verify=True,
                        timeout_s=PUMP_TIMEOUT_S, name=f"PumpOff({i})"),
-            LogPlantEvent(_make_log_fn(plant_index, plant_name),
+            LogPlantEvent(_make_log_fn(plant_index, plant_name, duration),
                           name=f"LogWatered({i})"),
         ])
 
@@ -437,14 +442,19 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         pidx = int(plant.get("index", i))
         dur = _plant_duration(plant)
 
-        def _make_log_fn(p_idx: int, p_name: str) -> Callable[[], None]:
+        def _make_log_fn(p_idx: int, p_name: str,
+                         p_dur: int) -> Callable[[], None]:
             def _fn() -> None:
                 from growmate_pi.intent_server import _event_log
                 state["watered"] += 1
                 if _event_log is not None:
+                    # Effect: how much water AND the soil reading that
+                    # justified it (pass 1's probe) — the full memory row.
                     _event_log.log(
                         event_type="watered", plant_index=p_idx, plant_name=p_name,
-                        payload={"source": "water_smart", "task_id": task_id})
+                        payload={"source": "water_smart", "task_id": task_id,
+                                 "duration_s": p_dur,
+                                 "soil_before": state["readings"].get(p_idx)})
             return _fn
 
         water_seq = _seq(
@@ -459,7 +469,7 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
             Wait(dur, name=f"Pulse({dur}s, {i})"),
             PublishCmd("D_W_0", bridge, verify=True, timeout_s=PUMP_TIMEOUT_S,
                        name=f"PumpOff({i})"),
-            LogPlantEvent(_make_log_fn(pidx, pname), name=f"LogWatered({i})"),
+            LogPlantEvent(_make_log_fn(pidx, pname, dur), name=f"LogWatered({i})"),
         )
         # Selector: water if dry, else note the skip — either way SUCCESS so the
         # parent sequence proceeds to the next plant.

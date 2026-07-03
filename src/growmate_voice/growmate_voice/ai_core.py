@@ -99,7 +99,47 @@ class AICore:
         self.llm = OllamaClient(base_url=ollama_url, model=model)
         self.model = model
 
-    def _classify_prompt(self, live_plants: Optional[List[str]] = None):
+    @staticmethod
+    def _ago(ts: Optional[float]) -> str:
+        """'just now' / 'N minutes ago' / 'N hours ago' for the memory line."""
+        if not ts:
+            return ""
+        s = max(0.0, time.time() - float(ts))
+        if s < 90:
+            return "just now"
+        if s < 5400:
+            return f"{int(round(s / 60))} minutes ago"
+        return f"{int(round(s / 3600))} hours ago"
+
+    def _memory_section(self, memory: Optional[dict]) -> str:
+        """Render the memory context (session last-command + per-species care
+        digest from the honest event log) as a compact prompt section. The
+        LLM only READS this to resolve vague speech — output stays flat."""
+        if not memory:
+            return ""
+        lines: List[str] = []
+        last = memory.get("last_command") or {}
+        if last.get("action"):
+            tgt = f" {last['target']}" if last.get("target") else ""
+            ago = self._ago(last.get("ts"))
+            lines.append(f"  Last command: {last['action']}{tgt}"
+                         + (f" ({ago})" if ago else ""))
+        for sp, row in (memory.get("care") or {}).items():
+            frag = f"  {sp}: {row.get('count', '?')} plants"
+            if row.get("need_water"):
+                frag += f", {row['need_water']} need water"
+            if row.get("last_watered_human"):
+                frag += f", last watered {row['last_watered_human']}"
+            if row.get("last_soil") is not None:
+                frag += f", last soil reading {row['last_soil']}"
+            lines.append(frag)
+        if not lines:
+            return ""
+        return ("MEMORY (what was recently done and measured — resolve pronouns "
+                "and vague references against this):\n" + "\n".join(lines) + "\n\n")
+
+    def _classify_prompt(self, live_plants: Optional[List[str]] = None,
+                         memory: Optional[dict] = None):
         # Ground the model in what is ACTUALLY planted (the live active_map from
         # the Pi) rather than a static config superset. This is the garden
         # "memory" the brain infers from: targets resolve to real plants, so we
@@ -117,7 +157,7 @@ Your job is to classify what the user wants into a list of intents.
 
 {garden_section}
 
-AVAILABLE ACTIONS:
+{self._memory_section(memory)}AVAILABLE ACTIONS:
   ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture
   KNOWLEDGE: general_question
 
@@ -136,6 +176,9 @@ RULES:
 9. "water the DRY/thirsty ones", "only water what needs it", "water X if it's dry" = water_smart (reads soil per plant, waters only the dry ones). Plain "water the X" / "water everything" stays water / water_all.
 10. "scan/look/check for weeds" = scan_weeds (detect only). "clear/pull/remove/get rid of the weeds", "do the weeding" = clear_weeds (physically removes detected weeds).
 11. Map building flow: "scan the bed", "map the bed", "set up the map" = scan_bed (camera scans the bed to detect plants). Then "find the plants", "what did you find" = find_plants (stage detections for labelling). Then labelling replies like "the left bed is lettuce", "they're all tomatoes", "the middle are scallions" = label_plants, with target = the region+species phrase exactly ("left lettuce", "all tomatoes", "middle scallions"). Region words: left/middle/right/front/back/all.
+12. Pronouns and follow-ups resolve against MEMORY's "Last command": "water it/them (again)", "do that again", "one more time", "give them another drink" = repeat the last command's action with its target. "check on it" = check_sensor on the last target. If MEMORY has no last command, ask which plant they mean (general_question, response asks them to name the plant) — never guess a target.
+13. Care-status questions ("what needs water", "which plants are thirsty", "how's the garden doing") = general_question — the app answers those from the live care data in MEMORY, not by moving the robot.
+14. If the user names a specific plant, use THAT name as the target verbatim — even when it is not in CURRENTLY PLANTED. The robot checks its own map and refuses safely. NEVER substitute a different plant for the one the user named, and never turn an explicit robot command into a general_question.
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
@@ -174,13 +217,20 @@ EXAMPLES:
 "water the tomatoes and tell me about basil" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes."}},{{"action":"general_question","target":"basil","question":"Tell me about growing basil in {self.garden.location_context}.","response":"And here is some basil advice."}}]}}
 "turn on the lights then take a photo" -> {{"intents": [{{"action":"light_on","target":null,"question":null,"response":"Lights on!"}},{{"action":"photo","target":null,"question":null,"response":"Taking a photo."}}]}}
 "scan for weeds and check moisture" -> {{"intents": [{{"action":"scan_weeds","target":null,"question":null,"response":"Scanning for weeds."}},{{"action":"check_moisture","target":null,"question":null,"response":"Checking moisture too."}}]}}
+(MEMORY says: Last command: water spearmint) "water them again" -> {{"intents": [{{"action":"water","target":"spearmint","question":null,"response":"Watering the spearmint again."}}]}}
+(MEMORY says: Last command: water spearmint) "do that again" -> {{"intents": [{{"action":"water","target":"spearmint","question":null,"response":"Doing that again."}}]}}
+(MEMORY says: Last command: move lettuce) "check on it" -> {{"intents": [{{"action":"check_sensor","target":"lettuce","question":null,"response":"Checking on the lettuce."}}]}}
+(no last command in MEMORY) "water it again" -> {{"intents": [{{"action":"general_question","target":null,"question":null,"response":"Which plant would you like me to water?"}}]}}
+"which plants need water" -> {{"intents": [{{"action":"general_question","target":null,"question":"Which plants need water right now?","response":"Let me check the garden records."}}]}}
+"water the bananas" (bananas NOT in the planted list) -> {{"intents": [{{"action":"water","target":"bananas","question":null,"response":"Watering the bananas."}}]}}
 
 Return JSON only. No explanations. Classify:"""
 
     # -- Classification --------------------------------
 
-    def _classify(self, text, live_plants: Optional[List[str]] = None) -> Optional[List[dict]]:
-        resp = self.llm.chat(self._classify_prompt(live_plants), text,
+    def _classify(self, text, live_plants: Optional[List[str]] = None,
+                  memory: Optional[dict] = None) -> Optional[List[dict]]:
+        resp = self.llm.chat(self._classify_prompt(live_plants, memory), text,
                              temperature=0.1, max_tokens=400, json_mode=True)
         if not resp: return None
         parsed = self._parse_json_full(resp)
