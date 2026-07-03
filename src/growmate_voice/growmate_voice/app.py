@@ -1146,8 +1146,12 @@ def _get_aicore() -> Optional[AICore]:
         return _STATE.aicore
     try:
         # Use the Pi-side garden config so plant names match what Pi resolves.
+        # parents[2] = src/ (same as _build_whisper_prompt). This was
+        # parents[3] (the repo root) — a path that never exists — so AICore
+        # silently fell back to the V1-era growmate_voice/config/farmbot.yaml,
+        # priming the LLM with fictional plants (herbs/carrots/strawberries).
         from pathlib import Path
-        cfg = (Path(__file__).resolve().parents[3] / "growmate_pi" / "config" / "farmbot.yaml")
+        cfg = (Path(__file__).resolve().parents[2] / "growmate_pi" / "config" / "farmbot.yaml")
         if not cfg.exists():
             # fallback to local growmate_voice config
             cfg = Path(__file__).resolve().parents[1] / "config" / "farmbot.yaml"

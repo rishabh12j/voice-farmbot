@@ -27,6 +27,13 @@ COMMAND_MAP: List[Tuple[List[str], str]] = [
     (["water", "water plant", "water plants", "water the plants",
       "water all", "water all the plants", "start watering"],            "water"),
     (["take photo", "photo", "capture", "take picture"],                 "photo"),
+    # Lights were only in TTS_PHRASES/_EMIT_FRIENDLY — no pattern variants at
+    # all, so even "turn on the lights" fell through to the LLM. Filler
+    # stripping drops "the", so "turn on the lights" -> "turn on lights".
+    (["lights on", "light on", "turn on lights", "turn on the lights",
+      "turn the lights on", "switch on the lights", "lights up"],        "light_on"),
+    (["lights off", "light off", "turn off lights", "turn off the lights",
+      "turn the lights off", "switch off the lights", "lights out"],     "light_off"),
 ]
 
 
