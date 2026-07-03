@@ -52,36 +52,45 @@ class CameraController(Node):
             response.data = 'FAILED'
             return response
 
-        # Requesting the camera to laod the calibration configuration
-        if request.data == 'CALIB':
-            # self.take_picture_.load_config()
-            return response
-        elif request.data.split(' ')[0] == 'MAP':
-            info = request.data.split(' ')
-            self.panorama_.map_x = float(info[1])
-            self.panorama_.map_y = float(info[2])
-            self.get_logger().info(f'Updated camera map dimensions to {self.panorama_.map_x} and {self.panorama_.map_y}')
-        elif request.data.split(' ')[0] == 'MOSAIC':
-            # Save image for mosaic
-            # Sequencing constructed successfully and server returns it
-            self.panorama_.save_image_for_mosaic(num = int(msg[1]))
-            self.get_logger().info('Picture saved for mosaic successfully')
-        elif request.data.split(' ')[0] == 'DETECT_WEEDS':
-            self.plant_detection_.detect_weeds(x = float(msg[1]), y = float(msg[2]))
-            self.get_logger().info('Weed detection ran successfully')
-        elif len(msg) == 3: # Ensuring the command information is complete
-            if float(msg[2]) != 0.0:    # Ensuring the z-axis is homed
-                self.get_logger().warn('Z Axis is not in home position for the panorama stitching! Panorama command cancelled')
+        # Wrap the whole dispatch: a detection/stitch failure must NOT propagate
+        # and crash camera_controller — that drops the form_panorama service and
+        # strands farmbot_controller in "Waiting for Camera Stitching Server...".
+        # Fail this one request instead, and log the real exception so we can
+        # see it on /rosout (no more silent node death).
+        try:
+            # Requesting the camera to laod the calibration configuration
+            if request.data == 'CALIB':
+                # self.take_picture_.load_config()
+                return response
+            elif request.data.split(' ')[0] == 'MAP':
+                info = request.data.split(' ')
+                self.panorama_.map_x = float(info[1])
+                self.panorama_.map_y = float(info[2])
+                self.get_logger().info(f'Updated camera map dimensions to {self.panorama_.map_x} and {self.panorama_.map_y}')
+            elif request.data.split(' ')[0] == 'MOSAIC':
+                # Save image for mosaic
+                # Sequencing constructed successfully and server returns it
+                self.panorama_.save_image_for_mosaic(num = int(msg[1]))
+                self.get_logger().info('Picture saved for mosaic successfully')
+            elif request.data.split(' ')[0] == 'DETECT_WEEDS':
+                self.plant_detection_.detect_weeds(x = float(msg[1]), y = float(msg[2]))
+                self.get_logger().info('Weed detection ran successfully')
+            elif len(msg) == 3: # Ensuring the command information is complete
+                if float(msg[2]) != 0.0:    # Ensuring the z-axis is homed
+                    self.get_logger().warn('Z Axis is not in home position for the panorama stitching! Panorama command cancelled')
+                    response.data = 'FAILED'
+                    return response
+                # Stitch image to panorama
+                # Sequencing constructed successfully and server returns it
+                self.panorama_.stitch_image_onto_map(x = float(msg[0]), y = float(msg[1]))
+                self.get_logger().info('Picture stitched to the panorama successfully')
+            else:
+                self.get_logger().warn('Command not recognized! Request ignored')
                 response.data = 'FAILED'
                 return response
-            # Stitch image to panorama
-            # Sequencing constructed successfully and server returns it
-            self.panorama_.stitch_image_onto_map(x = float(msg[0]), y = float(msg[1]))
-            self.get_logger().info('Picture stitched to the panorama successfully')
-        else:
-            self.get_logger.warn('Command not recognized! Request ignored')
+        except Exception as exc:
+            self.get_logger().error(f'Panorama/detection request failed: {exc}')
             response.data = 'FAILED'
-            return response
 
         return response
 
