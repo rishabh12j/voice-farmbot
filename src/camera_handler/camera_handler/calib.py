@@ -244,16 +244,24 @@ class CalibrateCamera:
         large = img.shape[0] > 1200
         if large and downsample:
             img = cv2.pyrDown(img)
-        # Tuned blob detector: findCirclesGrid's default detector filters out the
-        # large dark circles on this card. Allow big blobs; relax convexity/inertia.
+        # Blob detector tuned for the supplier card shot against a gravel/soil
+        # bed. The 35 printed dots are large (~800-1200 px here) and near-perfect
+        # circles; soil specks are small and irregular. The old loose params
+        # (minArea 50, circularity 0.6, convexity/inertia off) let ~100 background
+        # specks through, so findCirclesGrid couldn't isolate the 5x7 grid (raw
+        # blob count ~132). Tightening area + circularity + convexity + inertia
+        # drops the gravel and leaves exactly the 35 dots -> clean (5,7) lock.
+        # Verified offline on the captured frame via a param sweep (blobs==35).
         params = cv2.SimpleBlobDetector_Params()
         params.filterByArea = True
-        params.minArea = 50
+        params.minArea = 350
         params.maxArea = 100000
         params.filterByCircularity = True
-        params.minCircularity = 0.6
-        params.filterByConvexity = False
-        params.filterByInertia = False
+        params.minCircularity = 0.85
+        params.filterByConvexity = True
+        params.minConvexity = 0.85
+        params.filterByInertia = True
+        params.minInertiaRatio = 0.5
         params.minThreshold = 10
         params.maxThreshold = 220
         detector = cv2.SimpleBlobDetector_create(params)
