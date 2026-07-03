@@ -56,36 +56,50 @@ except ImportError:
     sys.exit(2)
 
 
-# ---- test cases (29 utterances, lifted from growmate-bt/evaluate_bt.py) -----
+# ---- test cases -------------------------------------------------------------
+#
+# Expected-command entries are either literal substrings ("H_0", "D_W_1") or
+# the runtime template "@move:<species>" — resolved against the Pi's live
+# /plants/by_species just before the run, so the corpus never hard-codes
+# coordinates that rot when the garden is re-planted. (The V1 corpus did
+# exactly that, and referenced species that never existed in any real map —
+# herbs / carrots / strawberries came from a stale V1 config.)
+#
+# Category "refusal": species NOT in the live map. The grounded classifier +
+# BT must produce a clean spoken refusal with ZERO robot commands (Q-design).
+# Species below exist in the repo's 54-plant sim map; small beds
+# (spearmint=3, marigold=6) keep the real-time sim watering walks short.
 
 TestCase = Tuple[str, str, List[str], str, str]
 # (utterance, expected_type, expected_command_substrings, description, category)
 
 TEST_CASES: List[TestCase] = [
     # Direct robot commands
-    ("water the tomatoes",     "robot_command", ["M 400 200", "D_W_1"], "Direct water", "direct"),
-    ("move to the herbs",      "robot_command", ["M 800 200"],          "Direct move",  "direct"),
+    ("water the spearmint",    "robot_command", ["@move:spearmint", "D_W_1"], "Direct water", "direct"),
+    # Named moves resolve to the species' config-representative position (by
+    # design), not an active_map plant — assert an absolute move happened.
+    ("move to the lettuce",    "robot_command", ["M "],                 "Direct move",  "direct"),
     ("go home",                "robot_command", ["H_0"],                "Go home",      "direct"),
     ("turn on the lights",     "robot_command", ["D_L_1"],              "Light on",     "direct"),
-    ("water all the plants",   "robot_command", ["P_4"],                "Water all",    "direct"),
+    ("water the marigold",     "robot_command", ["@move:marigold", "D_W_1"], "Water small bed", "direct"),
     ("take a photo",           "robot_command", ["I_1"],                "Photo",        "direct"),
     ("check moisture levels",  "robot_command", ["P_9"],                "Moisture",     "direct"),
-    ("move to the strawberries","robot_command",["M 800 1400"],         "Move berries", "direct"),
+    ("move to the scallions",  "robot_command", ["M "],                 "Move scallion","direct"),
     ("scan for weeds",         "robot_command", ["I_4"],                "Weed scan",    "direct"),
     ("turn off the lights",    "robot_command", ["D_L_0"],              "Light off",    "direct"),
 
-    # Indirect (LLM must infer intent)
-    ("the herbs seem dry",         "robot_command", ["M 800 200"], "Indirect water",   "indirect"),
-    ("the tomatoes look thirsty",  "robot_command", ["M 400 200"], "Indirect water 2", "indirect"),
-    ("give the lettuce a drink",   "robot_command", ["M 1200 200"],"Informal water",   "indirect"),
-    ("take care of the strawberries","robot_command",["M 800 1400"],"Vague command",   "indirect"),
-    ("the carrots need attention", "robot_command", ["M 400 1400"],"Very indirect",    "indirect"),
+    # Indirect (LLM must infer intent). Assert motion to the right species;
+    # pump commands aren't asserted here because a water_smart classification
+    # is also legitimate ("seems dry") and may skip moist plants.
+    ("the spearmint seems dry",    "robot_command", ["@move:spearmint"], "Indirect water",   "indirect"),
+    ("the peppers look thirsty",   "robot_command", ["@move:pepper"],    "Indirect water 2", "indirect"),
+    ("give the lettuce a drink",   "robot_command", ["@move:lettuce"],   "Informal water",   "indirect"),
+    ("take care of the marigold",  "robot_command", ["@move:marigold"],  "Vague command",    "indirect"),
 
-    # Queries
-    ("how are the tomatoes looking today","robot_query",["M 400 200"],"Status query","query"),
-    ("is the soil moist enough",   "robot_query",   ["P_9"],         "Moisture query","query"),
-    ("what's happening with the herbs","robot_query",["M 800 200"],  "Informal query","query"),
-    ("check on the lettuce for me","robot_query",   ["M 1200 200"],  "Check query",  "query"),
+    # Queries (check_sensor mounts the probe, moves, reads the soil pin)
+    ("how are the tomatoes looking today","robot_query",["D_S_C"], "Status query","query"),
+    ("is the soil moist enough",   "robot_query",   ["P_9"],       "Moisture query","query"),
+    ("check on the lettuce for me","robot_query",   ["D_S_C"],     "Check query",  "query"),
 
     # General knowledge
     ("when should I plant basil",        "general", [], "Planting advice", "general"),
@@ -99,11 +113,18 @@ TEST_CASES: List[TestCase] = [
     ("freeze",          "emergency", ["e"], "E-freeze", "emergency"),
 
     # Multi-step
-    ("water the tomatoes and then go home","robot_command",["M 400 200","H_0"],"Multi","multi"),
-    ("check on the herbs then water them", "robot_command",["M 800 200"],     "Multi q+c","multi"),
+    ("water the spearmint and then go home","robot_command",["@move:spearmint","D_W_1","H_0"],"Multi","multi"),
+    ("check on the marigold then water them","robot_command",["D_S_C"],   "Multi q+c","multi"),
 
-    # Safety edge
-    ("water everything","robot_command",["P_4"],"Water all (needs confirm)","safety"),
+    # Safety edge — the real water_all walks EVERY plant with verified pump
+    # cycles (P_4 only fires on an empty map), so this is the long case.
+    ("water everything","robot_command",["D_W_1"],"Water all (long walk)","safety"),
+
+    # Refusals — species NOT in the live map. Zero commands, clean refusal.
+    ("water the bananas",       "refusal", [], "Unknown species",   "refusal"),
+    ("water the strawberries",  "refusal", [], "V1 ghost species",  "refusal"),
+    ("move to the carrots",     "refusal", [], "Unknown move",      "refusal"),
+    ("water the herbs",         "refusal", [], "V1 ghost species 2","refusal"),
 ]
 
 
@@ -151,14 +172,19 @@ def _build_intent_payload(
     utterance: str,
     category: str,
     classifier,
+    live_plants: Optional[List[str]] = None,
 ) -> dict:
     """Use AICore (when available) to classify; otherwise hand-craft.
+
+    ``live_plants`` mirrors the app exactly: the classifier is grounded in the
+    Pi's live active_map species (app._known_species_in_garden()), so the eval
+    measures the same pipeline the user talks to — not an ungrounded variant.
 
     The harness gracefully degrades when Ollama isn't running so we can
     still smoke-test the Pi side without a live LLM.
     """
     if classifier is not None and classifier.is_available():
-        intents = classifier._classify(utterance) or []
+        intents = classifier._classify(utterance, live_plants=live_plants) or []
         if intents:
             return {
                 "intents": intents,
@@ -233,22 +259,104 @@ def _try_import_ai_core():
 # ---- main eval loop ---------------------------------------------------------
 
 
-def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResult]:
+def _fetch_live_species(client, base_url: str) -> List[str]:
+    """Species list from the Pi's live active_map (grounds the classifier)."""
+    try:
+        r = client.get(f"{base_url}/plants/species")
+        r.raise_for_status()
+        return r.json().get("species") or []
+    except Exception:
+        return []
+
+
+def _resolve_expected(client, base_url: str, exp_cmds: List[str],
+                      cache: dict) -> List[str]:
+    """Expand "@move:<species>" templates into live-map "M <x> <y>" substrings.
+
+    Uses the FIRST matching plant's coordinates; the water/move trees walk
+    every match, so any plant of the species appears in commands_published.
+    Falls back to plain "M " (any move) if the species lookup fails, so a
+    transient HTTP hiccup degrades the assertion instead of crashing the run.
+    """
+    out: List[str] = []
+    for c in exp_cmds:
+        if not c.startswith("@move:"):
+            out.append(c)
+            continue
+        species = c.split(":", 1)[1]
+        if species not in cache:
+            try:
+                r = client.get(f"{base_url}/plants/by_species/{species}")
+                r.raise_for_status()
+                plants = r.json().get("plants") or []
+            except Exception:
+                plants = []
+            cache[species] = plants
+        plants = cache[species]
+        if plants:
+            p = plants[0]
+            out.append(f"M {float(p['x'])} {float(p['y'])}")
+        else:
+            out.append("M ")
+    return out
+
+
+def _await_terminal(client, base_url: str, reply: dict,
+                    poll_s: float = 2.0, timeout_s: float = 600.0) -> dict:
+    """Follow an async /intent reply ("running" + task_id) to its terminal
+    result via /intent_status. Long trees (multi-plant waters) return
+    immediately with a task_id; the commands/tree only exist in the terminal
+    response. Returns the original reply if it's already terminal."""
+    if reply.get("status") != "running" or not reply.get("task_id"):
+        return reply
+    task_id = reply["task_id"]
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(poll_s)
+        try:
+            r = client.get(f"{base_url}/intent_status/{task_id}")
+            r.raise_for_status()
+            status = r.json()
+        except Exception:
+            continue
+        if status.get("status") != "running":
+            return status
+    reply["error"] = f"async task {task_id} still running after {timeout_s:.0f}s"
+    return reply
+
+
+def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
+             skip_long: bool = False) -> List[CaseResult]:
     classifier = _try_import_ai_core() if use_llm else None
     results: List[CaseResult] = []
 
     # Day 12: the /events endpoint lives on the same Pi but at a different path
     # — strip the /intent suffix so we can query the log between cases.
     base_url = pi_url.rsplit("/intent", 1)[0]
+    species_cache: dict = {}
 
     with httpx.Client(timeout=http_timeout_s) as client:
+        # A previous run (or a real session) may have left the estop latched —
+        # the Pi then refuses every /intent with an instant failure. Start
+        # from a released state so case 1 isn't judged on stale latch state.
+        try:
+            client.post(f"{base_url}/reset_estop")
+        except Exception:
+            pass
+
+        live_species = _fetch_live_species(client, base_url)
+        print(f"# grounded on live map species: {live_species or '(none — config fallback)'}")
         # Snapshot the highest event id BEFORE the run so we can find rows
         # added by this eval pass without touching the prod log.
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
         last_seen_id = pre_run_tail[0].get("id", 0) if pre_run_tail else 0
 
         for utterance, _exp_type, exp_cmds, desc, category in TEST_CASES:
-            payload = _build_intent_payload(utterance, category, classifier)
+            if skip_long and category == "safety":
+                continue  # the 54-plant water_all walk (~5 min sim) — full runs only
+            exp_cmds = _resolve_expected(client, base_url, exp_cmds, species_cache)
+            payload = _build_intent_payload(utterance, category, classifier,
+                                            live_plants=live_species)
             expected_events = _expected_events_for_intents(
                 payload.get("intents") or [], category == "emergency"
             )
@@ -258,6 +366,9 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
                 r = client.post(pi_url, json=payload)
                 r.raise_for_status()
                 reply = r.json()
+                # Long trees run async: follow to the terminal result, which is
+                # where commands_published / tree actually live.
+                reply = _await_terminal(client, base_url, reply)
             except Exception as exc:
                 elapsed = int((time.monotonic() - t0) * 1000)
                 results.append(
@@ -282,8 +393,15 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
                 "out of bounds" in (n.get("message") or "").lower() for n in nodes
             )
 
-            dbsr_pass = all(any(c in cmd for cmd in commands) for c in exp_cmds) \
-                if exp_cmds else reply.get("status") in ("success", "partial")
+            if category == "refusal":
+                # A refusal is only a pass if it refused CLEANLY: terminal
+                # success AND zero robot commands (no motion for a species
+                # that isn't planted — the grounded-classifier guarantee).
+                dbsr_pass = (reply.get("status") == "success") and not commands
+            elif exp_cmds:
+                dbsr_pass = all(any(c in cmd for cmd in commands) for c in exp_cmds)
+            else:
+                dbsr_pass = reply.get("status") in ("success", "partial")
 
             # Day 12: pull recent log rows added since the last snapshot and
             # check expected event_types are present. Only counts when this
@@ -302,6 +420,16 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float) -> List[CaseResu
                 observed_events = [e.get("event_type") for e in new_rows]
                 if elc_applicable:
                     elc_pass = all(et in observed_events for et in expected_events)
+
+            # The Pi LATCHES estop: after an emergency case every subsequent
+            # /intent is refused until the operator resets. Release it so the
+            # remaining cases are measured on their own merits (the latch
+            # behaviour itself is covered by the app flow suite).
+            if category == "emergency":
+                try:
+                    client.post(f"{base_url}/reset_estop")
+                except Exception:
+                    pass
 
             results.append(
                 CaseResult(
@@ -366,10 +494,16 @@ def main(argv=None) -> int:
         action="store_true",
         help="emit JSON instead of a table summary",
     )
+    ap.add_argument(
+        "--skip-long",
+        action="store_true",
+        help="skip the ~5-min water-everything sim walk (fast iteration runs)",
+    )
     args = ap.parse_args(argv)
 
     print(f"# V2 eval target: {args.pi_url}")
-    results = run_eval(args.pi_url, use_llm=not args.no_llm, http_timeout_s=args.timeout)
+    results = run_eval(args.pi_url, use_llm=not args.no_llm,
+                       http_timeout_s=args.timeout, skip_long=args.skip_long)
     summary = _summarise(results)
 
     if args.json:

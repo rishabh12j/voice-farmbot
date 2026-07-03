@@ -103,7 +103,35 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
             MoveTo(bridge, x=x, y=y, z=z, verify=True, timeout_s=MOVE_TIMEOUT_S),
             Respond(intent.response),
         )
-    # Named target move (resolve plant/location from garden config)
+    # Named target move — resolve from the garden config first, then the live
+    # active_map (a voice-labelled species may exist only in the map). An
+    # unknown name refuses CLEANLY (success + spoken refusal) like _tree_water:
+    # a hard FAILURE reads as a robot fault, but an unknown place is a
+    # user-vocabulary issue, not a malfunction (Q-design).
+    target = (intent.target or "").strip()
+    if not target:
+        return _seq(
+            "Move (no target)",
+            Respond("I need to know where to move. Try 'move to the lettuce'."),
+        )
+    if garden.resolve_target(target) is None:
+        from growmate_pi.intent_server import find_plants_by_species
+
+        matches = find_plants_by_species(target)
+        if matches:
+            p = matches[0]
+            return _seq(
+                f"Move to {target} (map)",
+                CheckAvailable(bridge),
+                MoveTo(bridge, x=float(p["x"]), y=float(p["y"]), z=0.0,
+                       verify=True, timeout_s=MOVE_TIMEOUT_S),
+                Respond(intent.response),
+            )
+        return _seq(
+            f"Move to {target} (no match)",
+            Respond(f"I don't see any {target} in this garden. "
+                    "Tell me a different plant."),
+        )
     return _seq(
         f"Move to {intent.target}",
         *_safety_and_target(bridge, garden, intent.target),
