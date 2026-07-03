@@ -1,20 +1,26 @@
 """Live calibration helper — capture FarmBot gantry position into a CSV.
 
-Workflow (with the GrowMate FastAPI app running on http://localhost:7860):
+Reads the *live* R82 gantry position from the Pi intent server's ``/status``
+(the same position the live map uses), so it records where the head actually is
+— not the app's tracked estimate. Run it right on the Pi (talks to
+``localhost:8000``), or from any machine by pointing ``--url`` at the Pi.
 
-  1. In the GrowMate UI, jog the gantry over the centre of a real plant.
-  2. In a second terminal, run this script.
-  3. When prompted, type the species name and press Enter.
-  4. The script reads the live position from /api/status and appends one row
-     to ``tools/placements.csv``. Repeat for every plant you want to record.
+Workflow:
+
+  1. Jog the gantry over the centre of a real plant (via the GrowMate UI, or
+     any way that moves the robot — the position comes straight from firmware).
+  2. Run this script (on the Pi, or with --url http://<pi-ip>:8000).
+  3. It shows the live X/Y/Z; type the species name and press Enter.
+  4. It appends one row to ``tools/placements.csv``. Repeat per plant.
   5. Stop with Ctrl-C, then build the map:
 
-        python tools\\build_active_map.py --mode csv --csv tools\\placements.csv
+        python tools/build_active_map.py --mode csv --csv tools/placements.csv
 
 Usage::
 
-    python tools\\calibrate.py
-    python tools\\calibrate.py --url http://growmate-1.local:7860 --csv per_bot/farmbot1.csv
+    python3 tools/calibrate.py                                   # on the Pi
+    python tools\\calibrate.py --url http://192.168.0.38:8000    # from Windows
+    python3 tools/calibrate.py --csv per_bot/gh1.csv
 
 The species you type must exist in SPECIES at the top of build_active_map.py
 (case-sensitive). Tab-complete is on by default; press TAB to autocomplete.
@@ -61,7 +67,8 @@ def _enable_tab_complete(options: List[str]) -> None:
 
 
 def _fetch_position(url: str, timeout: float = 4.0) -> dict:
-    req = urllib.request.Request(f"{url.rstrip('/')}/api/status")
+    # Pi intent server /status carries the live R82 gantry position.
+    req = urllib.request.Request(f"{url.rstrip('/')}/status")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         import json
         data = json.loads(resp.read().decode())
@@ -82,8 +89,10 @@ def _append_row(path: Path, species: str, pos: dict) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Live FarmBot calibration recorder")
-    ap.add_argument("--url", default="http://localhost:7860",
-                    help="GrowMate app URL (default: %(default)s)")
+    ap.add_argument("--url", default="http://localhost:8000",
+                    help="Pi intent server URL (default: %(default)s). Reads the "
+                         "live R82 position from /status. On the Pi use "
+                         "localhost:8000; from Windows use http://192.168.0.38:8000")
     ap.add_argument("--csv", default="tools/placements.csv",
                     help="output CSV (will be created if missing)")
     args = ap.parse_args(argv)
