@@ -1016,7 +1016,7 @@ Until that's written, fall back to
 | `colcon build` picks up venv files | Missing `COLCON_IGNORE` marker | `touch venv/COLCON_IGNORE`, rebuild |
 | `PYTHONPATH=src` hides ROS 2 modules | `src` overrides ROS site-packages | Use `PYTHONPATH=src:$PYTHONPATH` (prepend, don't replace) |
 | Intent server returns `Pi not reachable` to UI | Pi's intent_server isn't running OR firewall blocks port 8000 | Confirm with `curl http://<pi-ip>:8000/plants` from the laptop |
-| Whisper picks `tomatoes` as `tomato is`, etc. | Whisper's default vocab doesn't bias to garden words | Already on by default since Day 4 — uses `small.en` + `initial_prompt`. Check the prompt with `tools/_smoke_whisper_prompt.py` |
+| Whisper picks `tomatoes` as `tomato is`, etc. | Whisper's default vocab doesn't bias to garden words | Already on by default since Day 4 — uses `small.en` + `initial_prompt`. Inspect the prompt with `python -c "from growmate_voice.app import _build_whisper_prompt; print(_build_whisper_prompt())"` (from `src/growmate_voice`) |
 | Soft-confirm modal never appears for "water all" | Phrase didn't pattern-match into `water_all` | Look at pipeline log — if route was `pattern` and action was `water_all`, gate **must** have fired. If route was `aicore`, the LLM took it — same gate fires from `_CONFIRM_AICORE_ACTIONS` |
 | Today's-care panel stuck on old count | UI hasn't polled yet (5-min interval) | It refreshes immediately after any successful action — just send one command |
 | Fast-path *"when did I water X"* falls through to LLM every time | Pi unreachable → fast path returns `None` so LLM gets a chance | Confirm `curl http://<pi-ip>:8000/events?limit=1` from Windows |

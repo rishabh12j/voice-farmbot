@@ -25,11 +25,17 @@ tools/_*.yaml
 tools/_*.csv
 tools/_*.py
 
-# Personal / academic artefacts — do not commit
-R_Jain_EE650_Project.zip
+# Personal / academic artefacts — do not commit (working thesis files live in
+# documentation/ but only the .md notes belong in git)
 demo/Interim_Report_*.pdf
 *.pdf
 *.pptx
+documentation/*.docx
+documentation/*.xlsx
+documentation/*.zip
+
+# Agent scratch dirs
+.codex-tmp/
 
 # Virtual environments
 venv/
