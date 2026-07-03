@@ -1,3 +1,0 @@
-[submodule "src/multicam_pointcloud"]
-	path = src/multicam_pointcloud
-	url = git@github.com:PetriJF/multicam_pointcloud.git

@@ -1488,7 +1488,10 @@ def _dispatch_via_aicore(
                 "AICore unavailable", transcript=transcript)
         return _position_payload(last_cmd=f"(LLM unavailable for: {transcript})")
 
-    intents = ai._classify(transcript) or []
+    # Ground classification in the live garden (the Pi's active_map species),
+    # so the brain infers targets from what is actually planted rather than a
+    # static config superset. Empty list -> falls back to the config map.
+    intents = ai._classify(transcript, live_plants=_known_species_in_garden()) or []
     if not intents:
         _record(source, None, [], "ignored",
                 "No intents from LLM", transcript=transcript)
@@ -5437,7 +5440,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
   });
 
   // --- Day 10: Today's care --------------------------------------------
-  const todayCard         = document.getElementById('todayCard');
   const todayCard         = document.getElementById('todayCard');
   const todaySummary      = document.getElementById('todaySummary');
   const todaySummaryText  = document.getElementById('todaySummaryText');

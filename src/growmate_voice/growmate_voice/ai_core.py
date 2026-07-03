@@ -99,12 +99,23 @@ class AICore:
         self.llm = OllamaClient(base_url=ollama_url, model=model)
         self.model = model
 
-    def _classify_prompt(self):
+    def _classify_prompt(self, live_plants: Optional[List[str]] = None):
+        # Ground the model in what is ACTUALLY planted (the live active_map from
+        # the Pi) rather than a static config superset. This is the garden
+        # "memory" the brain infers from: targets resolve to real plants, so we
+        # stop mapping speech onto species that aren't in the bed.
+        if live_plants:
+            garden_section = (
+                "CURRENTLY PLANTED (the plants actually in the garden right now "
+                "— resolve plant targets to one of these names):\n  "
+                + ", ".join(sorted({p for p in live_plants if p})))
+        else:
+            garden_section = ("GARDEN MAP (use these exact names for targets):\n"
+                              + self.garden.get_plant_list())
         return f"""You are GrowMate, a voice assistant that controls a garden robot.
 Your job is to classify what the user wants into a list of intents.
 
-GARDEN MAP (use these exact names for targets):
-{self.garden.get_plant_list()}
+{garden_section}
 
 AVAILABLE ACTIONS:
   ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture
@@ -168,8 +179,8 @@ Return JSON only. No explanations. Classify:"""
 
     # -- Classification --------------------------------
 
-    def _classify(self, text) -> Optional[List[dict]]:
-        resp = self.llm.chat(self._classify_prompt(), text,
+    def _classify(self, text, live_plants: Optional[List[str]] = None) -> Optional[List[dict]]:
+        resp = self.llm.chat(self._classify_prompt(live_plants), text,
                              temperature=0.1, max_tokens=400, json_mode=True)
         if not resp: return None
         parsed = self._parse_json_full(resp)
