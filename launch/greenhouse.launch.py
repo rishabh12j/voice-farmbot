@@ -2,7 +2,8 @@
 
 Brings up the whole per-greenhouse stack in one command:
 
-  1. farmbot_bringup (no_camera) — the AURA control stack + firmware link
+  1. farmbot_bringup — the AURA control stack + firmware link (with the USB
+     camera by default; camera:=false for a watering-only run)
   2. the growmate_pi intent server (run from the venv: fastapi / py_trees)
   3. the daily watering scheduler (waters_all + go_home at schedule.watering_time)
 
@@ -42,7 +43,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     TimerAction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     EnvironmentVariable,
@@ -60,6 +61,7 @@ def generate_launch_description() -> LaunchDescription:
     src = LaunchConfiguration("src")
     port = LaunchConfiguration("port")
     config = LaunchConfiguration("config")
+    camera = LaunchConfiguration("camera")
 
     # PREPEND src to the inherited PYTHONPATH — do NOT replace it, or we lose the
     # ROS python path (rclpy) and the intent server silently falls back to sim.
@@ -92,15 +94,33 @@ def generate_launch_description() -> LaunchDescription:
             description="Run the daily watering scheduler. Set false to bring up "
                         "bringup + intent server only (e.g. while testing tools).",
         ),
+        DeclareLaunchArgument(
+            "camera", default_value="true",
+            description="Bring up the USB camera (standard.launch.py: adds "
+                        "camera_controller + standard_camera) for vision — "
+                        "calibration (I_0), scan_bed, panorama. Set camera:=false "
+                        "for a watering-only run (no_camera.launch.py).",
+        ),
     ]
 
-    # 1. AURA bringup (no camera — watering doesn't need vision).
-    bringup = IncludeLaunchDescription(
+    # 1. AURA bringup. Default (camera:=true) -> standard.launch.py, which is
+    #    no_camera + camera_controller + standard_camera. camera:=false ->
+    #    no_camera.launch.py (watering-only, no vision). Exactly one fires.
+    bringup_camera = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare("farmbot_bringup"), "launch", "standard.launch.py",
+            ])
+        ]),
+        condition=IfCondition(camera),
+    )
+    bringup_no_camera = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare("farmbot_bringup"), "launch", "no_camera.launch.py",
             ])
-        ])
+        ]),
+        condition=UnlessCondition(camera),
     )
 
     # 2. Intent server — venv python, PYTHONPATH=src, inheriting the ROS env.
@@ -128,4 +148,5 @@ def generate_launch_description() -> LaunchDescription:
         )
     ])
 
-    return LaunchDescription(args + [bringup, intent_server, scheduler])
+    return LaunchDescription(
+        args + [bringup_camera, bringup_no_camera, intent_server, scheduler])

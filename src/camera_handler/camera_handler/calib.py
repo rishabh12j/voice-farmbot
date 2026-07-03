@@ -87,13 +87,21 @@ class CalibrateCamera:
         self.config_directory_ = os.path.join(get_package_share_directory('camera_handler'), 'config')
         self.rgb_dir_ = os.path.join(self.config_directory_,"saved_rgb_image.png")
         self.depth_dir_ = os.path.join(self.config_directory_,"saved_depth_image.png")
+        # These describe the PHYSICAL calibration card and set the metric scale
+        # of the whole calibration — get them wrong and every detected plant
+        # coordinate is off by the same factor. In use: the FarmBot SUPPLIER
+        # card — 5x7 asymmetric grid, 20 mm *diagonal* (nearest-neighbour)
+        # spacing, so the same-row centre-to-centre is 20*sqrt(2) ~= 28.28 mm
+        # (matches the ~30 mm same-row measured on the card). Colour polarity is
+        # handled in find_pattern (dark-on-white OR white-on-black). If you
+        # switch cards, update 'size' to its (cols, rows) and
+        # 'row_circle_separation' to diagonal_spacing * sqrt(2).
+        # NOTE: the older calib.io white printout is 15 mm diagonal — swap the
+        # value below back to 15*sqrt(2) if you ever use that card instead.
         self.pattern = {
             'size': (5, 7),
             'type': cv2.CALIB_CB_ASYMMETRIC_GRID,
-            # Same-row (horizontal) circle spacing in mm. Card is a calib.io 5x7
-            # asymmetric grid with 15 mm *diagonal* (nearest-neighbour) spacing;
-            # for a 45-degree-staggered grid the same-row spacing is 15*sqrt(2).
-            'row_circle_separation': 15 * math.sqrt(2),  # ~21.21 mm
+            'row_circle_separation': 20 * math.sqrt(2),  # ~28.28 mm (20 mm diagonal, supplier card)
         }
         self.dot_images = {
             AXIS_INDEX['init']: {},
@@ -262,21 +270,37 @@ class CalibrateCamera:
     def find_pattern(self, img, save_output = None):
         '''
         Find calibration pattern circles in a single image.
+
+        Polarity-robust so either card works:
+          * dark circles on white  (calib.io printout)  — tried first, unchanged
+          * white circles on black  (FarmBot supplier card) — colour-inverted retry
+        SimpleBlobDetector wants dark blobs on a light field, so for a
+        white-on-black card we bitwise_not the frame first (dots become dark).
+        NOTE: this only fixes COLOUR. The grid geometry (self.pattern['size']
+        and 'row_circle_separation') must still match the card in use, or the
+        calibration scale is wrong — see the pattern dict in __init__.
         '''
         if img is None:
             self.node_.get_logger().warn('ERROR: Calibration failed. Image missing.')
             self.success_flag = False
+            return False, None
         original = img.copy()
-        # first pass with basic pre-processing
-        img = self.preprocess(original, True)
-        ret, centers = self.detect_circles(img)
-        if not ret:
-            # second pass with heavier pre-processing
-            img = self.preprocess(original, False)
-            ret, centers = self.detect_circles(img, downsample=True)
+        ret, centers, shown = False, None, original
+        for invert in (False, True):
+            base = cv2.bitwise_not(original) if invert else original
+            # first pass with basic pre-processing
+            proc = self.preprocess(base, True)
+            ret, centers = self.detect_circles(proc)
+            if not ret:
+                # second pass with heavier pre-processing
+                proc = self.preprocess(base, False)
+                ret, centers = self.detect_circles(proc, downsample=True)
+            shown = proc
+            if ret:
+                break
         if save_output is not None:
-            cv2.drawChessboardCorners(img, self.pattern['size'], centers, ret)
-            save_output(ret, img, original)
+            cv2.drawChessboardCorners(shown, self.pattern['size'], centers, ret)
+            save_output(ret, shown, original)
         if not ret and save_output is None:
             self.node_.get_logger().warn('ERROR: Calibration failed, calibration object not detected in image. Check recent photos.')
             self.success_flag = False
@@ -294,6 +318,14 @@ class CalibrateCamera:
         '''
         if img is None:
             img = self.output_img
+        if img is None:
+            # Nothing to write (e.g. calibration bailed because the camera
+            # frame never arrived). Skip rather than crash cv2.imwrite(None) —
+            # crashing here kills camera_controller and drops the calibration
+            # service, which leaves farmbot_controller looping "Waiting for
+            # Camera Calibration Server".
+            self.node_.get_logger().warn('save_image: no image to save (skipping).')
+            return
         title = 'pattern_calibration'
         filename = '{}_{}_{}.jpg'.format(title, int(time.time()), name)
         filename = os.path.join(self.config_directory_,filename)
