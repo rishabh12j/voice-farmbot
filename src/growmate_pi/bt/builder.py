@@ -92,7 +92,10 @@ def _safety_and_target(
 
 
 def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
-    # Explicit coordinate move (jog from Windows app — absolute coords already computed)
+    # Explicit coordinate move (jog from Windows app — absolute coords already
+    # computed client-side). The Pi does NOT trust the client's clamping: the
+    # stress test showed an out-of-bounds M command published unguarded here,
+    # so the safety prefix now includes an explicit-coords CheckBounds.
     if "x" in (intent.params or {}):
         x = float(intent.params["x"])
         y = float(intent.params.get("y", 0))
@@ -100,6 +103,7 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         return _seq(
             f"Move to ({x:.0f}, {y:.0f}, {z:.0f})",
             CheckAvailable(bridge),
+            CheckBounds(garden, x=x, y=y, z=z),
             MoveTo(bridge, x=x, y=y, z=z, verify=True, timeout_s=MOVE_TIMEOUT_S),
             Respond(intent.response),
         )

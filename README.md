@@ -147,8 +147,10 @@ voice-farmbot/
 ### Evaluation
 
 The framework was evaluated on a 29-utterance corpus covering single actions,
-multi-intent utterances, indirect speech, and safety triggers, using the
-Gugliermo et al. (2024) metric set:
+multi-intent utterances, indirect speech, and safety triggers, using metrics
+adopted in the spirit of Gugliermo et al. (2024) and operationalized in
+`tools/evaluate_v2.py` (the metric names are this project's own — see
+`documentation/eval/dossier_01_gugliermo_metrics.md (emergent-eval branch)`):
 
 | Metric | Result |
 |---|---|
@@ -224,7 +226,8 @@ would emit — without publishing anything to the robot.
 
 ### Evaluate the framework
 
-Against the V2 Pi intent server (29-utterance corpus, Gugliermo metrics):
+Against the V2 Pi intent server (42-case corpus; metrics defined in the
+harness itself):
 
 ```bash
 python tools/evaluate_v2.py --pi-url http://<pi>:8000/intent
