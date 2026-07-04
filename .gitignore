@@ -50,3 +50,10 @@ src/growmate_voice/intent_server_openapi.json
 /map.yaml
 /a.yaml
 tools/active_map.yaml
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
