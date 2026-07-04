@@ -100,28 +100,46 @@ class CheckPlantFound(py_trees.behaviour.Behaviour):
 
 
 class CheckBounds(py_trees.behaviour.Behaviour):
-    """SUCCESS iff the resolved target is inside the workspace bounds.
+    """SUCCESS iff the target is inside the workspace bounds.
 
-    Validates ``plant_data.{x, y, z}`` against ``GardenConfig.in_bounds``.
+    Two modes:
+      * blackboard (default) — validates ``plant_data.{x, y, z}`` written by
+        ``ResolveTarget`` (the named-target paths).
+      * explicit — pass ``x``/``y``/``z`` to guard a coordinate move directly.
+        The explicit-coordinate move path used to publish UNGUARDED (the Pi
+        trusted the client's clamping); the misclassification stress test
+        proved an out-of-bounds `M` command sails through in sim. Per the
+        research contract, the guard lives in the tree, not in trust.
+
     This is the last guard before a ``MoveTo`` is allowed to publish.
     """
 
-    def __init__(self, garden: GardenConfig, name: str = "CheckBounds"):
+    def __init__(self, garden: GardenConfig, name: str = "CheckBounds",
+                 x: Optional[float] = None, y: Optional[float] = None,
+                 z: Optional[float] = None):
         super().__init__(name)
         self._garden = garden
-        self.blackboard = self.attach_blackboard_client(name=name)
-        self.blackboard.register_key("plant_data", access=py_trees.common.Access.READ)
+        self._static = (float(x), float(y), float(z)) if x is not None else None
+        if self._static is None:
+            self.blackboard = self.attach_blackboard_client(name=name)
+            self.blackboard.register_key("plant_data", access=py_trees.common.Access.READ)
 
     def update(self):
-        try:
-            data = self.blackboard.plant_data
-        except KeyError:
-            self.feedback_message = "no plant_data"
-            return py_trees.common.Status.FAILURE
-        x, y, z = data.get("x"), data.get("y"), data.get("z")
-        if x is None or y is None or z is None:
-            self.feedback_message = "plant_data missing coords"
-            return py_trees.common.Status.FAILURE
+        if self._static is not None:
+            x, y, z = self._static
+        else:
+            try:
+                data = self.blackboard.plant_data
+            except KeyError:
+                self.feedback_message = "no plant_data"
+                return py_trees.common.Status.FAILURE
+            if not data or not isinstance(data, dict):
+                self.feedback_message = "plant_data empty"
+                return py_trees.common.Status.FAILURE
+            x, y, z = data.get("x"), data.get("y"), data.get("z")
+            if x is None or y is None or z is None:
+                self.feedback_message = "plant_data missing coords"
+                return py_trees.common.Status.FAILURE
         if not self._garden.in_bounds(float(x), float(y), float(z)):
             self.feedback_message = f"out of bounds ({x}, {y}, {z})"
             return py_trees.common.Status.FAILURE
