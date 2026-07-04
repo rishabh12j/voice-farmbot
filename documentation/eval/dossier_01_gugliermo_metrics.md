@@ -121,6 +121,36 @@ definitions are from Gugliermo et al." (thesis_chapter1 line 175) is currently
 an **unverified citation claim** and, on present evidence, likely wrong in the
 strict sense. This exact sentence must be revised or verified.
 
+### 4a. Author-supplied formulation (added 2026-07-04 — PROVENANCE PENDING)
+
+After this dossier was first written, the author supplied the following
+formulation (conversation, not yet backed by locators):
+
+> "The DBSR/SNSR/USC metric names and their intent are from Gugliermo et al.
+> (2024); the corpus, harness, and operationalizations are mine, with two
+> disclosed deviations from their formulations: my USC is a raw per-case
+> count of guard-blocked attempts, whereas theirs is a normalized frequency
+> (nU/nT) of entered unsafe states — and my SNSR pools all leaf nodes where
+> theirs is per-node."
+
+Status assessment:
+- The **nU/nT** notation and "entered unsafe states" phrasing go beyond
+  anything retrievable from this environment and are *consistent with* the
+  unverified DiVA-thesis snippet (§4 above) — suggesting the author has seen
+  the primary text. If so this RESOLVES the D1 naming question (names DO
+  appear in the paper) and CONFIRMS D3 (normalization mismatch) and adds a
+  per-node vs pooled SNSR deviation (folded into D5).
+- Until the author provides **section/table locators or places the CC-BY PDF
+  under `documentation/eval/sources/`**, this dossier treats the formulation
+  as **author-asserted, unlocated**: usable as the working §VI wording, NOT
+  yet as a verified citation. D1–D3 remain open at "asserted, locators
+  pending".
+- One correction applied regardless of provenance: the author's clause
+  "both zero for this system" is true for Run 1 but structurally wrong under
+  the planned stress test, where guard-blocked attempts deliberately go >0
+  while entered unsafe states stay 0. Adopted wording (see §7) separates the
+  two counts.
+
 ## 5. OUR implementations — VERIFIED directly against code (locators exact)
 
 Source: `tools/evaluate_v2.py` (docstring lines 21–35; scoring lines 420–509)

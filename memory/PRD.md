@@ -37,8 +37,10 @@ boundary: safe-by-construction only, no measured older-adult outcomes.
 - No code or configs modified. No hardware runs attempted.
 
 ## Backlog / next tasks
-- P0: author obtains Gugliermo PDF (institutional access) → close ledger
-  D1–D3, update dossier_01 §4/§5.
+- P0: author provides Gugliermo section/table locators or PDF in
+  `documentation/eval/sources/` → close D1/D3/D5 (author's formulation
+  adopted 2026-07-04 as working §VI wording, provenance pending —
+  Dossier #1 §4a).
 - P0: user decision on Merino-Fidalgo et al. (RAS 2025) addition
   (eval_strategy §4 item 7 — beyond seed list, needs approval).
 - P1: build + run misclassification stress harness (sim) per eval_strategy §5.

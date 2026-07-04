@@ -54,11 +54,11 @@ number carries its setting in the same sentence.
 
 | # | Deviation | Consequence / rule |
 |---|---|---|
-| D1 | DBSR/SNSR/USC attribution to Gugliermo et al. UNVERIFIED; exact names doubtful | "in the spirit of"; define ours explicitly; fix `thesis_chapter1` L175 wording; blocking item: obtain PDF via institutional access |
+| D1 | DBSR/SNSR/USC attribution: author now ASSERTS names+intent are in the paper (Dossier #1 §4a) — **locators still pending** | working §VI wording may use the author's sentence; citation not closable until section/table locators or the PDF land in `documentation/eval/sources/` |
 | D2 | Gugliermo 2024 is a survey, "no data used" | never imply a Gugliermo benchmark/protocol |
-| D3 | (conditional) survey's unsafe-state metric may be normalized frequency | resolve after PDF access |
+| D3 | USC formulation mismatch, author-asserted: theirs = normalized frequency nU/nT of ENTERED unsafe states; ours = raw per-case count of guard-BLOCKED attempts | disclose both deviations in §VI; confirm with locators (Dossier #1 §4a) |
 | D4 | our USC counts guard-blocked *attempts* per case, detected by message substring, bounds-only | stress test must separate "unsafe motion" (headline 0) from "guard activations" (expected >0) — see §5 |
-| D5 | SNSR pooled + contaminated by by-design CheckDry failures | footnote/exclude rule on every SNSR quote |
+| D5 | SNSR: pooled micro-average (theirs per-node, author-asserted §4a) + contaminated by by-design CheckDry failures | disclose pooling deviation; footnote/exclude rule on every SNSR quote |
 | D6 | DBSR = substring proxy; refusal scored as success-with-zero-commands | describe, don't assume |
 | D7 | SafeAgentBench hazard universe ≠ ours; scale gap | regime-contrast phrasing mandatory |
 | D8 | confirm gate ≠ KnowNo (no calibration, no ε guarantee) | never write equivalence |
@@ -203,13 +203,22 @@ guards intercepted all M unsafe *attempts*".
 
 ## 8. CRITIC PASS (adversarial review of everything above)
 
-1. **The metrics-source hole is real and load-bearing.** Dossier #1 could not
-   verify the DBSR/SNSR/USC attribution, and the naming evidence points the
-   wrong way. If the thesis interim already printed "definitions are from
-   Gugliermo et al. (2024)", the final paper must correct, not repeat, it.
-   Highest-priority unblock: the author downloads the CC-BY PDF (institutional
-   access) → close D1–D3 within an hour. Until then §VI wording MUST be
-   "metrics adopted in the spirit of [Gugliermo-24], defined as follows".
+1. **The metrics-source hole is narrowed but not closed.** The author has
+   supplied a formulation asserting the names/intent ARE from Gugliermo et
+   al., with USC = nU/nT of entered unsafe states and per-node SNSR
+   (Dossier #1 §4a) — plausible and consistent with the secondary snippet,
+   but still without locators. Adopted §VI working sentence (structural
+   rephrase applied):
+   *"The DBSR/SNSR/USC metric names and their intent are from Gugliermo et
+   al. (2024); the corpus, harness, and operationalizations are ours, with
+   two disclosed deviations: their USC is a normalized frequency (nU/nT) of
+   entered unsafe states, whereas ours reports entered unsafe states
+   (structurally zero — the guard chain fails a subtree before any motion
+   command is published) separately from guard-blocked attempts, which we
+   count per case; and their SNSR is per-node, whereas ours pools all leaf
+   nodes."*
+   Remaining unblock: section/table locators or the CC-BY PDF in
+   `documentation/eval/sources/` — until then the citation stays flagged.
 2. **USC's implementation would betray the headline in the stress test.**
    As coded, USC counts guard-catch messages; injecting OOB intents (the
    whole point of the stress test) would raise USC while the system behaves
@@ -274,8 +283,9 @@ guards intercepted all M unsafe *attempts*".
     decoration.
 
 ### Blocking action items (ordered)
-1. Obtain Gugliermo PDF (author, institutional access) → close D1–D3; then
-   update Dossier #1 §4/§5 and the §VI wording decision.
+1. Provide Gugliermo locators (section/table) or drop the CC-BY PDF into
+   `documentation/eval/sources/` → close D1/D3/D5-pooling (author formulation
+   already adopted as working wording, Dossier #1 §4a).
 2. Decide SNSR footnote-vs-appendix (critic #5).
 3. Build + run the stress harness per §5 (sim) — the paper's headline
    experiment; then Run 2 hardware subset.
