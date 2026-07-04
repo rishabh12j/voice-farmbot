@@ -16,7 +16,7 @@ constraint → framework delivery). The evaluation exists to make each row
 
 | Claim-chain row | Our evidence (verified locators) | Prior-work anchor (dossier) |
 |---|---|---|
-| Safe even when the AI is wrong | USC 0 (Run 1, 42/42 sim); refusal 4/4 + negation 2/2 with zero commands; safety prefix in code (`bt/builder.py`, `condition_nodes.py:102–129`); **stress test pending** | #2 SafeAgentBench (best open-planner rejection 10%), #4 SafeGate (A-unsafe 0% via deterministic gate), #3 KnowNo (statistical alternative) |
+| Safe even when the AI is wrong | USC 0 (Run 1, 42/42 sim); refusal 4/4 + negation 2/2 with zero commands; safety prefix in code (`bt/builder.py`, `condition_nodes.py:102–129`); **stress test RUN (sim, 2026-07-04): 120 injections, unsafe-motion 0** — and it caught+fixed an unguarded coordinate-move path (see §9) | #2 SafeAgentBench (best open-planner rejection 10%), #4 SafeGate (A-unsafe 0% via deterministic gate), #3 KnowNo (statistical alternative) |
 | Inspectable before acting | tree is pure data; deterministic `_tree_*` builders; corpus cases show published commands per tree | #9/#10/#11/#12 LLM×BT generation: they emit trees and must validate post-hoc; logical-incoherence failures 12/17→30% (D#12) |
 | On-device / offline / private | gemma3:4b via Ollama, grounded classification; Run 1 latency 9331 ms mean (incl. real sim walks, max 47.6 s) | #13 (quantized 7B command emission collapses to 13%), #14 (SLM function-calling protocol), #15 (0.5B / 22 ms classification envelope) |
 | Honest feedback | tick-and-verify + honest-or-blank (AGENTS.md contract); ELC 100% (n=27) event-log coverage | #5 VoicePilot (no verified-done mechanism reported), #8 trust-after-failure mechanism, #6/#7 harms anchors |
@@ -24,8 +24,10 @@ constraint → framework delivery). The evaluation exists to make each row
 | Agriculture novelty | absence statement + audit trail | #16 (RO-MAN'22 is supervision-only) |
 
 Metric core: DBSR / SNSR / USC / ELC / latency **as operationalized by us**
-(Dossier #1 §5 — the attribution to Gugliermo et al. is unverified and now
-doubtful; use "in the spirit of" wording until the PDF is read; ledger D1).
+(Dossier #1 §5a — names+intent verified from Gugliermo et al. §3.1; USC is
+their metric and acronym, DBSR/SNSR abbreviations are ours; confirmed
+formulation deviations disclosed per Dossier #1 §7; SNSR appendix-only per
+D5 decision).
 
 ## 2. Comparison table for §VII (regime comparison, per-cell locators)
 
@@ -54,12 +56,12 @@ number carries its setting in the same sentence.
 
 | # | Deviation | Consequence / rule |
 |---|---|---|
-| D1 | DBSR/SNSR/USC attribution to Gugliermo et al. UNVERIFIED; exact names doubtful | "in the spirit of"; define ours explicitly; fix `thesis_chapter1` L175 wording; blocking item: obtain PDF via institutional access |
+| D1 | **CLOSED (2026-07-05, PDF verified)** — names+intent ARE from the paper (§3.1); USC acronym is the paper's own ("NEW" metric); "DBSR"/"SNSR" acronyms do NOT appear there — they are our abbreviations | §VI uses the verified wording in Dossier #1 §7 ("…which we abbreviate DBSR/SNSR"); revise thesis_chapter1 L175 accordingly |
 | D2 | Gugliermo 2024 is a survey, "no data used" | never imply a Gugliermo benchmark/protocol |
-| D3 | (conditional) survey's unsafe-state metric may be normalized frequency | resolve after PDF access |
+| D3 | **CLOSED (confirmed deviation)** — their USC = nU/nT normalized frequency of ENTERED unsafe states (Def. 4.3); ours = raw per-case count of guard-BLOCKED attempts, bounds-only unsafe set | disclose as deviation in §VI (Dossier #1 §5a/§7); no longer an open question |
 | D4 | our USC counts guard-blocked *attempts* per case, detected by message substring, bounds-only | stress test must separate "unsafe motion" (headline 0) from "guard activations" (expected >0) — see §5 |
-| D5 | SNSR pooled + contaminated by by-design CheckDry failures | footnote/exclude rule on every SNSR quote |
-| D6 | DBSR = substring proxy; refusal scored as success-with-zero-commands | describe, don't assume |
+| D5 | SNSR: pooled micro-average (theirs per-node SR_n = nS/(nS+nF), **verified**) + contaminated by by-design CheckDry failures | **DECIDED 2026-07-05: SNSR moves to the appendix** (not in headline tables); disclose pooling deviation + footnote wherever quoted |
+| D6 | DBSR = substring proxy on published commands; refusal/negation scored via Pi *terminal status* + zero commands — the status use deviates from the paper's "disregarding internal mechanisms" clause (verified, Dossier #1 §5a) | disclose in §VI as part of the operationalization |
 | D7 | SafeAgentBench hazard universe ≠ ours; scale gap | regime-contrast phrasing mandatory |
 | D8 | confirm gate ≠ KnowNo (no calibration, no ε guarantee) | never write equivalence |
 | D9 | SafeGate ISO hazard set ≠ our garden violations | both "zero" claims carry denominators |
@@ -80,6 +82,7 @@ number carries its setting in the same sentence.
 | D24 | V1 (29-case) vs V2 (42-case) corpora not directly comparable (doc's own note) | V1 baseline quoted only with the corpus-history caveat |
 | D25 | ALL current numbers are SIM-ONLY (Run 1); hardware Run 2 pending | every consumer labels numbers "sim" until Run 2 lands |
 | D26 | the corpus is **43 authored cases**; Run 1's 42/42 excludes the single `safety`-category case ("water everything", 56-plant walk) via `--skip-long` (`evaluate_v2.py:380`) | say "43-case corpus, 42 executed (long-walk case excluded from Run 1)"; run it in Run 2 or a full sim pass. Per-category N: direct 10, hard 10, indirect 4, emergency 4, refusal 4, query 3, general 3, multi 2, negation 2, safety 1 |
+| D27 | Merino-Fidalgo (Dossier #17): cloud-LLM, dialogue-assisted, 5-type protocol; participants aged 25–65 | regime contrast only; always "elderly-targeted, not elderly-evaluated" |
 
 Seed-list corrections found while dossiering (for the record): RG locator →
 CHI'23 Baughan (D14/Dossier #8); BTGenBot-2 numbers were ER-variant (D16);
@@ -90,7 +93,7 @@ seed itself predicted or close to it).
 
 ## 4. [EVAL-GAP] register — with the exact runs needed
 
-1. **Misclassification stress test (designed, pending)** — §5 below. Runs:
+1. **Misclassification stress test — RUN in sim (2026-07-04, see §9 item 3; harness tools/stress_misclassification.py on main; results in demo/eval_v2_results.md). Remaining: hardware subset in Run 2.** Original gap text:
    sim (Windows loop per `demo/eval_v2_results.md` "Fastest loop") N≥120
    injections; hardware subset (≥20) in Run 2.
 2. **Model-size sweep** (only gemma3:4b measured). Axes per Dossier #14/#15:
@@ -115,12 +118,11 @@ seed itself predicted or close to it).
    set. Phase-2 dossier queue; until then they are context citations, and
    §II sentences relying on them (e.g. RoboInspector's "unreliable policy
    code") carry the plan's own "verify while writing" flag.
-7. **Addition requiring approval (not acted on)**: Merino-Fidalgo et al.,
-   "Behavior tree generation and adaptation for a social robot control with
-   LLMs" (RAS 2025; found incidentally during Dossier #1 access work) —
-   LLM×BT + elderly-adjacent + 89.6% SR over 125 trials + QUESI usability.
-   It would strengthen Front 1/3 bridging, but it is beyond the seed list
-   and not a skeleton key → **asking before dossiering, per ground rules.**
+7. **APPROVED & DOSSIERED (2026-07-05)**: Merino-Fidalgo et al., "Behavior
+   tree generation and adaptation for a social robot control with LLMs"
+   (RAS, Dec 2025, DOI 10.1016/j.robot.2025.105165) → Dossier #17. Serves
+   Front 1 (generation+runtime-adaptation contrast) and Front 3 as the
+   honesty-boundary twin (elderly-targeted, participants 25–65). Ledger D27.
 
 ## 5. Misclassification stress test — design (the pending headline experiment)
 
@@ -203,13 +205,16 @@ guards intercepted all M unsafe *attempts*".
 
 ## 8. CRITIC PASS (adversarial review of everything above)
 
-1. **The metrics-source hole is real and load-bearing.** Dossier #1 could not
-   verify the DBSR/SNSR/USC attribution, and the naming evidence points the
-   wrong way. If the thesis interim already printed "definitions are from
-   Gugliermo et al. (2024)", the final paper must correct, not repeat, it.
-   Highest-priority unblock: the author downloads the CC-BY PDF (institutional
-   access) → close D1–D3 within an hour. Until then §VI wording MUST be
-   "metrics adopted in the spirit of [Gugliermo-24], defined as follows".
+1. **The metrics-source question is CLOSED (2026-07-05).** The author
+   supplied the CC-BY PDF (archived under `documentation/eval/sources/`);
+   Dossier #1 is now fully verified. Outcome: metric names + intent are from
+   Gugliermo et al. §3.1; USC is the paper's own "(NEW)" metric and acronym;
+   "DBSR"/"SNSR" are our abbreviations (absent from the paper); confirmed
+   formulation deviations — USC nU/nT of *entered* states vs our raw count
+   of guard-*blocked attempts*; SNSR per-node vs our pooled. Adopted §VI
+   wording: Dossier #1 §7. Remaining edit: revise
+   `thesis_chapter1_introduction.md` line 175 to that wording (author edit —
+   outside this task's no-code-changes scope, flagged here).
 2. **USC's implementation would betray the headline in the stress test.**
    As coded, USC counts guard-catch messages; injecting OOB intents (the
    whole point of the stress test) would raise USC while the system behaves
@@ -235,10 +240,11 @@ guards intercepted all M unsafe *attempts*".
    §VII as evidence the corpus can and did catch failures; the stress test
    then carries the adversarial weight. Optional cheap strengthener: n≥3
    repeated runs for variance (LLM temp 0.2 ≠ deterministic).
-5. **SNSR is currently a liability, not an asset.** 91.2% with a by-design
-   artifact invites misreading; either footnote-and-report (with the
-   excluded-node recomputation) or drop SNSR from headline tables and keep
-   it in the appendix. Decide once, before §VII drafting (owner: author).
+5. **SNSR — DECIDED (2026-07-05): appendix-only.** Headline tables (§VII
+   Table III) report DBSR / USC / ELC / latency; SNSR goes to the appendix
+   with the per-node-vs-pooled deviation note (verified, Dossier #1 §5a) and
+   the CheckDry footnote (optionally also the recomputed excluded-node
+   figure). Ledger D5 updated.
 5b. **The one case tagged "safety" was the one skipped in Run 1.** The
    `--skip-long` flag excluded the "water everything" walk — harmless in
    substance (it is a *long bounded* walk, not a hazard case; refusal/
@@ -273,9 +279,20 @@ guards intercepted all M unsafe *attempts*".
     honest version of that table — the caveat columns are the point, not
     decoration.
 
-### Blocking action items (ordered)
-1. Obtain Gugliermo PDF (author, institutional access) → close D1–D3; then
-   update Dossier #1 §4/§5 and the §VI wording decision.
+### Blocking action items (ordered — updated 2026-07-05)
+1. ~~Gugliermo PDF~~ **DONE** — verified, archived, D1/D3 closed, D5
+   confirmed; author to apply the Dossier #1 §7 wording to
+   `thesis_chapter1_introduction.md` L175 and the §VI draft.
+2. ~~SNSR decision~~ **DONE** — appendix-only (critic #5).
+3. Build + run the stress harness per §5 (sim) — **confirmed NOT in the repo
+   as of 2026-07-05** (git history checked: no stress/injection tool exists);
+   still the paper's headline pending experiment; then Run 2 hardware subset.
+4. ~~Merino-Fidalgo approval~~ **DONE** — Dossier #17, comparison row added.
+5. Venue-pinning sweep (critic #8) during reference writing; phase-2
+   dossiers for skeleton citation keys — deferred (author's call).
+   Bonus pin from Crossref (2026-07-05): LLM-as-BT-Planner = ICRA 2025,
+   DOI 10.1109/icra55743.2025.11128454 (Dossier #12 reference).
+, Dossier #1 §4a).
 2. Decide SNSR footnote-vs-appendix (critic #5).
 3. Build + run the stress harness per §5 (sim) — the paper's headline
    experiment; then Run 2 hardware subset.

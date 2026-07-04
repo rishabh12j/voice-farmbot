@@ -16,35 +16,38 @@ boundary: safe-by-construction only, no measured older-adult outcomes.
 - Deviations ledger location: per EVAL_TASK (inside eval_strategy.md).
 - Continue through the full work order in one session.
 
-## What's been implemented (2026-07-04)
-- 16 dossiers under `documentation/eval/` (dossier_01…dossier_16), covering
-  Front 0 (metrics source), Front 2 (SafeAgentBench, KnowNo, SafeGate),
-  Front 3 (VoicePilot, VA-Errors/TACCESS, "hard work", Baughan CHI'23),
-  Front 1 (BTGenBot, BTGenBot-2, LLM-BRAIn, LLM-as-BT-Planner + companion),
-  Front 4 (Edge-LLM, Small-Models-Big-Tasks, SLM leader-follower),
-  Front 5 (agriculture absence + RO-MAN'22).
+## What's been implemented (2026-07-04 → 2026-07-05)
+- 17 dossiers under `documentation/eval/` (dossier_01…dossier_17): Front 0
+  (metrics source — **fully verified 2026-07-05 from the author-supplied
+  PDF**, archived in `documentation/eval/sources/`), Fronts 1–5 per the seed
+  list, plus approved addition Merino-Fidalgo et al. (RAS Dec 2025,
+  dossier_17).
 - `documentation/eval/eval_strategy.md`: common core, §VII regime-comparison
   table with per-cell locators, deviations ledger D1–D26, [EVAL-GAP]
   register, misclassification stress-test design (with the D4 USC-semantics
   resolution), consumer mapping, fairness check, critic pass.
-- Key findings: Gugliermo full text inaccessible from this environment
-  (ScienceDirect Cloudflare + DiVA outage — access log in dossier_01);
-  DBSR/SNSR/USC naming attribution doubtful; USC counts guard-blocked
-  attempts (stress test must split unsafe-motion vs guard-blocked); corpus
-  is 43 cases, Run 1 executed 42 (`--skip-long`); several seed-snippet
-  errors corrected (RG locator → CHI'23; BTGenBot-2 ER-variant numbers;
-  2602.23312 model claim).
+- Key findings/decisions: Gugliermo verified — names+intent theirs, USC is
+  their "(NEW)" metric+acronym, DBSR/SNSR acronyms ours; confirmed deviations
+  (USC nU/nT entered-states vs our raw blocked-attempt count; SNSR per-node
+  vs pooled); D1/D3 closed, D5 confirmed; SNSR moved to appendix (author
+  decision); stress harness confirmed absent from git; USC blocked-attempt
+  semantics (D4) still drives the stress-test split; corpus is 43 cases, Run
+  1 executed 42 (`--skip-long`); seed-snippet errors corrected (RG locator →
+  CHI'23; BTGenBot-2 ER-variant numbers; 2602.23312 model claim).
 - No code or configs modified. No hardware runs attempted.
 
 ## Backlog / next tasks
-- P0: author obtains Gugliermo PDF (institutional access) → close ledger
-  D1–D3, update dossier_01 §4/§5.
-- P0: user decision on Merino-Fidalgo et al. (RAS 2025) addition
-  (eval_strategy §4 item 7 — beyond seed list, needs approval).
-- P1: build + run misclassification stress harness (sim) per eval_strategy §5.
-- P1: SNSR footnote-vs-appendix decision; full sim pass without --skip-long.
+- P0: author applies Dossier #1 §7 wording to `thesis_chapter1_introduction.md`
+  L175 and the §VI draft (agent may not modify those files under the eval
+  task's ground rules).
+- P0: build + run misclassification stress harness (sim) per eval_strategy §5
+  — confirmed NOT in git as of 2026-07-05; needs explicit user go-ahead since
+  it means writing code.
+- P1: full sim pass without --skip-long (43/43).
 - P2: phase-2 dossiers for skeleton citation keys ([SayCan-22],
   [CodePolicies-22], [BETR-XP-24], [InterpBT-25], [RoboInspector-25],
-  [InteLiPlan-24], [VA-Health-21], [SAR-Older-25]).
-- P2: venue-pinning sweep (VoicePilot, BTGenBot, "hard work", preprints).
+  [InteLiPlan-24], [VA-Health-21], [SAR-Older-25]) — deferred per user.
+- P2: venue-pinning sweep (VoicePilot, BTGenBot, "hard work", preprints) —
+  deferred per user. (LLM-as-BT-Planner pinned: ICRA 2025,
+  10.1109/icra55743.2025.11128454.)
 - Run 2 (hardware, gh1) — not available to the agent.
