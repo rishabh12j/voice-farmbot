@@ -49,3 +49,4 @@ src/growmate_voice/intent_server_openapi.json
 # Loose root data files (real maps live in tools/maps/)
 /map.yaml
 /a.yaml
+tools/active_map.yaml
