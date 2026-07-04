@@ -1,5 +1,8 @@
-"""V2 evaluation harness — measures the Gugliermo metrics against the
-phone-to-Pi pipeline.
+"""V2 evaluation harness — metrics adopted in the spirit of Gugliermo et al.
+(2024, "Evaluating behavior trees", RAS), operationalized for the phone-to-Pi
+pipeline as defined below. (The metric NAMES — DBSR/SNSR/USC — are this
+project's own; see documentation/eval/dossier_01_gugliermo_metrics.md (emergent-eval branch) for the
+attribution audit. The definitions that matter are the ones in this file.)
 
 Differs from the legacy ``growmate-bt/evaluate_bt.py`` in three ways:
 
@@ -67,8 +70,9 @@ except ImportError:
 #
 # Category "refusal": species NOT in the live map. The grounded classifier +
 # BT must produce a clean spoken refusal with ZERO robot commands (Q-design).
-# Species below exist in the repo's 54-plant sim map; small beds
-# (spearmint=3, marigold=6) keep the real-time sim watering walks short.
+# Species below exist in the repo's 56-plant sim map (the real re-planted gh1
+# garden); small beds (spearmint=1, basil=4, marigold=6) keep the real-time
+# sim watering walks short.
 
 TestCase = Tuple[str, str, List[str], str, str]
 # (utterance, expected_type, expected_command_substrings, description, category)

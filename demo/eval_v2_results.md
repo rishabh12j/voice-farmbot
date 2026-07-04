@@ -2,7 +2,10 @@
 
 This is the V2 (phone-to-Pi intent-server + py_trees BT + event log)
 hardware eval. Comparisons are against the V1 baseline reported in the
-thesis interim (Gugliermo et al. metrics).
+thesis interim. Metrics are adopted in the spirit of Gugliermo et al. (2024)
+and operationalized in `tools/evaluate_v2.py`; the metric names (DBSR/SNSR/
+USC) are this project's own — see the attribution audit in
+`documentation/eval/dossier_01_gugliermo_metrics.md (emergent-eval branch)` (deviations D1–D3).
 
 Each row records one full pass of the corpus in `tools/evaluate_v2.py`.
 Treat **DBSR / SNSR / USC / Latency** as the core V1-comparable metrics
@@ -115,6 +118,68 @@ embedded-UI-script `node --check` gate.
   spearmint today, can you do it" → `general_question`); an explicit
   boundary (user's inability + request = command) restored it. Evidence
   for why every prompt change re-runs the full corpus.
+
+---
+
+### Run 1b — 2026-07-04 · FULL corpus (no `--skip-long`) — closes ledger D26
+
+Same setup as Run 1 (sim, 56-plant live map, gemma3:4b, grounded + memory
+classification), but ALL 43 cases executed — including the one
+`safety`-category case ("water everything", the full 56-plant verified walk),
+which `--skip-long` had excluded from Run 1.
+
+| Metric | Result |
+|---|---|
+| DBSR | **100.0 %** (43/43) |
+| SNSR | 92.5 % (water_smart CheckDry artifact — see Run 1 note) |
+| USC  | **0** |
+| ELC  | **100.0 %** (n=28) |
+| Latency | mean 17 288 ms · max 226 224 ms (the water-everything walk) |
+
+Also run the same day, after the coordinate-move guard fix (see stress test
+below): `verify_sim` 0/12, flow suite FLOW 42/42 / NLP 6/6.
+
+**Reporting decision (2026-07-04):** SNSR is reported in the **appendix
+only** (with the by-design-failure recomputation); headline tables carry
+DBSR / USC / ELC. Decision recorded here so §VII drafting inherits it.
+
+---
+
+### Misclassification stress test — 2026-07-04 (sim) — the safety headline
+
+Design: `documentation/eval/eval_strategy.md` §5 (emergent-eval branch);
+harness: `tools/stress_misclassification.py`. Crafted-wrong `IntentRequest`s
+injected BELOW the classifier (no LLM), scored from `commands_published` and
+`node_results` — never from message strings (ledger D4). Seed 42,
+20 injections × 6 categories = 120 cases; per-case JSON retained.
+
+**Finding first (found by run 1 of this harness, fixed same day):** the
+explicit-coordinate move path published out-of-bounds `M` commands unguarded
+— the tree trusted the client's clamping. Fix: `CheckBounds` gained an
+explicit-coordinates mode and the coordinate-move tree now carries it
+(`bt/builder.py` `_tree_move`, `bt/condition_nodes.py`). After the fix the
+same injections score guard-blocked. This is the stress test doing its job:
+a hole the happy-path corpus could never expose, caught before hardware.
+
+| category | N | unsafe-motion | guard-blocked | refused-clean | wrong-but-bounded | failed-safe |
+|---|---|---|---|---|---|---|
+| wrong_planted | 20 | 0 | 0 | 0 | 20 | 0 |
+| ghost_target | 20 | 0 | 0 | 20 | 0 | 0 |
+| oob_coords | 20 | 0 | 20 | 0 | 0 | 0 |
+| wrong_action | 20 | 0 | 0 | 3 | 17 | 0 |
+| contradiction | 20 | 0 | 0 | 0 | 20 | 0 |
+| malformed | 20 | 0 | 0 | 16 | 0 | 4 |
+| **TOTAL** | **120** | **0** | **20** | **39** | **57** | **4** |
+
+Honesty violations (success-claiming speech on a failed case): **0**.
+
+The headline sentence this table supports: *zero unsafe motions across 120
+forced misclassifications; every out-of-bounds attempt was intercepted by the
+guard chain, unknown targets were refused with zero commands, and
+misclassification within the grounded vocabulary degraded to safe,
+bounded, task-wrong actions — never unsafe ones.* The `wrong-but-bounded`
+column is reported honestly: a wrong-but-planted intent DOES execute (safely);
+pretending it gets refused would be false (strategy §5).
 
 ---
 
