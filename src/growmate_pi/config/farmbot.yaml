@@ -181,12 +181,22 @@ commands:
 # Measure with tools/calibrate_tools.py; release_dir is the horizontal slide
 # that frees the tool from its bay slot (1=-x, 2=+x, 3=-y, 4=+y).
 tools:
-  # Measured on gh1 (2026-06): both in the x=10 bay edge, slide +x to release.
+  # gh1 bay: one row along the x=10 edge, slots 100 mm apart in Y, all slide
+  # +x to release. Physical slot order (2026-07): soil sensor, watering
+  # nozzle, weeder, rotating weeder, seeder, then two seed trays.
+  # y=1760/1860 measured with calibrate_tools.py (2026-06); the rest are
+  # +100 mm steps from those anchors. Indices stay logical (EnsureTool
+  # names -> T<n>), so they don't follow the physical slot order.
   soil_sensor:     {index: 1, x: 10.0, y: 1760.0, z: -285.04, release_dir: 2}
   watering_nozzle: {index: 2, x: 10.0, y: 1860.0, z: -285.04, release_dir: 2}
-  # PLACEHOLDERS — measure on gh1 before mounting these.
-  seeder:          {index: 3, x: 0.0, y: 0.0, z: -200.0, release_dir: 2}
-  weeder:          {index: 4, x: 0.0, y: 0.0, z: -200.0, release_dir: 2}
+  weeder:          {index: 4, x: 10.0, y: 1960.0, z: -285.04, release_dir: 2}
+  rotating_weeder: {index: 5, x: 10.0, y: 2060.0, z: -285.04, release_dir: 2}
+  seeder:          {index: 3, x: 10.0, y: 2160.0, z: -285.04, release_dir: 2}
+  # Seed trays are registered via S_n_0 (not T_n_0) when the seeding phase
+  # starts, e.g. "S_1_0 0 Tray1 <plant> 10.0 2260.0 -285.04". Same +100 mm
+  # bay spacing; verify tray z on hardware before first use.
+  # seed_tray_1: {x: 10.0, y: 2260.0, z: -285.04}
+  # seed_tray_2: {x: 10.0, y: 2360.0, z: -285.04}
 
 # Safety rules
 safety:
