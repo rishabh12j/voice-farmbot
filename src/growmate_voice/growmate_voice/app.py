@@ -35,7 +35,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -1174,10 +1174,13 @@ def _build_pending_response(
     return payload
 
 
-_PLANT_HINTS = (
-    "tomato", "tomatoes", "lettuce", "marigold", "scallion",
-    "pepper", "peppers", "herbs", "carrot", "strawberr", "basil",
-    "the plants", "all plants", "everything",
+# Generic garden words that force the LLM route even when a bare pattern
+# happens to match (e.g. "lights on in the tomato bed" shouldn't shortcut to
+# light_on). Species names are NOT listed here — they come live from the Pi's
+# active_map, so routing tracks what is actually planted. The old static list
+# still carried V1 ghost species (herbs/carrots/strawberries).
+_GENERIC_PLANT_HINTS = (
+    "plant", "plants", "everything", "garden", "bed", "beds",
 )
 _QUESTION_HINTS = ("when ", "why ", "how ", "what ", "should ", "tell ", "explain ")
 _EMERGENCY_HINTS = ("stop", "halt", "emergency", "freeze", "abort")
@@ -1188,12 +1191,16 @@ def _route_transcript(transcript: str, matched_action: Optional[str],
     """Decide whether to run the matched pattern or go to AICore.
 
     Returns "pattern" or "aicore". Emergency always returns "pattern" so the
-    safety-critical path never waits for the LLM.
+    safety-critical path never waits for the LLM. A mention of a live-map
+    species (or a generic garden word) routes to the LLM even when a pattern
+    matched, so plant-targeted phrasings never shortcut to a bare action.
     """
     t = transcript.lower().strip()
     if any(p in t for p in _EMERGENCY_HINTS):
         return "pattern"
-    if any(p in t for p in _PLANT_HINTS):
+    if any(p in t for p in _GENERIC_PLANT_HINTS):
+        return "aicore"
+    if any(sp and sp in t for sp in _known_species_in_garden()):
         return "aicore"
     if any(t.startswith(q) or f" {q.strip()} " in f" {t} " for q in _QUESTION_HINTS):
         return "aicore"
@@ -1762,13 +1769,142 @@ def _dispatch_via_aicore(
     return payload
 
 
+# --------------------------------------------------------------------------- the single dispatch pipeline
+# Every utterance surface — /api/voice (after STT), /api/text, and /api/confirm
+# (on YES) — funnels through ONE function with ordered stages and ONE exit that
+# owns TTS, history, suppression, and the response envelope. The stages used to
+# be duplicated per endpoint; every "different path behaves differently" bug
+# (double-fix honesty, one-path-only 'Done' fallback, triplicated
+# suppress_voice) came from that duplication.
+#
+# Stage order (safety-motivated, do not reorder):
+#   1. emergency/pattern match      — "stop" never waits for the LLM
+#   2. soft-confirm gate            — destructive phrasing defers to a modal
+#   3. deterministic memory answers — plant-state queries skip the LLM
+#   4. exact-pattern shortcut       — quick commands (home/lights/jog)
+#   5. memory-grounded classify     — LLM -> sanitize -> Pi dispatch
+
+def _dispatch_pipeline(
+    text: str,
+    source: str,
+    pipeline_log: List[str],
+    skip_confirm_gate: bool = False,
+) -> Tuple[Dict[str, Any], Optional[str], str]:
+    """Run one utterance through the five dispatch stages.
+
+    Returns ``(position_payload, matched_action, confidence)``. The payload may
+    carry ``requires_confirm`` (stage 2 deferral) — the caller's envelope lifts
+    those fields for the UI. ``skip_confirm_gate`` is set on /api/confirm
+    re-entry so an already-confirmed command can't defer again.
+    """
+    # Stage 1: pattern/emergency match + route decision.
+    action, confidence = match_command(text)
+    route = _route_transcript(text, action, confidence)
+    pipeline_log.append(f"🔍 Pattern: {action} ({confidence})  ➜  Route: {route}")
+
+    # Stage 2: soft-confirm gate — destructive commands pause for YES/NO.
+    if not skip_confirm_gate:
+        pending = _maybe_defer_for_confirm(text, action, route, source=source)
+        if pending:
+            pipeline_log.append(f"❓ Awaiting confirm: {pending['confirm_id']}")
+            return pending, action, confidence
+
+    # Stage 4 (order in code: pattern shortcut only fires when routed there).
+    if route == "pattern" and action is not None:
+        payload = _execute_action(action, source=source)
+        if _STATE.history._entries:
+            last = _STATE.history._entries[-1]
+            last.transcript = text
+            last.confidence = confidence
+        pipeline_log.append(f"🤖 {payload.get('last_cmd', '')}")
+        return payload, action, confidence
+
+    # Stage 3: deterministic plant-state queries answer from the honest log.
+    fast = _fast_path_plant_query(text)
+    if fast:
+        payload = _position_payload(last_cmd=fast["transcript_label"])
+        payload["tts_text"] = fast["answer"]
+        pipeline_log.append(f"⚡ Fast plant query: {fast['answer']}")
+        _record(source, "fast_plant_query", [], "answered",
+                fast["answer"], transcript=text)
+        return payload, action, confidence
+
+    # Stage 5: memory-grounded classification -> sanitized Pi dispatch.
+    payload = _dispatch_via_aicore(text, source=source,
+                                   skip_multi_plant_gate=skip_confirm_gate)
+    pipeline_log.append(f"🧠 AICore: {payload.get('last_cmd', '')}")
+    return payload, action, confidence
+
+
+def _pipeline_response(
+    text: str,
+    payload: Dict[str, Any],
+    action: Optional[str],
+    confidence: str,
+    pipeline_log: List[str],
+    tts: str,
+    enable_tts: str,
+    extra_result: Optional[Dict[str, Any]] = None,
+    envelope: Optional[Dict[str, Any]] = None,
+) -> JSONResponse:
+    """The single exit: TTS decision + synthesis, result block, envelope.
+
+    Honesty rules live here exactly once: nothing is synthesised when the
+    payload suppresses voice (a running water narrates via the browser), and
+    the spoken phrase is always the payload's own tts_text — the pipeline
+    stages are responsible for making that text honest.
+    """
+    # tts_spoken is the CONTRACT with the browser: "these are the words to
+    # speak" — the UI falls back to local SpeechSynthesis with it when no
+    # server audio comes back, so it must be set whenever a phrase exists,
+    # not only when kokoro synthesis actually ran. Empty only on suppression
+    # (a running water narrates via the live overlay's single voice).
+    tts_spoken = ""
+    if not payload.get("suppress_voice"):
+        tts_spoken = (payload.get("tts_text") or "").strip() or get_tts_phrase(action)
+    tts_audio_b64: Optional[str] = None
+    if tts_spoken and str(enable_tts).lower() == "true" and tts != "none":
+        try:
+            tts_backend = _get_tts(tts)
+            if not tts_backend.is_available():
+                pipeline_log.append(f"⚠ TTS '{tts}' not available")
+            else:
+                pipeline_log.append(f"🔊 TTS ({tts}): '{tts_spoken}'")
+                tts_np, tts_sr = tts_backend.synthesise(tts_spoken)
+                wav_out = audio_to_wav_bytes(tts_np, sample_rate=tts_sr)
+                tts_audio_b64 = base64.b64encode(wav_out).decode("ascii")
+        except Exception as exc:  # noqa: BLE001
+            pipeline_log.append(f"⚠ TTS error: {exc}")
+
+    pipeline_log.append("✅ Done")
+    result_block: Dict[str, Any] = {
+        "raw_transcript": text,
+        "matched_action": action,
+        "confidence": confidence,
+        "tts_spoken": tts_spoken,
+        "position": payload,
+    }
+    if extra_result:
+        result_block.update(extra_result)
+    # Lift confirm fields to the top of `result` so the UI doesn't dig.
+    if payload.get("requires_confirm"):
+        result_block["requires_confirm"] = True
+        result_block["confirm_id"] = payload.get("confirm_id")
+        result_block["confirm_question"] = payload.get("confirm_question")
+        result_block["confirm_timeout_s"] = payload.get("confirm_timeout_s")
+    body: Dict[str, Any] = {
+        "result": result_block,
+        "log": "\n".join(pipeline_log),
+        "tts_audio_b64": tts_audio_b64,
+    }
+    if envelope:
+        body.update(envelope)
+    return JSONResponse(body)
+
+
 @app.post("/api/text")
 async def api_text(body: Dict[str, Any]) -> Any:
-    """Text-input variant of /api/voice.
-
-    Skips STT and runs the rest of the pipeline: router -> pattern OR AICore
-    -> Pi dispatch -> TTS. Used by the web UI's "type instead" fallback.
-    """
+    """Text-input variant of /api/voice — same pipeline, no STT."""
     text = (body or {}).get("text", "").strip()
     tts = (body or {}).get("tts", "kokoro")
     enable_tts = str((body or {}).get("enable_tts", "true")).lower()
@@ -1778,67 +1914,9 @@ async def api_text(body: Dict[str, Any]) -> Any:
 
     pipeline_log: List[str] = [f"📝 (text) '{text}'"]
     try:
-        action, confidence = match_command(text)
-        route = _route_transcript(text, action, confidence)
-        pipeline_log.append(f"🔍 Pattern: {action} ({confidence})  ➜  Route: {route}")
-
-        pending = _maybe_defer_for_confirm(text, action, route, source="text")
-        if pending:
-            pipeline_log.append(f"❓ Awaiting confirm: {pending['confirm_id']}")
-            position_payload = pending
-        elif route == "pattern" and action is not None:
-            position_payload = _execute_action(action, source="text")
-            if _STATE.history._entries:
-                last = _STATE.history._entries[-1]
-                last.transcript = text
-                last.confidence = confidence
-            pipeline_log.append(f"🤖 {position_payload['last_cmd']}")
-        else:
-            # Day 11: deterministic plant-state queries skip the LLM.
-            fast = _fast_path_plant_query(text)
-            if fast:
-                position_payload = _position_payload(last_cmd=fast["transcript_label"])
-                position_payload["tts_text"] = fast["answer"]
-                pipeline_log.append(f"⚡ Fast plant query: {fast['answer']}")
-                _record("text", "fast_plant_query", [], "answered",
-                        fast["answer"], transcript=text)
-            else:
-                position_payload = _dispatch_via_aicore(text, source="text")
-                pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
-
-        tts_spoken = ""
-        tts_audio_b64: Optional[str] = None
-        if (enable_tts == "true" and tts != "none"
-                and not position_payload.get("suppress_voice")):
-            phrase = (position_payload.get("tts_text") or "").strip() or get_tts_phrase(action)
-            try:
-                tts_backend = _get_tts(tts)
-                if tts_backend.is_available() and phrase:
-                    tts_np, tts_sr = tts_backend.synthesise(phrase)
-                    wav_out = audio_to_wav_bytes(tts_np, sample_rate=tts_sr)
-                    tts_audio_b64 = base64.b64encode(wav_out).decode("ascii")
-                    tts_spoken = phrase
-            except Exception as exc:
-                pipeline_log.append(f"⚠ TTS error: {exc}")
-
-        pipeline_log.append("✅ Done")
-        result_block: Dict[str, Any] = {
-            "raw_transcript": text,
-            "matched_action": action,
-            "confidence": confidence,
-            "tts_spoken": tts_spoken,
-            "position": position_payload,
-        }
-        if position_payload.get("requires_confirm"):
-            result_block["requires_confirm"] = True
-            result_block["confirm_id"] = position_payload.get("confirm_id")
-            result_block["confirm_question"] = position_payload.get("confirm_question")
-            result_block["confirm_timeout_s"] = position_payload.get("confirm_timeout_s")
-        return JSONResponse({
-            "result": result_block,
-            "log": "\n".join(pipeline_log),
-            "tts_audio_b64": tts_audio_b64,
-        })
+        payload, action, confidence = _dispatch_pipeline(text, "text", pipeline_log)
+        return _pipeline_response(text, payload, action, confidence,
+                                  pipeline_log, tts, enable_tts)
     except Exception as exc:
         log.exception("Text pipeline error")
         return JSONResponse(status_code=500, content={
@@ -1868,50 +1946,40 @@ def api_confirm(body: Dict[str, Any]) -> Any:
     if item is None:
         msg = "That request expired. Please ask again."
         pipeline_log.append("⚠ unknown or expired confirm id")
-        return JSONResponse({
-            "cancelled": True,
-            "expired": True,
-            "result": {
-                "tts_spoken": msg,
-                "position": _position_payload(last_cmd=f"(confirm id {cid} expired)"),
-            },
-            "log": "\n".join(pipeline_log),
-            "tts_audio_b64": _synthesise_tts_b64(msg, tts) if enable_tts == "true" else None,
-        })
+        payload = _position_payload(last_cmd=f"(confirm id {cid} expired)")
+        payload["tts_text"] = msg
+        return _pipeline_response("", payload, None, "none", pipeline_log,
+                                  tts, enable_tts,
+                                  envelope={"cancelled": True, "expired": True})
+
+    source = item.get("source", "voice")
+    transcript = item.get("transcript", "")
 
     if not confirmed:
         msg = "Cancelled."
         pipeline_log.append("🛑 user said NO")
-        _record(item.get("source", "voice"), None, [], "cancelled",
-                f"User cancelled: {item.get('transcript', '')}",
-                transcript=item.get("transcript", ""))
-        return JSONResponse({
-            "cancelled": True,
-            "result": {
-                "tts_spoken": msg,
-                "position": _position_payload(last_cmd=f"(cancelled: {item.get('transcript', '')})"),
-            },
-            "log": "\n".join(pipeline_log),
-            "tts_audio_b64": _synthesise_tts_b64(msg, tts) if enable_tts == "true" else None,
-        })
+        _record(source, None, [], "cancelled",
+                f"User cancelled: {transcript}", transcript=transcript)
+        payload = _position_payload(last_cmd=f"(cancelled: {transcript})")
+        payload["tts_text"] = msg
+        return _pipeline_response(transcript, payload, None, "none",
+                                  pipeline_log, tts, enable_tts,
+                                  envelope={"cancelled": True})
 
-    # User confirmed — execute the deferred action.
-    source = item.get("source", "voice")
-    transcript = item.get("transcript", "")
-    # Tier B Q2: if this pending was a multi-plant gate deferral, tell the
-    # re-dispatcher to skip the gate check so it doesn't loop right back to
-    # another modal.
-    skip_multi_plant_gate = bool(item.get("skip_multi_plant_gate", False))
+    # User confirmed — re-enter the ONE pipeline with the gate disarmed so an
+    # already-confirmed command can't defer again (that includes the Tier B
+    # multi-plant gate inside the aicore stage).
+    action: Optional[str] = None
+    confidence = "none"
     try:
         if item["type"] == "pattern":
-            payload = _execute_action(item["action"], source=source)
+            # Pattern pendings stash the resolved ACTION, not an utterance.
+            action = item.get("action")
+            payload = _execute_action(action, source=source)
             pipeline_log.append(f"🤖 {payload.get('last_cmd', '')}")
         elif item["type"] == "aicore_transcript":
-            payload = _dispatch_via_aicore(
-                transcript, source=source,
-                skip_multi_plant_gate=skip_multi_plant_gate,
-            )
-            pipeline_log.append(f"🧠 {payload.get('last_cmd', '')}")
+            payload, action, confidence = _dispatch_pipeline(
+                transcript, source, pipeline_log, skip_confirm_gate=True)
         else:
             payload = _position_payload(last_cmd=f"(unknown pending type: {item['type']})")
     except Exception as exc:
@@ -1919,22 +1987,9 @@ def api_confirm(body: Dict[str, Any]) -> Any:
         pipeline_log.append(f"❌ Error: {exc}")
         payload = _position_payload(last_cmd=f"(error: {exc})")
 
-    tts_audio_b64: Optional[str] = None
-    phrase = (payload.get("tts_text") or "").strip()
-    if (enable_tts == "true" and tts != "none" and phrase
-            and not payload.get("suppress_voice")):
-        tts_audio_b64 = _synthesise_tts_b64(phrase, tts)
-
-    return JSONResponse({
-        "cancelled": False,
-        "result": {
-            "raw_transcript": transcript,
-            "tts_spoken": phrase,
-            "position": payload,
-        },
-        "log": "\n".join(pipeline_log),
-        "tts_audio_b64": tts_audio_b64,
-    })
+    return _pipeline_response(transcript, payload, action, confidence,
+                              pipeline_log, tts, enable_tts,
+                              envelope={"cancelled": False})
 
 
 @app.post("/api/voice")
@@ -1965,85 +2020,16 @@ async def api_voice(
         transcript, latency_ms = stt_backend.transcribe(np_audio, sample_rate=SAMPLE_RATE)
         pipeline_log.append(f"📝 '{transcript}' ({latency_ms:.1f} ms)")
 
-        action, confidence = match_command(transcript)
-        route = _route_transcript(transcript, action, confidence)
-        pipeline_log.append(f"🔍 Pattern: {action} ({confidence})  ➜  Route: {route}")
-
-        # Day 5: soft-confirm gate — destructive commands like "water everything"
-        # pause for a YES/NO before firing. Emergency phrases pass through.
-        pending = _maybe_defer_for_confirm(transcript, action, route, source="voice")
-        if pending:
-            pipeline_log.append(f"❓ Awaiting confirm: {pending['confirm_id']}")
-            position_payload = pending
-        elif route == "pattern" and action is not None:
-            # Fast path — pattern match drives the action (works for emergency,
-            # home, lights, photo, jog, generic water/photo).
-            position_payload = _execute_action(action, source="voice")
-            if _STATE.history._entries:
-                last = _STATE.history._entries[-1]
-                last.transcript = transcript
-                last.confidence = confidence
-            pipeline_log.append(f"🤖 {position_payload['last_cmd']}")
-        else:
-            # Day 11: deterministic plant-state queries skip the LLM.
-            # Triggers on phrasings like "when did I last water X",
-            # "is X thirsty", "which plant needs water most".
-            fast = _fast_path_plant_query(transcript)
-            if fast:
-                position_payload = _position_payload(last_cmd=fast["transcript_label"])
-                position_payload["tts_text"] = fast["answer"]
-                pipeline_log.append(f"⚡ Fast plant query: {fast['answer']}")
-                _record("voice", "fast_plant_query", [], "answered",
-                        fast["answer"], transcript=transcript)
-            else:
-                # Smart path — LLM classifies (plant-targeted, general questions,
-                # or anything pattern match couldn't handle). Falls back to ignored
-                # if Ollama or Pi is unavailable.
-                position_payload = _dispatch_via_aicore(transcript, source="voice")
-                pipeline_log.append(f"🧠 AICore: {position_payload['last_cmd']}")
-
-        tts_spoken = ""
-        tts_audio_b64: Optional[str] = None
-        if (enable_tts.lower() == "true" and tts != "none"
-                and not position_payload.get("suppress_voice")):
-            # Prefer the LLM-generated response (richer + plant-specific) when
-            # we took the AICore path; otherwise use the canned pattern phrase.
-            phrase = (position_payload.get("tts_text") or "").strip() or get_tts_phrase(action)
-            try:
-                tts_backend = _get_tts(tts)
-                if not tts_backend.is_available():
-                    pipeline_log.append(f"⚠ TTS '{tts}' not available")
-                else:
-                    pipeline_log.append(f"🔊 TTS ({tts}): '{phrase}'")
-                    tts_np, tts_sr = tts_backend.synthesise(phrase)
-                    wav_out = audio_to_wav_bytes(tts_np, sample_rate=tts_sr)
-                    tts_audio_b64 = base64.b64encode(wav_out).decode("ascii")
-                    tts_spoken = phrase
-            except Exception as exc:  # noqa: BLE001
-                pipeline_log.append(f"⚠ TTS error: {exc}")
-
-        pipeline_log.append("✅ Done")
-        result_block: Dict[str, Any] = {
-            "raw_transcript": transcript,
-            "matched_action": action,
-            "confidence": confidence,
-            "stt_latency_ms": round(latency_ms, 1),
-            "stt_backend": stt_backend.name,
-            "tts_spoken": tts_spoken,
-            "position": position_payload,
-        }
-        # Day 5: lift confirm fields to the top of `result` so the UI
-        # doesn't need to dig into result.position for them.
-        if position_payload.get("requires_confirm"):
-            result_block["requires_confirm"] = True
-            result_block["confirm_id"] = position_payload.get("confirm_id")
-            result_block["confirm_question"] = position_payload.get("confirm_question")
-            result_block["confirm_timeout_s"] = position_payload.get("confirm_timeout_s")
-        return JSONResponse({
-            "result": result_block,
-            "log": "\n".join(pipeline_log),
-            "tts_audio_b64": tts_audio_b64,
-        })
+        # Everything below STT is THE pipeline — identical to /api/text.
+        payload, action, confidence = _dispatch_pipeline(
+            transcript, "voice", pipeline_log)
+        return _pipeline_response(
+            transcript, payload, action, confidence, pipeline_log,
+            tts, enable_tts,
+            extra_result={
+                "stt_latency_ms": round(latency_ms, 1),
+                "stt_backend": stt_backend.name,
+            })
     except Exception as exc:  # noqa: BLE001
         pipeline_log.append(f"❌ Error: {exc}")
         log.exception("Voice pipeline error")
