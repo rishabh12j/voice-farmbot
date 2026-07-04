@@ -57,22 +57,43 @@ Two constraints from the paper plan are binding on your design:
   If a comparison system you need is not named in these docs, STOP and ask
   before building a dossier for it.
 
+## The comparison set spans the WHOLE claim chain — not just behaviour trees
+
+The system is not "a behaviour-tree paper": the paper's argument is a
+constraint table (social requirement → forced constraint → framework
+delivery), and each row needs comparable prior work or an explicit
+[EVAL-GAP]:
+
+| Claim-chain row | Comparison front |
+|---|---|
+| safe even when the AI is wrong (USC=0, refusal/negation) | LLM-robot safety benchmarks, refusal/uncertainty systems |
+| inspectable before acting (deterministic tree) | LLM×BT generation systems (the architecture contrast: they generate trees, we constrain the LLM to flat intents) |
+| on-device / offline / private (small model on a Pi) | edge/SLM robot-control evaluations (accuracy–latency) |
+| honest feedback (firmware-verified "done") | assistive voice robots + older-adult voice-AI harms studies |
+
+A **seed candidate list per front** — from a documented search sweep — is in
+`documentation/eval/comparison_candidates.md`. Every entry there is CANDIDATE:
+snippet-sourced, unverified. Your job is to dossier them (or reject them with
+a logged reason). Additions beyond the seed list and the plan/skeleton's
+citation keys require asking first.
+
 ## Your assignment, in order
 
 1. **Dossier #1 — the metrics source.** Locate and read the actual
-   Gugliermo et al. paper (BT evaluation metrics). Verify what DBSR / SNSR /
-   USC actually mean there, exactly as defined, with locators. Then diff
-   their definitions against our implementations in `tools/evaluate_v2.py`
-   (DBSR = expected-command substrings in commands_published; SNSR = fraction
-   of leaf nodes success; USC = count of out-of-bounds failures). Every
-   mismatch goes in the deviations ledger. If our USC or SNSR differs from
-   theirs, say so plainly — the headline invariant depends on USC's
-   definition.
-2. **Dossiers for each comparison system** named in the paper plan/skeleton
-   (both Related Work fronts: assistive/older-adult voice-AI studies, and
-   LLM+behaviour-tree / LLM-robot-control systems; plus on-device intent
-   classification if the plan names it). Do not invent the list — mine the
-   plan and skeleton for it.
+   Gugliermo et al. paper (BT evaluation metrics; candidate locator in the
+   seed list). Verify what DBSR / SNSR / USC actually mean there, exactly as
+   defined, with locators. Then diff their definitions against our
+   implementations in `tools/evaluate_v2.py` (DBSR = expected-command
+   substrings in commands_published; SNSR = fraction of leaf nodes success;
+   USC = count of out-of-bounds failures). Every mismatch goes in the
+   deviations ledger. If our USC or SNSR differs from theirs, say so plainly
+   — the headline invariant depends on USC's definition.
+2. **Dossiers per front** (seed list order: Front 2 safety and Front 3
+   assistive/older-adult are the highest-stakes rows; Front 1 LLM×BT is the
+   architecture contrast; Front 4 edge/SLM anchors the model-sweep
+   [EVAL-GAP]; Front 5 agriculture is likely a documented-absence novelty
+   point, not a comparison row). Cross-check each candidate against the
+   plan/skeleton's Related Work fronts and citation keys.
 3. **Synthesis** per your workflow: common core, comparison table with
    per-cell locators, deviations ledger, [EVAL-GAP] items, fairness check.
    Known gaps to carry, not hide: our Run 1 numbers are SIM-ONLY (hardware
