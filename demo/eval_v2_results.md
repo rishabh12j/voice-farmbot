@@ -4,9 +4,19 @@ This is the V2 (phone-to-Pi intent-server + py_trees BT + event log)
 hardware eval. Comparisons are against the V1 baseline reported in the
 thesis interim (Gugliermo et al. metrics).
 
-Each row records one full pass of the 29-utterance corpus from
-`tools/evaluate_v2.py`. Treat **DBSR / SNSR / USC / Latency** as the
-core V1-comparable metrics and **ELC** as a V2-specific addition.
+Each row records one full pass of the corpus in `tools/evaluate_v2.py`.
+Treat **DBSR / SNSR / USC / Latency** as the core V1-comparable metrics
+and **ELC** as a V2-specific addition.
+
+> **Corpus history:** the original corpus was 29 utterances with V1-era
+> hard-coded coordinates and species that never existed in a real map
+> (herbs/carrots/strawberries — a stale V1 config). As of 2026-07-04 the
+> corpus is **42 cases**: expectations resolve against the Pi's **live map**
+> at run time (`@move:<species>` templates), plus three new categories —
+> **refusal** (unplanted species ⇒ terminal success with zero commands),
+> **hard** (realistic elderly speech: STT noise, fillers, politeness,
+> hedges, delegation), and **negation** ("don't water X" ⇒ zero commands).
+> DBSR numbers before/after that date are not directly comparable.
 
 | Metric  | Meaning                                                       |
 |---------|---------------------------------------------------------------|
@@ -50,53 +60,68 @@ python tools\evaluate_v2.py --pi-url http://<pi-ip>:8000/intent --json > eval_re
 Add `--no-llm` if Ollama isn't running — falls back to canned intents
 (useful for Pi-only smoke tests but not for the headline V2 numbers).
 
+Fastest loop (no Pi at all — everything local on Windows):
+
+```powershell
+# Terminal 1: sim Pi on this machine
+$env:PYTHONPATH = "src"; python -m growmate_pi.intent_server --no-ros2 --port 8123
+# Terminal 2: the eval (--skip-long skips the ~5-min water-everything walk)
+$env:PYTHONPATH = "src;src/growmate_voice"
+python tools\evaluate_v2.py --pi-url http://localhost:8123/intent --skip-long
+```
+
 ## Runs
 
-### Run 1 — TODO
+### Run 1 — 2026-07-04 · extended corpus vs the real 56-plant garden (sim)
 
-* **Date:**            YYYY-MM-DD
-* **Pi:**               gh1 @ 192.168.0.39 / farmbotdev @ 192.168.0.54
-* **Mode:**             `--no-ros2` (sim) / hardware
-* **Garden:**           54-plant Maynooth / 35-plant greenhouse
-* **STT model:**        small.en (Day 4 default)
-* **Ollama model:**     gemma3:4b
-* **Whisper biasing:**  on / off
-* **Soft-confirm gate:** on (Day 5)
+* **Date:**             2026-07-04
+* **Target:**           local sim intent server (`--no-ros2`, port 8123, Windows)
+* **Garden:**           real re-planted gh1 map, 56 plants (jog-captured 2026-07-03: tomato 15, scallion 14, lettuce 8, pepper 8, marigold 6, basil 4, spearmint 1)
+* **Corpus:**           42 cases (extended: +refusal/hard/negation), `--skip-long` (the deliberate 56-plant water-everything walk excluded)
+* **Ollama model:**     gemma3:4b (classification grounded in live map species + memory context)
+* **STT:**              n/a — the eval enters below STT (text → classify → Pi)
+* **Commits:**          `b17a7f2` (map) + `2f7bea4` (corpus/fixes)
 
 | Metric  | V2 result | V1 baseline | Δ |
 |---------|-----------|-------------|---|
-| DBSR    |   ? %     | 96.6 %      |   |
-| SNSR    |   ? %     | 98.8 %      |   |
-| USC     |   ?       | 0           |   |
-| ELC     |   ? %     | n/a         |   |
-| Mean latency | ? ms | 5456 ms    |   |
+| DBSR    | **100.0 %** (42/42) | 96.6 % | +3.4 |
+| SNSR    | 91.2 %    | 98.8 %      | −7.6 (metric artifact — see below) |
+| USC     | **0**     | 0           | = |
+| ELC     | **100.0 %** (n=27) | n/a | new |
+| Mean latency | 9331 ms | 5456 ms | +3875 (real multi-plant sim walks now included) |
+
+Companion app-level results, same day, same map (`tools/test_app_flows.py`,
+13 scenarios driving the app in-process against the sim Pi): **FLOW 42/42,
+NLP 6/6** — including session-memory pronoun resolution ("water them again"
+with no plant named → new spearmint watered row in the event log) and the
+embedded-UI-script `node --check` gate.
 
 #### Regressions or surprises
 
-* _(empty — fill in after the run)_
-
-#### Per-case anomalies
-
-Paste any rows where `dbsr=MISS` or `elc=MISS`, with a one-line note on
-why. Examples to watch for:
-
-* **"water everything"** — soft-confirm gate may intercept; eval bypasses
-  the gate by talking directly to the Pi, so this should still log a
-  `watered_all`. If it doesn't, that's a Pi-side bug.
-* **"the carrots need attention"** — heavily indirect; if DBSR misses,
-  the issue is the LLM classifier, not the Pi.
-* **Queries** (status / moisture / what's happening) — the LLM may emit
-  `check_moisture` or `general_question`. Either is acceptable; the
-  expected event_type comes from the actual classified action, so ELC
-  follows whatever the LLM produced.
-* **Emergency cases** — expected events are empty by design (the Pi
-  skips logging when `req.emergency=True`); ELC shows `n/a`.
+* **SNSR 91.2 % is a metric artifact, not a fault:** two hard cases
+  legitimately classify to `water_smart`, whose `CheckDry` condition leaves
+  FAIL **by design** for moist plants (the Selector then skips watering —
+  correct behaviour). Failed-by-design condition nodes under a Selector
+  count against SNSR; the thesis writeup should footnote or exclude them.
+* **Latency mean rose** because the corpus now contains real multi-plant
+  watering walks executed to completion in sim (pump pulses run in real
+  time); max was 47.6 s ("give the lettuce a drink", 8 plants).
+* Found during this round (fixed in `2f7bea4`): the eval's old no-LLM
+  fallback **fabricated `water_all`** — when Ollama died mid-run, every
+  remaining case fired a full-garden walk. It now scores `classify_error`
+  and dispatches nothing.
+* Prompt-tuning side effect (fixed): adding the negation rule initially
+  regressed the delegation case ("my knees hurt too much to water the
+  spearmint today, can you do it" → `general_question`); an explicit
+  boundary (user's inability + request = command) restored it. Evidence
+  for why every prompt change re-runs the full corpus.
 
 ---
 
-### Run 2 — TODO
+### Run 2 — TODO (hardware, gh1)
 
-_(copy the block above and add another entry per re-run.)_
+_(copy the block above; target `http://192.168.0.38:8000/intent` with the
+Pi in real mode — the numbers that go in the thesis hardware section.)_
 
 ## V1 → V2 expected differences
 
