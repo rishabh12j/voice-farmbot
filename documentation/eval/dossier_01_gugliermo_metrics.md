@@ -229,3 +229,67 @@ argues for (per its verified abstract).
 **Blocking action item for the author:** obtain the PDF via institutional
 access; then §4/§5 mismatches get resolved into hard ledger entries within
 minutes. Everything else in this dossier stands regardless.
+
+---
+
+## 9. PDF VERIFICATION — 2026-07-04 (CLOSES D1–D3). Full text read.
+
+The author obtained the CC-BY PDF via institutional access; it is committed at
+`documentation/eval/sources/gugliermo2024_evaluating_behavior_trees.pdf`
+(12 pages). Full-text search + passage reading. **This section supersedes the
+"doubtful" verdicts of §4; the audit trail above is retained deliberately.**
+
+### D1 — RESOLVED: the attribution is CORRECT. The names ARE the paper's.
+
+| Name | Occurrences | Evidence (verbatim) | Locator |
+|---|---|---|---|
+| Desired Behavior Success Rate | 8 | "the global or overall success of execution, which **we define as** the Desired Behavior Success Rate" | §3 (Success Rate), p. 2–3 |
+| Single Node Success Rate | 7 | "**Single Node Success Rate** refers to the ratio between the number of successful completions of a node n ∈ N … SR_n = nS / (nS + nF)" | §3, p. 3 |
+| Unsafe State Count | 3 (+1 "USC") | "**Unsafe State Count (NEW)**" — introduced BY this paper as a new metric | §3, p. 3 |
+
+The §4 negative web signal was an artifact: the full text is invisible to
+crawlers (bot-wall), and citing papers did not propagate the names. The
+thesis_chapter1 L175 attribution ("the definitions are from Gugliermo et
+al.") is **vindicated for the names and metric intent** — with the
+operationalization differences below still requiring disclosure.
+
+### D3 — RESOLVED: their USC IS a normalized frequency (ours is not)
+
+Verbatim (p. 3): *"Given a set of unsafe states U, the USC metric is computed
+as the number of times the agent encounters states in U by the total number
+of states T visited during the execution: USC = nU / nT."* A state is unsafe
+"when it leads to irreversible undesired behaviors" (Definition 4.3).
+
+Diff vs ours (D4 refined, still open as a disclosed deviation):
+- **Unit:** theirs = state-visits; ours = corpus cases.
+- **Normalization:** theirs = ratio nU/nT; ours = raw count.
+- **Semantics:** theirs counts ENTERED unsafe states; ours counts
+  guard-BLOCKED attempts (the system cannot enter one by construction).
+- **Compatibility of the headline:** since no unsafe state is ever entered,
+  our system's USC under THEIR definition is 0/nT = 0. "USC = 0" is true
+  under both semantics; the paper must state ours is the stricter
+  attempted-and-blocked reading, theirs the entered-state frequency.
+
+### Definition diffs for the other two (feed §VI wording)
+
+- **DBSR (theirs):** "evaluates the extent to which the behavior executed by
+  the BT aligns with the behavior expected by a **behavior oracle**…
+  disregarding the internal mechanisms of the BT itself (e.g., return
+  status)"; explicitly adaptable per property (for safety, desired behavior =
+  avoidance of unsafe states). OURS — expected-command substrings against
+  commands_published, refusals scored as success-with-zero-commands — is a
+  faithful operationalization: the expected-command list IS the oracle.
+- **SNSR (theirs):** per-node ratio SR_n = nS/(nS+nF). OURS pools all leaves
+  of all trees into one micro-average — an aggregation deviation to disclose
+  alongside the CheckDry by-design contamination (D5).
+
+### Bonus methodological anchor (use in §VI)
+
+For safety evaluation the paper prescribes exactly our stress-test design:
+DBSR "must be evaluated in scenarios that can potentially bring the BT to
+unsafe states", citing Colledanchise et al. [23] "artificially injecting
+faults in the system" (p. 6, Safety/Evaluation). The misclassification stress
+harness (tools/stress_misclassification.py, 120 injections, unsafe-motion 0)
+is therefore not merely inspired by this paper — it implements its
+recommended safety-evaluation practice. Also note their caveat, to carry
+verbatim into §VI: "these metrics cannot guarantee safety."

@@ -281,3 +281,31 @@ guards intercepted all M unsafe *attempts*".
    experiment; then Run 2 hardware subset.
 4. Approve/reject Merino-Fidalgo addition (§4 item 7 — needs your go-ahead).
 5. Venue-pinning sweep (critic #8) during reference writing.
+
+---
+
+## 9. POST-CRITIC RESOLUTION LOG — 2026-07-04 (author + assistant session)
+
+All five blocking action items from the critic pass are now resolved or
+in-motion; measured artifacts live on `main`.
+
+1. **Gugliermo PDF obtained and read** (committed under
+   `documentation/eval/sources/`). Dossier #1 §9: **D1 CLOSED — attribution
+   CORRECT** (all three metric names are the paper's own; USC is introduced
+   there as NEW). **D3 CLOSED** — their USC = nU/nT normalized frequency of
+   ENTERED unsafe states; ours = raw count of guard-BLOCKED attempts; both
+   yield 0 for this system, deviation disclosed (D4 refined). §VI wording may
+   now cite the source confidently, with the operationalization diff stated.
+2. **SNSR decision (critic #5): appendix-only.** Headline tables carry
+   DBSR/USC/ELC. Recorded in demo/eval_v2_results.md.
+3. **Stress test (§5): BUILT AND RUN (sim).** tools/stress_misclassification.py;
+   seed 42, 20×6 = 120 injections: unsafe-motion 0, guard-blocked 20,
+   refused-clean 39, wrong-but-bounded 57, failed-safe 4, honesty violations 0.
+   Its FIRST run found a real hole — the explicit-coordinate move path
+   published out-of-bounds M commands unguarded — fixed same day
+   (CheckBounds explicit-coords mode; verify_sim 0/12; flow suite 42/42).
+   §5's scoring split was load-bearing exactly as critic #2 predicted.
+   D26 also closed: full 43-case pass (no --skip-long) DBSR 100/USC 0/ELC 100.
+4. **Merino-Fidalgo: APPROVED** by the author — Dossier #17 to be built,
+   strategy §2/§4 updated (owner: Archaeologist, next session).
+5. **Venue-pinning sweep**: still queued for reference-writing time.
