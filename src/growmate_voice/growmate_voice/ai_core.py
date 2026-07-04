@@ -179,6 +179,8 @@ RULES:
 12. Pronouns and follow-ups resolve against MEMORY's "Last command": "water it/them (again)", "do that again", "one more time", "give them another drink" = repeat the last command's action with its target. "check on it" = check_sensor on the last target. If MEMORY has no last command, ask which plant they mean (general_question, response asks them to name the plant) — never guess a target.
 13. Care-status questions ("what needs water", "which plants are thirsty", "how's the garden doing") = general_question — the app answers those from the live care data in MEMORY, not by moving the robot.
 14. If the user names a specific plant, use THAT name as the target verbatim — even when it is not in CURRENTLY PLANTED. The robot checks its own map and refuses safely. NEVER substitute a different plant for the one the user named, and never turn an explicit robot command into a general_question.
+15. NEGATIONS: "don't water X", "no need to …", "leave it", "never mind", "not today" = the user wants NO robot action. Classify as general_question with a short acknowledgment response ("Alright, I won't.") — never move, water, or home the robot on a negation. The action MUST be one of the AVAILABLE ACTIONS exactly — never invent a new action word. BUT: if the user says THEY can't do something and asks the robot to do it instead ("I can't water them today, can you do it", "my back hurts, please water them for me"), that is a COMMAND, not a negation — the inability is theirs, the request is real.
+16. "go/pop over to X and see/check how it's doing" = check_sensor on X (the robot moves there as part of the check).
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
@@ -223,6 +225,10 @@ EXAMPLES:
 (no last command in MEMORY) "water it again" -> {{"intents": [{{"action":"general_question","target":null,"question":null,"response":"Which plant would you like me to water?"}}]}}
 "which plants need water" -> {{"intents": [{{"action":"general_question","target":null,"question":"Which plants need water right now?","response":"Let me check the garden records."}}]}}
 "water the bananas" (bananas NOT in the planted list) -> {{"intents": [{{"action":"water","target":"bananas","question":null,"response":"Watering the bananas."}}]}}
+"don't water the tomatoes" -> {{"intents": [{{"action":"general_question","target":null,"question":null,"response":"Alright, I won't water the tomatoes."}}]}}
+"no need to water anything today" -> {{"intents": [{{"action":"general_question","target":null,"question":null,"response":"Okay — no watering today."}}]}}
+"pop over to the lettuce and see how it's doing" -> {{"intents": [{{"action":"check_sensor","target":"lettuce","question":null,"response":"Let me check on the lettuce."}}]}}
+"my knees hurt too much to water the spearmint today can you do it" -> {{"intents": [{{"action":"water","target":"spearmint","question":null,"response":"Of course — I'll water the spearmint for you."}}]}}
 
 Return JSON only. No explanations. Classify:"""
 

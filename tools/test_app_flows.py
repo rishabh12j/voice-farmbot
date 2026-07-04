@@ -114,6 +114,37 @@ class Suite:
             time.sleep(poll_s)
         return None
 
+    def last_event_id(self) -> int:
+        try:
+            with httpx.Client(timeout=5.0) as c:
+                rows = c.get(self.sim + "/events?limit=1").json().get("events") or []
+            return rows[0].get("id", 0) if rows else 0
+        except Exception:
+            return 0
+
+    def wait_watered_event(self, species: str, after_id: int,
+                           timeout_s: float = 90.0) -> Optional[Dict[str, Any]]:
+        """Wait for a NEW 'watered' event-log row naming ``species``.
+
+        Grace-window-proof completion detection: a tiny bed (1 plant) can
+        finish entirely inside the Pi's /intent inline window, so task_active
+        is never observable — but the honest log row always lands.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                with httpx.Client(timeout=5.0) as c:
+                    rows = c.get(self.sim + "/events?limit=10").json().get("events") or []
+                for r in rows:
+                    if (r.get("id", 0) > after_id
+                            and r.get("event_type") == "watered"
+                            and species in (r.get("plant_name") or "").lower()):
+                        return r
+            except Exception:
+                pass
+            time.sleep(1.0)
+        return None
+
     def estop_and_reset(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Halt whatever is running, then re-arm. Returns (estop, reset) payloads."""
         e = self.client.post("/api/estop").json()
@@ -141,6 +172,47 @@ class Suite:
 
 
 # --------------------------------------------------------------------------- scenarios
+def scenario_ui_script_parses(s: Suite) -> None:
+    print("\n=== 0. UI page serves and its embedded JS parses ===")
+    r = s.client.get("/")
+    s.check("FLOW", "GET / serves the app page", r.status_code == 200,
+            f"status={r.status_code}")
+    # A single JS SyntaxError in the embedded script kills EVERY browser
+    # handler silently (the duplicate-const todayCard bug bricked the power
+    # button, voice and text at once). Parse each <script> with node so that
+    # whole failure class is caught here, not on stage.
+    import re as _re
+    import subprocess as _sp
+    import tempfile as _tf
+    scripts = _re.findall(r"<script[^>]*>(.*?)</script>", r.text,
+                          flags=_re.DOTALL | _re.IGNORECASE)
+    scripts = [t for t in scripts if t.strip()]
+    try:
+        _sp.run(["node", "--version"], capture_output=True, timeout=10, check=True)
+    except Exception:
+        print("    (node unavailable — JS parse check skipped)")
+        return
+    bad = []
+    for i, body in enumerate(scripts):
+        with _tf.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                    encoding="utf-8") as f:
+            f.write(body)
+            path = f.name
+        try:
+            p = _sp.run(["node", "--check", path], capture_output=True,
+                        text=True, timeout=30)
+            if p.returncode != 0:
+                err = (p.stderr or "").strip().splitlines()
+                bad.append(f"script #{i}: {err[-1] if err else 'parse error'}")
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    s.check("FLOW", f"all {len(scripts)} embedded <script> blocks parse (node --check)",
+            not bad, " ; ".join(bad))
+
+
 def scenario_estop_reset(s: Suite) -> None:
     print("\n=== 1. Safety: estop + reset roundtrip ===")
     e, r = s.estop_and_reset()
@@ -318,27 +390,29 @@ def scenario_gibberish(s: Suite) -> None:
 
 def scenario_pronoun_memory(s: Suite) -> None:
     print("\n=== 12. Session memory: 'water them again' resolves the pronoun ===")
-    # Establish the memory: water a SMALL bed (spearmint = 3 plants, below the
-    # multi-plant confirm threshold) and let it finish so the session's
-    # last-command is set and the run isn't racing a live task.
+    # Establish the memory: water a SMALL bed (spearmint — below the
+    # multi-plant confirm threshold). Completion is detected via the honest
+    # event log, NOT task_active: a 1-plant water can finish entirely inside
+    # the Pi's /intent inline grace window, so the task is never observable.
+    mark = s.last_event_id()
     body = s.text("water the spearmint")
     res = body.get("result") or {}
     if res.get("requires_confirm"):   # threshold could change — just answer
         s.confirm(res.get("confirm_id") or "", yes=True)
-    task = s.wait_task(lambda t: t.get("task_active"), timeout_s=30)
-    s.check("NLP", "setup: watering the spearmint started", task is not None, str(task))
+    row = s.wait_watered_event("spearmint", mark)
+    s.check("NLP", "setup: spearmint watered (honest log row)", row is not None,
+            f"no new watered event after id {mark}")
     s.wait_task(lambda t: not t.get("task_active"), timeout_s=120)
 
     # Now the follow-up with no plant named at all:
+    mark = s.last_event_id()
     body = s.text("water them again")
     res = body.get("result") or {}
     if res.get("requires_confirm"):
         s.confirm(res.get("confirm_id") or "", yes=True)
-    task = s.wait_task(lambda t: t.get("task_active"), timeout_s=30)
-    label = (task or {}).get("task_label") or ""
+    row = s.wait_watered_event("spearmint", mark)
     s.check("NLP", "'water them again' resolved to the spearmint (memory)",
-            task is not None and "spearmint" in label.lower(),
-            f"task_label={label!r}")
+            row is not None, f"no new spearmint watered event after id {mark}")
     s.wait_task(lambda t: not t.get("task_active"), timeout_s=120)
 
 
@@ -394,6 +468,7 @@ def main(argv=None) -> int:
         print(f"AICore/Ollama: {'ready' if llm_ok else 'NOT available — LLM scenarios skipped'}")
 
     scenarios = [
+        (scenario_ui_script_parses, False),
         (scenario_estop_reset, False),
         (scenario_pattern_quick, False),
         (scenario_water_known, True),

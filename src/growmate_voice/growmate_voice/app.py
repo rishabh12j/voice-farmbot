@@ -1563,6 +1563,19 @@ def _dispatch_via_aicore(
     intents = ai._classify(transcript,
                            live_plants=_known_species_in_garden(),
                            memory=_classify_memory()) or []
+
+    # Sanitize: a small model can invent an action word ("no", "skip") that
+    # isn't in the schema enum — building a PiIntent from it raises and turns
+    # the whole request into a 500. Coerce unknown actions to general_question
+    # so the app still speaks the LLM's (usually sensible) response instead of
+    # dying: "don't water the tomatoes" -> action "no" -> a spoken "Alright".
+    _valid_actions = set(AICore.ACTIONS) | {"emergency_stop"}
+    for i in intents:
+        if (i.get("action") or "") not in _valid_actions:
+            log.warning("LLM invented action %r for %r — coercing to general_question",
+                        i.get("action"), transcript)
+            i["action"] = "general_question"
+            i.setdefault("response", "I wasn't sure what to do with that — could you rephrase?")
     if not intents:
         _record(source, None, [], "ignored",
                 "No intents from LLM", transcript=transcript)

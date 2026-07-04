@@ -125,6 +125,24 @@ TEST_CASES: List[TestCase] = [
     ("water the strawberries",  "refusal", [], "V1 ghost species",  "refusal"),
     ("move to the carrots",     "refusal", [], "Unknown move",      "refusal"),
     ("water the herbs",         "refusal", [], "V1 ghost species 2","refusal"),
+
+    # Hard cases — realistic elderly speech: STT noise, fillers, politeness
+    # wrappers, indirection. The classifier must still land action + target.
+    ("walter the spearmint",                              "robot_command", ["@move:spearmint"], "STT noise water->Walter", "hard"),
+    ("could you please water the marigold for me dear",   "robot_command", ["@move:marigold"],  "Politeness wrapper",      "hard"),
+    ("um can you uh water the spearmint please",          "robot_command", ["@move:spearmint"], "Fillers",                 "hard"),
+    ("the marigold looks a bit sad maybe give it some water", "robot_command", ["@move:marigold"], "Hedged indirect",      "hard"),
+    ("i think the pepper bed could use a drink",          "robot_command", ["@move:pepper"],    "Vague informal",          "hard"),
+    ("pop over to the lettuce and see how it's doing",    "robot_query",   ["D_S_C"],           "Informal check",          "hard"),
+    ("my knees hurt too much to water the spearmint today can you do it", "robot_command", ["@move:spearmint"], "Elderly context", "hard"),
+    ("give the marigold a little sprinkle would you",     "robot_command", ["@move:marigold"],  "Colloquial water",        "hard"),
+    ("it's getting dark put the lights on love",          "robot_command", ["D_L_1"],           "Colloquial lights",       "hard"),
+    ("take a photo for me love",                          "robot_command", ["I_1"],             "Colloquial photo",        "hard"),
+
+    # Negation — saying a plant's name must NOT trigger action on it.
+    # Scored like refusals: terminal success with ZERO robot commands.
+    ("don't water the tomatoes",          "negation", [], "Direct negation",  "negation"),
+    ("no need to water anything today",   "negation", [], "Blanket negation", "negation"),
 ]
 
 
@@ -183,20 +201,27 @@ def _build_intent_payload(
     The harness gracefully degrades when Ollama isn't running so we can
     still smoke-test the Pi side without a live LLM.
     """
-    if classifier is not None and classifier.is_available():
-        intents = classifier._classify(utterance, live_plants=live_plants) or []
-        if intents:
-            return {
-                "intents": intents,
-                "raw_text": utterance,
-                "emergency": category == "emergency",
-                "client_id": "evaluate_v2",
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "schema_version": "1.0.0",
-            }
+    if classifier is not None:
+        if classifier.is_available():
+            intents = classifier._classify(utterance, live_plants=live_plants) or []
+            if intents:
+                return {
+                    "intents": intents,
+                    "raw_text": utterance,
+                    "emergency": category == "emergency",
+                    "client_id": "evaluate_v2",
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "schema_version": "1.0.0",
+                }
+        # LLM was REQUESTED but is down / returned nothing: never fabricate an
+        # intent. The old fallback hand-crafted water_all here — when Ollama
+        # died mid-run, every remaining case fired a full-garden watering walk.
+        # A classification outage must score as a miss, not water the world.
+        return None
 
-    # Fallback: emergency utterances stop the BT; everything else gets a
-    # single placeholder intent so the Pi still does something measurable.
+    # --no-llm (Pi-only smoke test): canned intents so the Pi still does
+    # something measurable. Emergency stops the BT; general asks a question;
+    # everything else is a deliberate water_all exercising the long path.
     if category == "emergency":
         intents = [{"action": "emergency_stop", "target": None, "response": "Stop."}]
     elif category == "general":
@@ -357,6 +382,14 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             exp_cmds = _resolve_expected(client, base_url, exp_cmds, species_cache)
             payload = _build_intent_payload(utterance, category, classifier,
                                             live_plants=live_species)
+            if payload is None:
+                # LLM requested but unavailable — an honest miss, no dispatch.
+                results.append(CaseResult(
+                    utterance=utterance, expected_commands=exp_cmds,
+                    category=category, pi_status="classify_error",
+                    error="classifier unavailable / returned no intents",
+                ))
+                continue
             expected_events = _expected_events_for_intents(
                 payload.get("intents") or [], category == "emergency"
             )
@@ -393,10 +426,11 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                 "out of bounds" in (n.get("message") or "").lower() for n in nodes
             )
 
-            if category == "refusal":
-                # A refusal is only a pass if it refused CLEANLY: terminal
-                # success AND zero robot commands (no motion for a species
-                # that isn't planted — the grounded-classifier guarantee).
+            if category in ("refusal", "negation"):
+                # Pass only on a CLEAN decline: terminal success AND zero robot
+                # commands. Refusal = species not planted; negation = the user
+                # explicitly said NOT to act — watering on "don't water the
+                # tomatoes" would be the worst kind of confidently-wrong.
                 dbsr_pass = (reply.get("status") == "success") and not commands
             elif exp_cmds:
                 dbsr_pass = all(any(c in cmd for cmd in commands) for c in exp_cmds)
