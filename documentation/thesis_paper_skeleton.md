@@ -24,6 +24,8 @@ Target: ~14 pp IEEE double-column. Page budgets are targets, not limits.
 
 1. What single line states the **social problem**, and what single line states the
    **framework claim** — both must appear in the title/abstract?
+   The social-problem line is: "The older and disabled users who would benefit most from assistive robots are the least served by their interfaces: screen-based control excludes them, while naive LLM voice control replaces exclusion with hazard a single wrong output can drive a physical robot near a vulnerable person." The framework-claim line is the already-locked canonical sentence: "We use a small on-device LLM for intent classification only, and replace LLM-based plan/structure generation with deterministic, template-driven behaviour-tree synthesis." The abstract opens with the first and pivots to the second; the title carries them as keywords "Safe by Construction: Constraining an On-Device LLM to Intent Classification for Voice-Controlled Assistive Robots."
+   
 2. Which headline **numbers** go in the abstract (DBSR, USC = 0, latency), and are
    they pinned or still placeholder?
 3. What **generalisation** sentence closes the abstract (need is general → portable
