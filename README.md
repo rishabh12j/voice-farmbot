@@ -147,10 +147,10 @@ voice-farmbot/
 ### Evaluation
 
 The framework was evaluated on a 29-utterance corpus covering single actions,
-multi-intent utterances, indirect speech, and safety triggers, using metrics
-adopted in the spirit of Gugliermo et al. (2024) and operationalized in
-`tools/evaluate_v2.py` (the metric names are this project's own — see
-`documentation/eval/dossier_01_gugliermo_metrics.md (emergent-eval branch)`):
+multi-intent utterances, indirect speech, and safety triggers, using the
+Gugliermo et al. (2024) metric set (names + intent verified against the full
+text; operationalized in `tools/evaluate_v2.py`, deviations disclosed in
+`documentation/eval/dossier_01_gugliermo_metrics.md` §9, emergent-eval branch):
 
 | Metric | Result |
 |---|---|

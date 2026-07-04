@@ -1,8 +1,11 @@
-"""V2 evaluation harness — metrics adopted in the spirit of Gugliermo et al.
-(2024, "Evaluating behavior trees", RAS), operationalized for the phone-to-Pi
-pipeline as defined below. (The metric NAMES — DBSR/SNSR/USC — are this
-project's own; see documentation/eval/dossier_01_gugliermo_metrics.md (emergent-eval branch) for the
-attribution audit. The definitions that matter are the ones in this file.)
+"""V2 evaluation harness — metrics from Gugliermo et al. (2024, "Evaluating
+behavior trees", RAS 178:104714; names + intent verified against the full
+text), operationalized for the phone-to-Pi pipeline as defined below. Two
+disclosed deviations: their USC is a normalized frequency of ENTERED unsafe
+states (nU/nT) while ours is a raw per-case count of guard-BLOCKED attempts
+(both are 0 for this system — nothing is ever entered, by construction), and
+their SNSR is per-node while ours pools all leaves. Attribution audit:
+documentation/eval/dossier_01_gugliermo_metrics.md §9 (emergent-eval branch).
 
 Differs from the legacy ``growmate-bt/evaluate_bt.py`` in three ways:
 

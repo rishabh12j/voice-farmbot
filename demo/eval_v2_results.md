@@ -2,10 +2,13 @@
 
 This is the V2 (phone-to-Pi intent-server + py_trees BT + event log)
 hardware eval. Comparisons are against the V1 baseline reported in the
-thesis interim. Metrics are adopted in the spirit of Gugliermo et al. (2024)
-and operationalized in `tools/evaluate_v2.py`; the metric names (DBSR/SNSR/
-USC) are this project's own — see the attribution audit in
-`documentation/eval/dossier_01_gugliermo_metrics.md (emergent-eval branch)` (deviations D1–D3).
+thesis interim. Metrics are from Gugliermo et al. (2024) — names + intent
+verified against the full text (2026-07-04, PDF in `documentation/eval/
+sources/` on emergent-eval) — operationalized in `tools/evaluate_v2.py` with
+two disclosed deviations: their USC is a normalized frequency of ENTERED
+unsafe states (nU/nT), ours a raw per-case count of guard-BLOCKED attempts
+(both 0 for this system); their SNSR is per-node, ours pooled. Audit:
+`documentation/eval/dossier_01_gugliermo_metrics.md` §9.
 
 Each row records one full pass of the corpus in `tools/evaluate_v2.py`.
 Treat **DBSR / SNSR / USC / Latency** as the core V1-comparable metrics
