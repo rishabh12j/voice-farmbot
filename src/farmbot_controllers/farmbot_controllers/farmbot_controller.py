@@ -128,10 +128,14 @@ class FarmbotControl(Node):
                     else:
                         self.get_logger().warning('C_2: Invalid option selected. Choose: X, Y, Z')
             ## Tool commands
-            case 'T_1_0' | 'T_2_0' | 'T_3_0': # e.g. T_1_0 Seeder 1198.0 332.4 -240.0 1
+            # Bugfix: the match only knew tools 1-3, silently dropping
+            # T_4_*/T_5_* — the gh1 bay has five heads (weeder=4,
+            # rotating_weeder=5). map_handler already handles any index.
+            case 'T_1_0' | 'T_2_0' | 'T_3_0' | 'T_4_0' | 'T_5_0': # e.g. T_1_0 Seeder 1198.0 332.4 -240.0 1
                 tool = code[0] + '\n' + code[1] + '\n' + code[2] + ' ' + code[3] + ' ' + code[4] + ' ' + code[5]
                 self.tools_.map_cmd_client(cmd = tool)
-            case 'T_1_1' | 'T_1_2' | 'T_2_1' | 'T_2_2' | 'T_3_1' | 'T_3_2':
+            case ('T_1_1' | 'T_1_2' | 'T_2_1' | 'T_2_2' | 'T_3_1' | 'T_3_2'
+                  | 'T_4_1' | 'T_4_2' | 'T_5_1' | 'T_5_2'):
                 self.tools_.map_cmd_client(cmd = cmd.data)
             ## Plant commands
             case 'P_1':

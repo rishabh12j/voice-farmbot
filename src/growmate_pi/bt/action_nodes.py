@@ -629,9 +629,11 @@ TOOL_POLL_INTERVAL_S = 3.0  # how often to re-read pin 63 during the choreograph
 class _ToolChange(py_trees.behaviour.Behaviour):
     """Mount or unmount a tool head and confirm it via the UTM pin.
 
-    Publishes ``T<index>_1`` (mount) or ``T<index>_2`` (unmount) — the AURA
-    stack runs the move choreography and its own pin-63 check — plus a ``D_C``
-    that queues behind it to read pin 63 afterwards. Holds RUNNING until a
+    Publishes ``T_<index>_1`` (mount) or ``T_<index>_2`` (unmount) — the
+    underscored form is the ONLY grammar ``farmbot_controller`` matches; an
+    unmatched string is silently dropped there. The AURA stack runs the move
+    choreography and its own pin-63 check — plus a ``D_C`` that queues behind
+    it to read pin 63 afterwards. Holds RUNNING until a
     fresh pin-63 reading shows the expected state (0 mounted / 1 free), then
     updates ``ToolState``. Sim fakes the pin so this resolves in dev.
     """
@@ -654,7 +656,7 @@ class _ToolChange(py_trees.behaviour.Behaviour):
 
     def initialise(self):
         self._start = time.monotonic()
-        rec = self._bridge.publish(f"T{self._index}_{'1' if self._mount else '2'}")
+        rec = self._bridge.publish(f"T_{self._index}_{'1' if self._mount else '2'}")
         self._published = rec.status in ("sent", "simulated")
         # Poll pin 63 with periodic D_C reads. The mount choreography takes
         # ~15-25 s, so an early "not seated" reading means "keep waiting", NOT
@@ -752,9 +754,9 @@ class EnsureTool(py_trees.behaviour.Behaviour):
         self._baseline = time.monotonic()
         ok = True
         if current is not None and current in self._by_name:
-            r = self._bridge.publish(f"T{self._by_name[current]}_2")  # unmount current
+            r = self._bridge.publish(f"T_{self._by_name[current]}_2")  # unmount current
             ok = ok and r.status in ("sent", "simulated")
-        rm = self._bridge.publish(f"T{target_index}_1")               # mount target
+        rm = self._bridge.publish(f"T_{target_index}_1")               # mount target
         rd = self._bridge.publish("D_C")
         self._published = (ok and rm.status in ("sent", "simulated")
                            and rd.status in ("sent", "simulated"))

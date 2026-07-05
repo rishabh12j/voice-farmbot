@@ -18,6 +18,7 @@ one instance and pass it to the BT builder.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -33,6 +34,13 @@ _SIM_BUSY_S = 0.2
 # R41 P59 V<value>). Sim fakes a reading in this raw-ADC band on D_S_C.
 _SOIL_PIN = 59
 _SIM_SOIL_RANGE = (250, 750)
+
+# Tool mount/unmount grammar — EXACTLY the strings the real
+# farmbot_controller matches (its `case 'T_1_1' | ...` arms; anything else is
+# silently dropped there). The sim must never be a wider acceptor than the
+# robot: `T2_1` used to pass here while the real stack ignored it, which let
+# a broken wire format sail through verify_sim.
+_TOOL_CMD_RE = re.compile(r"^T_([1-5])_([12])$")
 
 
 @dataclass
@@ -299,18 +307,20 @@ class FarmBotROS2Bridge:
         """Sim: there's no firmware to answer pin reads, so fake them.
 
         - ``D_S_C`` → a plausible soil reading on pin 59 (ReadSensor).
-        - ``T<n>_1`` / ``T<n>_2`` → flip the UTM mount state.
+        - ``T_<n>_1`` / ``T_<n>_2`` (the real controller's grammar, see
+          ``_TOOL_CMD_RE``) → flip the UTM mount state.
         - ``D_C`` → report pin 63 from that state (0 = mounted, 1 = not),
           which MountTool/UnmountTool wait on.
         """
         c = command.strip()
+        tool_cmd = _TOOL_CMD_RE.match(c)
         if c == "D_S_C":
             import random
             value = float(random.randint(*_SIM_SOIL_RANGE))
             with self._busy_lock:
                 self._pin_readings[_SOIL_PIN] = (value, time.monotonic())
-        elif c.startswith("T") and c[1:-2].isdigit() and c[-2:] in ("_1", "_2"):
-            self._sim_tool_mounted = c.endswith("_1")
+        elif tool_cmd:
+            self._sim_tool_mounted = tool_cmd.group(2) == "1"
             with self._busy_lock:
                 self._pin_readings[63] = (
                     0.0 if self._sim_tool_mounted else 1.0, time.monotonic()
