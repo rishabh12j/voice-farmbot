@@ -78,7 +78,11 @@ harness implements their recommended practice.
 ## 5. What remains (in order)
 
 ### A. Hardware Run 2 on gh1 (192.168.0.38 — IP changed from .39)
-Full runbook was given in chat; condensed:
+**SUPERSEDED 2026-07-05:** follow `demo/run2_runbook.md` instead — the
+sim-to-real audit (`documentation/sim2real_gap_audit.md`) found blockers
+that reorder this list (diff the Pi BEFORE `git pull`; back up the live
+active_map before rebuild; registration only after bringup; T_4/T_5 need a
+controller fix first). Condensed original for reference:
 1. Pi: `git pull` + colcon rebuild (camera_handler/farmbot_bringup changed).
 2. Deploy the 56-plant map: **update ONLY `plant_details`** in the Pi's
    active map — the generated `tools/active_map.yaml` has `tools: null` and
