@@ -215,7 +215,8 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         # Verifies via pin 63 like MountTool, so a failed mount returns
         # FAILURE and aborts the water before any pump fires — the safety
         # prefix (CheckToolMounted) made real, not assumed.
-        EnsureTool(bridge, "watering_nozzle", tools),
+        EnsureTool(bridge, "watering_nozzle", tools,
+                   pin_usable=garden.tool_verify_pin()),
     ]
 
     for i, plant in enumerate(matches, start=1):
@@ -303,7 +304,8 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         return _seq(
             "Water all (P_4 fallback)",
             CheckAvailable(bridge),
-            EnsureTool(bridge, "watering_nozzle", tools),
+            EnsureTool(bridge, "watering_nozzle", tools,
+                   pin_usable=garden.tool_verify_pin()),
             PublishCmd("P_4", bridge, name="WaterAllPlants"),
             Respond(intent.response or "Watering all plants."),
         )
@@ -326,7 +328,8 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
         # Auto-mount the watering nozzle before the walk (idempotent; verified
         # via pin 63). See _tree_water for the safety rationale.
-        EnsureTool(bridge, "watering_nozzle", tools),
+        EnsureTool(bridge, "watering_nozzle", tools,
+                   pin_usable=garden.tool_verify_pin()),
     ]
 
     for i, plant in enumerate(plants, start=1):
@@ -443,7 +446,8 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         CheckAvailable(bridge),
         Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
         # --- Pass 1: sense every plant with the soil probe ---
-        EnsureTool(bridge, "soil_sensor", tools),
+        EnsureTool(bridge, "soil_sensor", tools,
+                   pin_usable=garden.tool_verify_pin()),
     ]
     for i, plant in enumerate(matches, start=1):
         x, y = float(plant["x"]), float(plant["y"])
@@ -460,7 +464,8 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         ])
 
     # --- Pass 2: water only the dry ones with the nozzle ---
-    children.append(EnsureTool(bridge, "watering_nozzle", tools))
+    children.append(EnsureTool(bridge, "watering_nozzle", tools,
+                   pin_usable=garden.tool_verify_pin()))
     for i, plant in enumerate(matches, start=1):
         x, y = float(plant["x"]), float(plant["y"])
         pname = str(plant.get("name") or f"plant {plant.get('index', '?')}")
@@ -609,7 +614,8 @@ def _tree_clear_weeds(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
                      name=f"BeginTask({total})"),
         CheckAvailable(bridge),
         Wait(_ANNOUNCE_PAUSE_S, name="AnnouncePause"),
-        EnsureTool(bridge, "weeder", tools),
+        EnsureTool(bridge, "weeder", tools,
+                   pin_usable=garden.tool_verify_pin()),
     ]
 
     for i, weed in enumerate(in_bounds, start=1):
@@ -810,7 +816,8 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
     # in at the right spot.
     children = [
         CheckAvailable(bridge),
-        EnsureTool(bridge, "soil_sensor", garden.tools_by_name()),
+        EnsureTool(bridge, "soil_sensor", garden.tools_by_name(),
+                   pin_usable=garden.tool_verify_pin()),
     ]
     if intent.target:
         children.extend(

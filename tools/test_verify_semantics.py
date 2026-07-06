@@ -22,8 +22,9 @@ import time
 import py_trees
 
 from growmate_pi.bt import action_nodes
-from growmate_pi.bt.action_nodes import MoveTo, PublishCmd
+from growmate_pi.bt.action_nodes import EnsureTool, MoveTo, PublishCmd
 from growmate_pi.farmbot_ros2_bridge import FarmBotROS2Bridge
+from growmate_pi.tool_state import get_tool_state, reset_tool_state_for_tests
 
 
 TICK_TIMEOUT_S = 6.0
@@ -100,6 +101,63 @@ def main() -> int:
     finally:
         action_nodes.POSITION_GRACE_S = old_grace
         bridge.position = real_position
+
+    # --- 2b. Pin-less tool changes (gh1: pin 63 hardware-stuck at 0) ---------
+    # Confirmation must come from choreography evidence (>=1 busy cycle +
+    # quiescence), never from the meaningless pin — and a silently-dropped
+    # command must FAIL, not pass on 'quiet'.
+    print("\n=== Tool changes without a usable pin 63 ===")
+    tools = {"watering_nozzle": 2, "soil_sensor": 1, "phantom": 9}
+
+    def _fast_quiesce(node, bridge):
+        node._quiesce = action_nodes._BusyQuiescence(bridge, window_s=0.8)
+
+    reset_tool_state_for_tests()
+    bridge = FarmBotROS2Bridge(ros2_enabled=False)
+    node = EnsureTool(bridge, "watering_nozzle", tools, timeout_s=20.0,
+                      pin_usable=False)
+    _fast_quiesce(node, bridge)
+    old_deadline = globals()["TICK_TIMEOUT_S"]
+    globals()["TICK_TIMEOUT_S"] = 15.0
+    try:
+        status = _run_to_completion(node)
+        check("pin-less fresh mount succeeds after choreography",
+              status == py_trees.common.Status.SUCCESS, node.feedback_message)
+        check("success wording admits the pin is unavailable",
+              "unavailable" in node.feedback_message)
+        check("no D_C polls in pin-less mode",
+              not any(r.command == "D_C" for r in bridge.command_log))
+        check("ToolState updated",
+              get_tool_state().current() == "watering_nozzle")
+
+        # Swap nozzle -> probe: unmount + mount choreographies in order.
+        node = EnsureTool(bridge, "soil_sensor", tools, timeout_s=30.0,
+                          pin_usable=False)
+        _fast_quiesce(node, bridge)
+        globals()["TICK_TIMEOUT_S"] = 25.0
+        status = _run_to_completion(node)
+        t_cmds = [r.command for r in bridge.command_log if r.command.startswith("T_")]
+        check("pin-less swap succeeds",
+              status == py_trees.common.Status.SUCCESS, node.feedback_message)
+        check("swap published unmount then mount",
+              t_cmds[-2:] == ["T_2_2", "T_1_1"], str(t_cmds))
+        check("ToolState is the new head",
+              get_tool_state().current() == "soil_sensor")
+
+        # A command the controller grammar would DROP (index 9): no busy cycle
+        # ever arrives, so quiet alone must not be read as success.
+        reset_tool_state_for_tests()
+        bridge = FarmBotROS2Bridge(ros2_enabled=False)
+        node = EnsureTool(bridge, "phantom", tools, timeout_s=3.0,
+                          pin_usable=False)
+        _fast_quiesce(node, bridge)
+        globals()["TICK_TIMEOUT_S"] = 8.0
+        status = _run_to_completion(node)
+        check("pin-less dropped command times out honestly",
+              status == py_trees.common.Status.FAILURE, node.feedback_message)
+    finally:
+        globals()["TICK_TIMEOUT_S"] = old_deadline
+        reset_tool_state_for_tests()
 
     # --- 3. check_mm=None keeps legacy completion-only behaviour -------------
     print("\n=== Legacy behaviour without check_mm ===")

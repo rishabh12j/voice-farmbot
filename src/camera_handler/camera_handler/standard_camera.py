@@ -33,13 +33,28 @@ class StandardCameraNode(Node):
         '''
         Initialize the camera
         '''
-        self.WIDTH = 640  
+        self.WIDTH = 640
         self.HEIGHT = 480
-        self.camera_port = 0
         self.discard_frames = 20  # Reduced number of discarded frames
 
-        self.camera = cv2.VideoCapture(self.camera_port)
-        if not self.camera.isOpened():
+        # Bugfix: the port was hardcoded to 0, but a USB hiccup re-enumerates
+        # the camera onto /dev/video1 (observed on gh1, 2026-07-06) and the
+        # node then errors forever. Scan the first few indices and keep the
+        # first device that both opens AND delivers a frame (the Pi exposes
+        # internal codec devices that open but never produce frames).
+        self.camera = None
+        self.camera_port = None
+        for port in range(4):
+            cam = cv2.VideoCapture(port)
+            if cam.isOpened() and cam.read()[0]:
+                self.camera = cam
+                self.camera_port = port
+                self.get_logger().info(f'Camera found on /dev/video{port}')
+                break
+            cam.release()
+        if self.camera is None:
+            self.camera = cv2.VideoCapture(0)  # keep old behaviour as fallback
+            self.camera_port = 0
             self.get_logger().error('Error: Could not open video device.')
             return
 

@@ -756,18 +756,28 @@ class _ToolChange(py_trees.behaviour.Behaviour):
     it to read pin 63 afterwards. Holds RUNNING until a
     fresh pin-63 reading shows the expected state (0 mounted / 1 free), then
     updates ``ToolState``. Sim fakes the pin so this resolves in dev.
+
+    ``pin_usable=False`` (gh1: pin 63 is hardware-stuck at 0): no pin
+    observation is possible, so confirmation degrades to choreography
+    evidence — at least one busy cycle since the command (proof it wasn't
+    silently dropped) followed by the quiescence window (proof the sequencer
+    drained). The success message says the sequence completed; it never
+    claims a verified seat. Honest-or-blank: this is the most the robot can
+    truthfully report without the pin.
     """
 
     _POLL_INTERVAL_S = TOOL_POLL_INTERVAL_S
 
     def __init__(self, bridge, index: int, tool_name: str, mount: bool,
-                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S,
+                 pin_usable: bool = True, name: Optional[str] = None):
         super().__init__(name or f"{'Mount' if mount else 'Unmount'}({tool_name})")
         self._bridge = bridge
         self._index = int(index)
         self._tool_name = tool_name
         self._mount = bool(mount)
         self._timeout_s = float(timeout_s)
+        self._pin_usable = bool(pin_usable)
         self._task_state = get_task_state()
         self._tool_state = get_tool_state()
         self._expected = 0.0 if mount else 1.0  # pin 63
@@ -776,6 +786,9 @@ class _ToolChange(py_trees.behaviour.Behaviour):
 
     def initialise(self):
         self._start = time.monotonic()
+        # Snapshot BEFORE publishing so the choreography's busy cycles count
+        # as evidence in pin-less mode.
+        self._count0 = self._bridge.completion_count()
         rec = self._bridge.publish(f"T_{self._index}_{'1' if self._mount else '2'}")
         self._published = rec.status in ("sent", "simulated")
         # Poll pin 63 with periodic D_C reads. The mount choreography takes
@@ -785,8 +798,9 @@ class _ToolChange(py_trees.behaviour.Behaviour):
         self._poll_baseline = self._start
         # Pin 63 confirms the SEAT, not the end of the choreography — after it
         # matches we still hold RUNNING until the bridge has been quiet for the
-        # quiescence window (audit F2).
-        self._pin_ok = False
+        # quiescence window (audit F2). Without a usable pin there is nothing
+        # to wait for — go straight to the evidence-based wait.
+        self._pin_ok = not self._pin_usable
         self._quiesce = _BusyQuiescence(self._bridge)
 
     def update(self):
@@ -825,15 +839,25 @@ class _ToolChange(py_trees.behaviour.Behaviour):
                 )
             return py_trees.common.Status.RUNNING
 
-        # Pin confirmed — no more polls (a D_C would itself cycle busy and
-        # reset the very quiet we're waiting for). Quiesce, then commit.
+        # Pin confirmed (or unusable) — no more polls (a D_C would itself
+        # cycle busy and reset the very quiet we're waiting for). In pin-less
+        # mode also demand at least one busy cycle since the command: quiet
+        # alone could mean the command was silently dropped.
+        if not self._pin_usable and (
+            self._bridge.completion_count() <= self._count0
+        ):
+            self.feedback_message = "waiting for the choreography to start"
+            return py_trees.common.Status.RUNNING
         if self._quiesce.done():
             if self._mount:
                 self._tool_state.set(self._tool_name)
             else:
                 self._tool_state.clear()
+            verb = "mounted" if self._mount else "unmounted"
             self.feedback_message = (
-                f"{'mounted' if self._mount else 'unmounted'} {self._tool_name}"
+                f"{verb} {self._tool_name}" if self._pin_usable
+                else f"{verb} {self._tool_name} (sequence completed; seat pin "
+                     "unavailable on this robot)"
             )
             return py_trees.common.Status.SUCCESS
         return py_trees.common.Status.RUNNING
@@ -841,16 +865,18 @@ class _ToolChange(py_trees.behaviour.Behaviour):
 
 class MountTool(_ToolChange):
     def __init__(self, bridge, index: int, tool_name: str,
-                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S,
+                 pin_usable: bool = True, name: Optional[str] = None):
         super().__init__(bridge, index, tool_name, mount=True,
-                         timeout_s=timeout_s, name=name)
+                         timeout_s=timeout_s, pin_usable=pin_usable, name=name)
 
 
 class UnmountTool(_ToolChange):
     def __init__(self, bridge, index: int, tool_name: str,
-                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S,
+                 pin_usable: bool = True, name: Optional[str] = None):
         super().__init__(bridge, index, tool_name, mount=False,
-                         timeout_s=timeout_s, name=name)
+                         timeout_s=timeout_s, pin_usable=pin_usable, name=name)
 
 
 class EnsureTool(py_trees.behaviour.Behaviour):
@@ -879,12 +905,18 @@ class EnsureTool(py_trees.behaviour.Behaviour):
     _POLL_INTERVAL_S = TOOL_POLL_INTERVAL_S
 
     def __init__(self, bridge, tool_name: str, tools_by_name: Dict[str, int],
-                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S,
+                 pin_usable: bool = True, name: Optional[str] = None):
         super().__init__(name or f"EnsureTool({tool_name})")
         self._bridge = bridge
         self._target = tool_name
         self._by_name = dict(tools_by_name or {})
         self._timeout_s = float(timeout_s)
+        # False on robots whose pin 63 is hardware-stuck (gh1): phases advance
+        # on choreography evidence (>=1 busy cycle + quiescence) instead of
+        # observed pin transitions, and success wording drops any "verified"
+        # claim. See _ToolChange for the rationale.
+        self._pin_usable = bool(pin_usable)
         self._task_state = get_task_state()
         self._tool_state = get_tool_state()
         self._noop = False
@@ -893,6 +925,7 @@ class EnsureTool(py_trees.behaviour.Behaviour):
         self._start = 0.0
         self._last_poll = 0.0
         self._poll_baseline = 0.0
+        self._phase_count0 = 0
         self._quiesce = _BusyQuiescence(bridge)
 
     def initialise(self):
@@ -902,6 +935,7 @@ class EnsureTool(py_trees.behaviour.Behaviour):
         self._start = time.monotonic()
         self._last_poll = 0.0  # forces a D_C poll on the first tick
         self._poll_baseline = self._start
+        self._phase_count0 = self._bridge.completion_count()
         self._quiesce.reset()
 
         current = self._tool_state.current()
@@ -965,27 +999,51 @@ class EnsureTool(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         if self._phase == "unmount":
-            value = self._poll_pin(now)
-            if value is not None and abs(value - 1.0) < 0.5:
+            if self._pin_usable:
+                value = self._poll_pin(now)
+                released = value is not None and abs(value - 1.0) < 0.5
+            else:
+                # No pin: the unmount is done when its choreography ran
+                # (>=1 busy cycle since the command) and the sequencer went
+                # quiet — same evidence standard as _ToolChange.
+                released = (
+                    self._bridge.completion_count() > self._phase_count0
+                    and self._quiesce.done()
+                )
+            if released:
                 # Old head released — record it, then start the mount.
                 self._tool_state.clear()
+                self._phase_count0 = self._bridge.completion_count()
                 rec = self._bridge.publish(f"T_{self._by_name[self._target]}_1")
                 if rec.status not in ("sent", "simulated"):
                     self.feedback_message = "mount publish failed"
                     return py_trees.common.Status.FAILURE
                 self._phase = "mount"
                 self._last_poll = 0.0  # fresh poll cycle for the mount
+                self._quiesce.reset()
             return py_trees.common.Status.RUNNING
 
         if self._phase == "mount":
-            value = self._poll_pin(now)
-            if value is not None and abs(value) < 0.5:  # 0 -> seated
-                self._phase = "quiesce"
-                self._quiesce.reset()
+            if self._pin_usable:
+                value = self._poll_pin(now)
+                if value is not None and abs(value) < 0.5:  # 0 -> seated
+                    self._phase = "quiesce"
+                    self._quiesce.reset()
+                    self.feedback_message = (
+                        f"{self._target} seated; waiting for the bay "
+                        "choreography to finish"
+                    )
+                return py_trees.common.Status.RUNNING
+            # No pin: choreography evidence + quiet = the most this robot
+            # can truthfully confirm.
+            if (self._bridge.completion_count() > self._phase_count0
+                    and self._quiesce.done()):
+                self._tool_state.set(self._target)
                 self.feedback_message = (
-                    f"{self._target} seated; waiting for the bay "
-                    "choreography to finish"
+                    f"mounted {self._target} (sequence completed; seat pin "
+                    "unavailable on this robot)"
                 )
+                return py_trees.common.Status.SUCCESS
             return py_trees.common.Status.RUNNING
 
         # quiesce — no more polls (a D_C would itself cycle busy and reset

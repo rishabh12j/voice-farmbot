@@ -198,6 +198,13 @@ tools:
   # seed_tray_1: {x: 10.0, y: 2260.0, z: -285.04}
   # seed_tray_2: {x: 10.0, y: 2360.0, z: -285.04}
 
+# UTM seat pin (63) on THIS robot is hardware-modified to read V0 (mounted)
+# permanently — the V0/V1 detection caused problems and was bypassed
+# (2026-07-06, operator change). Pin observations therefore confirm nothing:
+# tool changes fall back to choreography-completion evidence, spoken honestly
+# as "sequence completed", never "verified". Record in the deviations ledger.
+tool_verify_pin: false
+
 # Soil-sensor interpretation (audit F4). calibrated stays FALSE until the
 # runbook B6 procedure measures this sensor in this soil (probe in air / dry
 # soil / watered soil) and writes the real thresholds here. Until then:

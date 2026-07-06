@@ -211,19 +211,31 @@ Jog-spot-check the three +100 mm extrapolated slots (weeder / rotating /
 seeder) before the first automated mount.
 
 ### B5. [NEW] Tool-change validation block — before any watering (F2)
+
+> **⚠️ UPDATED 2026-07-06: gh1's pin 63 is hardware-stuck at V0** (operator
+> bypassed the V0/V1 detection because it caused problems). All `D_C`
+> readings are meaningless on this robot — `gh1.yaml` sets
+> `tool_verify_pin: false`, which switches the BT to choreography-evidence
+> confirmation (≥1 busy cycle + quiescence) and honest "sequence completed"
+> wording. **Physical eyes are the only seat verification.** Record the
+> bypass in the deviations ledger (wiring jumper vs firmware — ask/verify).
+
 Hand on the physical e-stop. One full mount+unmount observed end-to-end:
 ```bash
 ros2 topic echo /uart_transmit &   # watch the choreography G00s live
 ros2 topic pub --once /keyboard_topic std_msgs/msg/String "{data: 'T_2_1'}"
-# WAIT for all motion to stop (~20 s) — pin 63 confirms the seat two moves
-# before the sequence ends; do not D_C early.
-ros2 topic pub --once /keyboard_topic std_msgs/msg/String "{data: 'D_C'}"   # expect R41 P63 V0
-ros2 topic pub --once /keyboard_topic std_msgs/msg/String "{data: 'T_2_2'}" # unmount; wait; D_C → V1
+# WAIT for all motion to stop (~20 s), then VISUALLY confirm the nozzle is
+# seated. (Do NOT trust D_C — pin 63 always reads V0 on this robot.)
+ros2 topic pub --once /keyboard_topic std_msgs/msg/String "{data: 'T_2_2'}" # unmount; wait; visual check
+# AURA will log "FAILED TOOL UNMOUNTING" after unmounts (its CHECK 1 can
+# never pass against a stuck-0 pin) — cosmetic on this robot, ignore it.
 ```
 Then the same via the BT (one-plant water command from the app): confirm on
 the `/uart_transmit` echo that **no `M` appears between choreography
 G00s** (this is the A3 quiescence fix working). Note mount duration from
-the bag → timeout recalibration later (F8).
+the bag → timeout recalibration later (F8). The July 8 sheet's C1 "pin 63 →
+V0" cell and the F4 failed-seat row are void on gh1 — mark them
+"n/a (pin bypassed)" rather than PASS.
 
 ### B6. [NEW] Soil-sensor calibration (F4) — unlocks the D2 sheet row
 Mount the probe (voice or T_1_1). Take manual readings: probe in air, in

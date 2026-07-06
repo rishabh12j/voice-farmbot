@@ -95,6 +95,17 @@ class GardenConfig:
     def watering_time(self) -> str:
         return str(self.schedule.get("watering_time", "08:00"))
 
+    def tool_verify_pin(self) -> bool:
+        """True when the UTM seat pin (63) actually reflects tool presence.
+
+        gh1's pin is hardware-modified to read 0 (mounted) permanently, so pin
+        observations can't confirm anything there. When False, tool-change
+        nodes confirm by choreography evidence only (>=1 busy cycle since the
+        command + busy quiescence) and say so — never claiming a verified
+        seat — and the boot-time preflight is skipped (it would always trip).
+        """
+        return bool(self.config.get("tool_verify_pin", True))
+
     def soil_thresholds(self) -> Tuple[float, float]:
         """(dry_above, wet_below) raw-ADC thresholds for the soil sensor.
 

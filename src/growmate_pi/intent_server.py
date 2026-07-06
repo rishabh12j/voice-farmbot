@@ -772,7 +772,10 @@ def build_app(
         except Exception:
             pass  # preflight is best-effort; never block serving
 
-    if _bridge.ros2_enabled:
+    # Skip entirely when the config says pin 63 can't reflect tool presence
+    # (gh1: hardware-stuck at 0) — the preflight would trip on every boot and
+    # block all tool work behind a meaningless reading.
+    if _bridge.ros2_enabled and _garden.tool_verify_pin():
         threading.Thread(
             target=_tool_preflight, name="growmate_tool_preflight", daemon=True
         ).start()
