@@ -42,6 +42,22 @@ _SIM_SOIL_RANGE = (250, 750)
 # a broken wire format sail through verify_sim.
 _TOOL_CMD_RE = re.compile(r"^T_([1-5])_([12])$")
 
+# Sim tool-change choreography (audit F2). The real mount/unmount is a 4-move
+# sequence fed by the AURA sequencer: the UTM pin flips at the SEAT (mount,
+# end of move 2) or the RAISE (unmount, start of move 4), and the sequence
+# ends with its own pin-63 CHECK — several seconds after the pin flip. The
+# sim used to flip the pin synchronously inside publish(), which made
+# "confirm on the pin alone" bugs structurally invisible. Now each move is a
+# timed busy cycle and the state changes mid-sequence, like the robot.
+_SIM_CHOREO_STEP_S = 0.6  # per choreography move
+
+# Commands that must NEVER be published while a tool choreography is still
+# running: gantry motion (bypasses the sequencer on the real stack, so it
+# interleaves with the bay moves) and pump-on. The sim records these as
+# violations; the gates fail on any.
+_MOTION_HEADS = ("M", "M_S", "H_0", "H_1", "H_2", "C_0", "P_3", "P_4", "P_5",
+                 "D_W_1")
+
 
 @dataclass
 class CommandRecord:
@@ -109,8 +125,20 @@ class FarmBotROS2Bridge:
         self._busy_lock = threading.Lock()
         self._busy = False
         self._completion_count = 0
+        # Firmware error reports (R03). The UART controller lowers busy on
+        # R03 exactly like R02 (audit F3), so a completion edge alone can't
+        # distinguish "finished" from "finished with error" — verified nodes
+        # also compare error_count() across their cycle and fail if it grew.
+        self._error_count = 0
         self._sim_busy_until: Optional[float] = None  # sim-mode fake cycle
         self._sim_tool_mounted = False  # sim-mode UTM state (pin 63)
+        # Sim tool-change choreography: (due_ts, kind) events processed
+        # lazily by _refresh_sim. Kinds: busy_on / busy_off / mounted /
+        # unmounted / check. Guarded by _busy_lock.
+        self._sim_events: List[Tuple[float, str]] = []
+        # Motion commands published while choreography events were pending —
+        # the sim-level USC tripwire. Gates assert this stays empty.
+        self.sim_interleave_violations: List[str] = []
 
         # Background spin thread (real mode only) so subscription callbacks
         # fire — the node was previously publish-only and never spun.
@@ -191,20 +219,80 @@ class FarmBotROS2Bridge:
                 self._completion_count += 1
 
     def _refresh_sim(self) -> None:
-        """Advance the simulated busy cycle (sim mode only).
+        """Advance the simulated busy cycle + choreography events (sim only).
 
         ``publish(track=True)`` arms ``_sim_busy_until``; once the clock passes
         it we drop busy and bump the completion count, mimicking the firmware's
-        True->False edge so verified nodes resolve in dev too.
+        True->False edge so verified nodes resolve in dev too. Tool commands
+        schedule ``_sim_events`` instead — a timed busy/pin timeline that
+        mirrors the real sequencer-fed choreography (see _SIM_CHOREO_STEP_S).
         """
-        if self._sim_busy_until is None:
-            return
-        if time.monotonic() >= self._sim_busy_until:
+        now = time.monotonic()
+        if self._sim_busy_until is not None and now >= self._sim_busy_until:
             with self._busy_lock:
                 if self._busy:
                     self._busy = False
                     self._completion_count += 1
             self._sim_busy_until = None
+
+        with self._busy_lock:
+            if not self._sim_events:
+                return
+            due = sorted(e for e in self._sim_events if e[0] <= now)
+            if not due:
+                return
+            self._sim_events = [e for e in self._sim_events if e[0] > now]
+            for _, kind in due:
+                if kind == "busy_on":
+                    self._busy = True
+                elif kind == "busy_off":
+                    if self._busy:
+                        self._busy = False
+                        self._completion_count += 1
+                elif kind == "mounted":
+                    self._sim_tool_mounted = True
+                elif kind == "unmounted":
+                    self._sim_tool_mounted = False
+                elif kind == "check":
+                    # The sequence's own final pin-63 read (unsolicited R41).
+                    self._pin_readings[63] = (
+                        0.0 if self._sim_tool_mounted else 1.0, now
+                    )
+
+    def _sim_schedule_choreography(self, mount: bool) -> None:
+        """Queue one mount/unmount choreography on the sim timeline.
+
+        Mirrors the real tool_sequencer sequence: four gantry moves (each a
+        busy cycle), the pin-state change mid-sequence (seat = end of move 2
+        for a mount; raise = start of move 4 for an unmount), then the
+        sequence's own CHECK pin read at the very end. New choreographies
+        queue after whatever is already pending — the real sequencer is a
+        FIFO. This is what lets tool-confirmation bugs fail in sim instead
+        of on the robot (audit F2).
+        """
+        step = _SIM_CHOREO_STEP_S
+        with self._busy_lock:
+            base = time.monotonic()
+            if self._sim_events:
+                base = max(base, max(ts for ts, _ in self._sim_events))
+            ev: List[Tuple[float, str]] = []
+            for i in range(4):
+                t0 = base + i * step
+                ev.append((t0, "busy_on"))
+                ev.append((t0 + step * 0.7, "busy_off"))
+            if mount:
+                ev.append((base + 1 * step + step * 0.7, "mounted"))
+            else:
+                ev.append((base + 3 * step, "unmounted"))
+            end = base + 4 * step
+            ev.append((end + 0.1, "busy_on"))   # the final CHECK's F42 read
+            ev.append((end + 0.2, "busy_off"))
+            ev.append((end + 0.2, "check"))
+            self._sim_events.extend(ev)
+
+    def _sim_choreo_pending(self) -> bool:
+        with self._busy_lock:
+            return bool(self._sim_events)
 
     def verify_active(self) -> bool:
         """True when verified nodes should poll for completion rather than
@@ -228,6 +316,18 @@ class FarmBotROS2Bridge:
         with self._busy_lock:
             return self._completion_count
 
+    def error_count(self) -> int:
+        """Firmware R03 (finished-with-error) reports seen so far.
+
+        Verified nodes snapshot this at publish and treat growth across their
+        busy cycle as FAILURE — the completion edge alone can't tell R02 from
+        R03 (the UART controller lowers busy on both).
+        """
+        if not self.ros2_enabled:
+            self._refresh_sim()
+        with self._busy_lock:
+            return self._error_count
+
     # ---------- Live position (UI map) ---------------------------------------
 
     def _on_uart(self, msg) -> None:
@@ -237,6 +337,8 @@ class FarmBotROS2Bridge:
         absent; we keep the last value per axis), mirrors the upstream parser.
         ``R41 P59 V512`` → an analog pin read (the soil sensor is pin 59);
         stored with a timestamp so ReadSensor can wait for a *fresh* one.
+        ``R03`` → the firmware finished a command WITH AN ERROR; counted so
+        verified nodes can fail instead of treating the busy edge as success.
         """
         try:
             data = getattr(msg, "data", None) or str(msg)
@@ -282,6 +384,9 @@ class FarmBotROS2Bridge:
                 if pin is not None and value is not None:
                     with self._busy_lock:
                         self._pin_readings[pin] = (value, time.monotonic())
+            elif parts[0] == "R03":
+                with self._busy_lock:
+                    self._error_count += 1
         except Exception:
             pass
 
@@ -307,24 +412,19 @@ class FarmBotROS2Bridge:
         """Sim: there's no firmware to answer pin reads, so fake them.
 
         - ``D_S_C`` → a plausible soil reading on pin 59 (ReadSensor).
-        - ``T_<n>_1`` / ``T_<n>_2`` (the real controller's grammar, see
-          ``_TOOL_CMD_RE``) → flip the UTM mount state.
-        - ``D_C`` → report pin 63 from that state (0 = mounted, 1 = not),
-          which MountTool/UnmountTool wait on.
+        - ``D_C`` → report pin 63 from the CURRENT UTM state (0 = mounted,
+          1 = not), which the tool-change nodes poll. The state itself now
+          changes on the choreography timeline
+          (``_sim_schedule_choreography``), not at publish time — so a poll
+          mid-choreography honestly reads the not-yet/no-longer state, like
+          the robot.
         """
         c = command.strip()
-        tool_cmd = _TOOL_CMD_RE.match(c)
         if c == "D_S_C":
             import random
             value = float(random.randint(*_SIM_SOIL_RANGE))
             with self._busy_lock:
                 self._pin_readings[_SOIL_PIN] = (value, time.monotonic())
-        elif tool_cmd:
-            self._sim_tool_mounted = tool_cmd.group(2) == "1"
-            with self._busy_lock:
-                self._pin_readings[63] = (
-                    0.0 if self._sim_tool_mounted else 1.0, time.monotonic()
-                )
         elif c == "D_C":
             with self._busy_lock:
                 self._pin_readings[63] = (
@@ -388,10 +488,21 @@ class FarmBotROS2Bridge:
         else:
             print(f"  -> [SIM] FarmBot: {command}  ({description})")
             record = CommandRecord(command, "simulated", description)
-            # No firmware in sim, so reflect the move target as the position
-            # for the UI map, and fake a soil reading for D_S_C.
-            self._sim_update_position(command)
-            self._sim_maybe_fake_reading(command)
+            # Settle any due choreography events, then apply this command's
+            # sim effects (position snap, pin fakes, choreography schedule).
+            self._refresh_sim()
+            c = command.strip()
+            tool_cmd = _TOOL_CMD_RE.match(c)
+            if tool_cmd:
+                self._sim_schedule_choreography(mount=tool_cmd.group(2) == "1")
+            else:
+                head = c.split()[0] if c.split() else ""
+                if head in _MOTION_HEADS and self._sim_choreo_pending():
+                    # Sim-level USC tripwire (audit F2): motion or pump-on
+                    # while the bay choreography still has queued moves.
+                    self.sim_interleave_violations.append(command)
+                self._sim_update_position(command)
+                self._sim_maybe_fake_reading(command)
             if track:
                 # Fake one busy cycle so a verified node sees a completion.
                 with self._busy_lock:

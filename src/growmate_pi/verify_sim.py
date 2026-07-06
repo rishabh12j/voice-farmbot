@@ -140,6 +140,13 @@ def main() -> int:
             failures += 1
             print("  -> UNEXPECTED FAILURE")
 
+    # Sim-level USC tripwire (audit F2): the bridge records any motion/pump
+    # command published while a tool choreography still had queued moves.
+    if bridge.sim_interleave_violations:
+        failures += 1
+        print("\nINTERLEAVE VIOLATIONS — motion published while a tool "
+              f"choreography was still running: {bridge.sim_interleave_violations}")
+
     print(f"\n{'-' * 60}")
     print(f"Failures: {failures}/{len(SCENARIOS)}")
     return 0 if failures == 0 else 1

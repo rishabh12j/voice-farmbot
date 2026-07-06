@@ -198,6 +198,16 @@ tools:
   # seed_tray_1: {x: 10.0, y: 2260.0, z: -285.04}
   # seed_tray_2: {x: 10.0, y: 2360.0, z: -285.04}
 
+# Soil-sensor interpretation (audit F4). calibrated stays FALSE until the
+# runbook B6 procedure measures this sensor in this soil (probe in air / dry
+# soil / watered soil) and writes the real thresholds here. Until then:
+# check_sensor speaks the raw number without a dry/wet verdict, and
+# water_smart refuses cleanly. Flip calibrated: true only with measured values.
+soil:
+  dry_above: 600   # placeholder — assumes higher = drier; MEASURE before trusting
+  wet_below: 350   # placeholder
+  calibrated: false
+
 # Safety rules
 safety:
   emergency_phrases:

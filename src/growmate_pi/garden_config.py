@@ -40,6 +40,7 @@ class GardenConfig:
         self.safety: Dict = self.config.get("safety", {})
         self.schedule: Dict = self.config.get("schedule", {})
         self.tools: Dict = self.config.get("tools", {})
+        self.soil: Dict = self.config.get("soil", {})
 
         self._lookup: Dict[str, Tuple[Dict, str]] = {}
         for p in self.plants:
@@ -93,6 +94,37 @@ class GardenConfig:
 
     def watering_time(self) -> str:
         return str(self.schedule.get("watering_time", "08:00"))
+
+    def soil_thresholds(self) -> Tuple[float, float]:
+        """(dry_above, wet_below) raw-ADC thresholds for the soil sensor.
+
+        Defaults mirror the action_nodes constants; per-greenhouse values are
+        written by the on-hardware calibration (runbook B6) into ``soil:``.
+        """
+        return (
+            float(self.soil.get("dry_above", 600)),
+            float(self.soil.get("wet_below", 350)),
+        )
+
+    def soil_calibrated(self) -> bool:
+        """True once measured thresholds exist for THIS greenhouse (audit F4).
+
+        Until then the polarity/scale of the raw reading is an assumption:
+        check_sensor speaks the raw number without a dry/wet verdict, and
+        water_smart refuses cleanly rather than watering on a guess.
+        """
+        return bool(self.soil.get("calibrated", False))
+
+    def position_verify_mm(self) -> Optional[float]:
+        """Tolerance (mm) for post-move position verification, or None when
+        disabled. A verified MoveTo only reports SUCCESS once the live R82
+        position matches the target within this tolerance (audit F3) —
+        ``safety.position_verify: false`` switches it off live on hardware,
+        ``safety.position_tolerance_mm`` tunes it. Defaults: on, 5 mm.
+        """
+        if not bool(self.safety.get("position_verify", True)):
+            return None
+        return float(self.safety.get("position_tolerance_mm", 5.0))
 
     def tools_by_name(self) -> Dict[str, int]:
         """Map logical tool name -> UTM index, for MountTool / EnsureTool."""

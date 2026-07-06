@@ -36,25 +36,34 @@ MOVE_TIMEOUT_S = 90.0
 PUMP_TIMEOUT_S = 15.0
 HOME_TIMEOUT_S = 120.0
 
+# After a verified move's busy cycle completes, how long to keep waiting for
+# an R82 position report that matches the target before declaring the move
+# unverified. The firmware reports position at command completion; this grace
+# only absorbs report latency, not motion time.
+POSITION_GRACE_S = 3.0
+
 # Depth (mm, negative = into soil) the weeder plunges to uproot a weed. Needs
 # FIELD CALIBRATION per bed/tool; conservative default. clear_weeds: move over
 # the weed at z=0 -> plunge to this -> raise back to z=0.
 WEED_PLUNGE_Z = -150.0
 
 # Soil sensor — Farmduino analog pin 59. The raw 0–1023 reading's polarity/scale
-# need FIELD CALIBRATION; default assumption here is "higher = drier". Tune
-# SOIL_DRY_ABOVE / SOIL_WET_BELOW once measured on gh1.
+# need FIELD CALIBRATION; default assumption here is "higher = drier". These
+# constants are only the fallback — per-greenhouse measured values live in the
+# garden yaml's ``soil:`` block (GardenConfig.soil_thresholds, audit F4) and
+# the builder threads them into the sensor nodes.
 SOIL_PIN = 59
 SOIL_DRY_ABOVE = 600
 SOIL_WET_BELOW = 350
 SENSOR_TIMEOUT_S = 8.0
 
 
-def soil_label(value: float) -> str:
+def soil_label(value: float, dry_above: float = SOIL_DRY_ABOVE,
+               wet_below: float = SOIL_WET_BELOW) -> str:
     """Coarse moisture label from a raw analog reading (calibrate the bounds)."""
-    if value >= SOIL_DRY_ABOVE:
+    if value >= dry_above:
         return "dry"
-    if value <= SOIL_WET_BELOW:
+    if value <= wet_below:
         return "wet"
     return "moist"
 
@@ -91,13 +100,16 @@ class _VerifiedCommand(py_trees.behaviour.Behaviour):
         self._cmd: Optional[str] = None
         self._publish_ok = False
         self._count0 = 0
+        self._err0 = 0
         self._start: Optional[float] = None
+        self._confirmed_at: Optional[float] = None
 
     def _build_command(self) -> Optional[str]:
         raise NotImplementedError
 
     def initialise(self):
         self._start = time.monotonic()
+        self._confirmed_at = None
         self._cmd = self._build_command()
         if self._cmd is None:
             self._publish_ok = False
@@ -111,6 +123,7 @@ class _VerifiedCommand(py_trees.behaviour.Behaviour):
         # Snapshot AFTER publish: on real hardware the firmware hasn't raised
         # busy yet, so this baseline is pre-cycle; we then wait for it to grow.
         self._count0 = self._bridge.completion_count()
+        self._err0 = self._bridge.error_count()
 
     def update(self):
         if self._cmd is None or not self._publish_ok:
@@ -125,8 +138,14 @@ class _VerifiedCommand(py_trees.behaviour.Behaviour):
             self.feedback_message = "estop requested mid-command"
             return py_trees.common.Status.FAILURE
         if self._bridge.completion_count() > self._count0:
-            self.feedback_message = f"{self._cmd} confirmed"
-            return py_trees.common.Status.SUCCESS
+            # The busy edge alone can't tell R02 from R03 — the UART
+            # controller lowers busy on both (audit F3).
+            if self._bridge.error_count() > self._err0:
+                self.feedback_message = (
+                    f"firmware reported an error during {self._cmd}"
+                )
+                return py_trees.common.Status.FAILURE
+            return self._after_confirm()
         if self._start is not None and (
             time.monotonic() - self._start >= self._timeout_s
         ):
@@ -135,6 +154,13 @@ class _VerifiedCommand(py_trees.behaviour.Behaviour):
             )
             return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
+
+    def _after_confirm(self):
+        """Hook for extra post-completion checks (see MoveTo's position
+        verify). The busy cycle is done and error-free when this runs; may
+        return RUNNING to keep waiting on the extra evidence."""
+        self.feedback_message = f"{self._cmd} confirmed"
+        return py_trees.common.Status.SUCCESS
 
     def terminate(self, new_status):
         self._start = None
@@ -169,7 +195,16 @@ class MoveTo(_VerifiedCommand):
 
     With ``verify=True`` the node holds RUNNING until the gantry move is
     confirmed via busy-state, so a downstream pump/log only runs once the
-    robot has actually arrived."""
+    robot has actually arrived.
+
+    ``check_mm`` (audit F3): after the busy cycle completes, additionally
+    require the live R82 position to sit within this many mm of the target
+    on every axis before SUCCESS — a completion edge means "the firmware
+    finished processing", not "the gantry is where we asked" (a stalled axis
+    reports R03, which also lowers busy). None disables the check; the
+    builder passes ``GardenConfig.position_verify_mm()`` so it's a config
+    switch on hardware (``safety.position_verify`` / ``position_tolerance_mm``).
+    """
 
     def __init__(
         self,
@@ -179,10 +214,13 @@ class MoveTo(_VerifiedCommand):
         z: Optional[float] = None,
         verify: bool = False,
         timeout_s: float = MOVE_TIMEOUT_S,
+        check_mm: Optional[float] = None,
         name: str = "MoveTo",
     ):
         super().__init__(bridge, verify=verify, timeout_s=timeout_s, name=name)
         self._static = (x, y, z) if x is not None else None
+        self._check_mm = float(check_mm) if check_mm is not None else None
+        self._target: Optional[tuple] = None
         if self._static is None:
             self.blackboard = self.attach_blackboard_client(name=name)
             self.blackboard.register_key(
@@ -199,7 +237,35 @@ class MoveTo(_VerifiedCommand):
             except (KeyError, TypeError):
                 self.feedback_message = "no coords on blackboard"
                 return None
+        self._target = (float(x), float(y), float(z))
         return f"M {x} {y} {z}"
+
+    def _after_confirm(self):
+        if self._check_mm is None or self._target is None:
+            return super()._after_confirm()
+        if self._confirmed_at is None:
+            self._confirmed_at = time.monotonic()
+        pos = self._bridge.position()
+        if pos is not None:
+            deltas = []
+            for axis, want in zip(("x", "y", "z"), self._target):
+                got = pos.get(axis)
+                deltas.append(None if got is None else abs(float(got) - want))
+            if all(d is not None and d <= self._check_mm for d in deltas):
+                self.feedback_message = (
+                    f"{self._cmd} confirmed at position (±{self._check_mm:g} mm)"
+                )
+                return py_trees.common.Status.SUCCESS
+        # No (matching) position report yet — absorb report latency, then be
+        # honest: the move finished but we can't show the gantry arrived.
+        if time.monotonic() - self._confirmed_at >= POSITION_GRACE_S:
+            at = (f"({pos.get('x')}, {pos.get('y')}, {pos.get('z')})"
+                  if pos is not None else "unknown")
+            self.feedback_message = (
+                f"position unverified after {self._cmd}: gantry at {at}"
+            )
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
 
 
 # ---------- Timing ------------------------------------------------------------
@@ -416,14 +482,24 @@ class ReadSensor(py_trees.behaviour.Behaviour):
     ``{pin, value, status}`` to the blackboard under ``sensor_result`` and
     appends a spoken summary to ``tts_text``. A timeout reports cleanly rather
     than failing the whole tree.
+
+    ``calibrated=False`` (audit F4): the raw number is honest but the dry/wet
+    verdict is not — speak the value without a label until this greenhouse's
+    thresholds have been measured (garden yaml ``soil.calibrated``).
     """
 
     def __init__(self, bridge, pin: int = SOIL_PIN,
-                 timeout_s: float = SENSOR_TIMEOUT_S, name: str = "ReadSensor"):
+                 timeout_s: float = SENSOR_TIMEOUT_S,
+                 dry_above: float = SOIL_DRY_ABOVE,
+                 wet_below: float = SOIL_WET_BELOW,
+                 calibrated: bool = True, name: str = "ReadSensor"):
         super().__init__(name)
         self._bridge = bridge
         self._pin = int(pin)
         self._timeout_s = float(timeout_s)
+        self._dry_above = float(dry_above)
+        self._wet_below = float(wet_below)
+        self._calibrated = bool(calibrated)
         self._task_state = get_task_state()
         self.blackboard = self.attach_blackboard_client(name=name)
         self.blackboard.register_key("sensor_result", access=py_trees.common.Access.WRITE)
@@ -456,11 +532,18 @@ class ReadSensor(py_trees.behaviour.Behaviour):
         reading = self._bridge.last_reading(self._pin, newer_than=self._baseline)
         if reading is not None:
             value = reading[0]
-            status = soil_label(value)
+            if self._calibrated:
+                status = soil_label(value, self._dry_above, self._wet_below)
+                self._append_tts(f"The soil reads {value:.0f} — that's {status}.")
+            else:
+                # Honest-or-blank: the number is measured, the verdict isn't.
+                status = "uncalibrated"
+                self._append_tts(f"The soil reads {value:.0f}. I haven't been "
+                                 "calibrated for this garden yet, so I can't "
+                                 "say if that's dry or wet.")
             self.blackboard.sensor_result = {
                 "pin": self._pin, "value": value, "status": status,
             }
-            self._append_tts(f"The soil reads {value:.0f} — that's {status}.")
             self.feedback_message = f"pin {self._pin} = {value:.0f} ({status})"
             return py_trees.common.Status.SUCCESS
 
@@ -491,7 +574,9 @@ class RecordSoil(py_trees.behaviour.Behaviour):
 
     def __init__(self, bridge, readings: Dict[int, Optional[float]], key: int,
                  plant_name: str, pin: int = SOIL_PIN,
-                 timeout_s: float = SENSOR_TIMEOUT_S, name: Optional[str] = None):
+                 timeout_s: float = SENSOR_TIMEOUT_S,
+                 dry_above: float = SOIL_DRY_ABOVE,
+                 wet_below: float = SOIL_WET_BELOW, name: Optional[str] = None):
         super().__init__(name or f"RecordSoil({plant_name})")
         self._bridge = bridge
         self._readings = readings
@@ -499,6 +584,8 @@ class RecordSoil(py_trees.behaviour.Behaviour):
         self._plant_name = plant_name
         self._pin = int(pin)
         self._timeout_s = float(timeout_s)
+        self._dry_above = float(dry_above)
+        self._wet_below = float(wet_below)
         self._task_state = get_task_state()
         self.blackboard = self.attach_blackboard_client(name=self.name)
         self.blackboard.register_key("tts_text", access=py_trees.common.Access.WRITE)
@@ -528,7 +615,7 @@ class RecordSoil(py_trees.behaviour.Behaviour):
         if reading is not None:
             value = float(reading[0])
             self._readings[self._key] = value
-            label = soil_label(value)
+            label = soil_label(value, self._dry_above, self._wet_below)
             self._append_tts(f"{self._plant_name} reads {value:.0f} — {label}.")
             self.feedback_message = f"{self._plant_name}: {value:.0f} ({label})"
             return py_trees.common.Status.SUCCESS
@@ -625,6 +712,39 @@ TOOL_PIN = 63
 TOOL_CHANGE_TIMEOUT_S = 120.0
 TOOL_POLL_INTERVAL_S = 3.0  # how often to re-read pin 63 during the choreography
 
+# Busy-quiescence window after pin 63 confirms a tool change. The pin flips at
+# the SEAT step, but the AURA sequencer still holds the release-slide + raise
+# moves plus its DC/CHECK steps, fed at 1 Hz — its type-marker ticks publish
+# nothing, so gaps of up to ~2 s of "not busy" occur INSIDE a live sequence.
+# 4 s of continuous quiet therefore means the sequence queue is drained, and
+# only then may the tree publish its next motion (audit F2: declaring success
+# on the pin alone let the next MoveTo interleave with the remaining bay moves).
+TOOL_QUIESCE_S = 4.0
+
+
+class _BusyQuiescence:
+    """Tracks 'the bridge has been idle for the whole window': busy flag low
+    and completion count stable. Any disturbance restarts the window."""
+
+    def __init__(self, bridge, window_s: float = TOOL_QUIESCE_S):
+        self._bridge = bridge
+        self._window_s = float(window_s)
+        self._since: Optional[float] = None
+        self._count: Optional[int] = None
+
+    def reset(self) -> None:
+        self._since = None
+        self._count = None
+
+    def done(self) -> bool:
+        now = time.monotonic()
+        count = self._bridge.completion_count()
+        if self._since is None or self._bridge.is_busy() or count != self._count:
+            self._count = count
+            self._since = now
+            return False
+        return (now - self._since) >= self._window_s
+
 
 class _ToolChange(py_trees.behaviour.Behaviour):
     """Mount or unmount a tool head and confirm it via the UTM pin.
@@ -663,6 +783,11 @@ class _ToolChange(py_trees.behaviour.Behaviour):
         # failure. _last_poll = 0 forces a read on the first tick.
         self._last_poll = 0.0
         self._poll_baseline = self._start
+        # Pin 63 confirms the SEAT, not the end of the choreography — after it
+        # matches we still hold RUNNING until the bridge has been quiet for the
+        # quiescence window (audit F2).
+        self._pin_ok = False
+        self._quiesce = _BusyQuiescence(self._bridge)
 
     def update(self):
         if not self._published:
@@ -673,15 +798,36 @@ class _ToolChange(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         now = time.monotonic()
-        # Re-issue D_C every few seconds so we get a FRESH pin-63 reading as the
-        # choreography progresses (the AURA sequence also self-checks at its end).
-        if now - self._last_poll >= self._POLL_INTERVAL_S:
-            self._poll_baseline = now
-            self._bridge.publish("D_C")
-            self._last_poll = now
+        if now - self._start >= self._timeout_s:
+            phase = "choreography" if self._pin_ok else "pin confirmation"
+            self.feedback_message = (
+                f"tool {'mount' if self._mount else 'unmount'} timed out "
+                f"during {phase}"
+            )
+            return py_trees.common.Status.FAILURE
 
-        reading = self._bridge.last_reading(TOOL_PIN, newer_than=self._poll_baseline)
-        if reading is not None and abs(reading[0] - self._expected) < 0.5:
+        if not self._pin_ok:
+            # Re-issue D_C every few seconds so we get a FRESH pin-63 reading
+            # as the choreography progresses (the AURA sequence also
+            # self-checks at its end).
+            if now - self._last_poll >= self._POLL_INTERVAL_S:
+                self._poll_baseline = now
+                self._bridge.publish("D_C")
+                self._last_poll = now
+            reading = self._bridge.last_reading(
+                TOOL_PIN, newer_than=self._poll_baseline
+            )
+            if reading is not None and abs(reading[0] - self._expected) < 0.5:
+                self._pin_ok = True
+                self._quiesce.reset()
+                self.feedback_message = (
+                    "pin 63 confirms; waiting for the bay choreography to finish"
+                )
+            return py_trees.common.Status.RUNNING
+
+        # Pin confirmed — no more polls (a D_C would itself cycle busy and
+        # reset the very quiet we're waiting for). Quiesce, then commit.
+        if self._quiesce.done():
             if self._mount:
                 self._tool_state.set(self._tool_name)
             else:
@@ -690,13 +836,6 @@ class _ToolChange(py_trees.behaviour.Behaviour):
                 f"{'mounted' if self._mount else 'unmounted'} {self._tool_name}"
             )
             return py_trees.common.Status.SUCCESS
-
-        if now - self._start >= self._timeout_s:
-            last = f" (pin63={reading[0]:.0f})" if reading is not None else ""
-            self.feedback_message = (
-                f"tool {'mount' if self._mount else 'unmount'} timed out{last}"
-            )
-            return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
 
 
@@ -718,11 +857,26 @@ class EnsureTool(py_trees.behaviour.Behaviour):
     """Guarantee ``tool_name`` is the mounted head, swapping only if needed.
 
     Instant SUCCESS (no motion) when ToolState already says it's mounted —
-    that's the point, no redundant swaps. Otherwise it unmounts the current
-    head (if any) and mounts the target, confirming via pin 63 like MountTool.
-    Prepend it to any tool-specific action. ``tools_by_name`` is the
+    that's the point, no redundant swaps. Otherwise a state machine gated on
+    OBSERVED pin state, not assumed sequencing (audit F2):
+
+      1. unmount (only if another head is on): publish ``T_<cur>_2`` and poll
+         ``D_C`` until pin 63 reads 1 (head released) — only then
+      2. mount: publish ``T_<target>_1`` and poll until pin 63 reads 0 (seated)
+      3. quiesce: hold RUNNING until the bridge has been quiet for
+         ``TOOL_QUIESCE_S`` — pin 63 confirms the SEAT, two choreography moves
+         before the AURA sequence ends, so succeeding on the pin alone lets
+         the next tree node interleave motion with the remaining bay moves.
+
+    The old implementation published unmount+mount+D_C in one burst and acted
+    on the first fresh pin reading: on real hardware a swap saw the OLD
+    head's pin-0 and succeeded instantly, and a fresh mount saw pin-1 and
+    failed before the choreography began. The sim's synchronous pin flip hid
+    both. Prepend to any tool-specific action; ``tools_by_name`` is the
     config name->index map (``GardenConfig.tools_by_name()``).
     """
+
+    _POLL_INTERVAL_S = TOOL_POLL_INTERVAL_S
 
     def __init__(self, bridge, tool_name: str, tools_by_name: Dict[str, int],
                  timeout_s: float = TOOL_CHANGE_TIMEOUT_S, name: Optional[str] = None):
@@ -734,16 +888,32 @@ class EnsureTool(py_trees.behaviour.Behaviour):
         self._task_state = get_task_state()
         self._tool_state = get_tool_state()
         self._noop = False
-        self._published = False
-        self._baseline: Optional[float] = None
         self._err: Optional[str] = None
+        self._phase = ""  # "unmount" -> "mount" -> "quiesce"
+        self._start = 0.0
+        self._last_poll = 0.0
+        self._poll_baseline = 0.0
+        self._quiesce = _BusyQuiescence(bridge)
 
     def initialise(self):
         self._noop = False
-        self._published = False
         self._err = None
-        self._baseline = None
+        self._phase = ""
+        self._start = time.monotonic()
+        self._last_poll = 0.0  # forces a D_C poll on the first tick
+        self._poll_baseline = self._start
+        self._quiesce.reset()
+
         current = self._tool_state.current()
+        if self._tool_state.is_unknown():
+            # Boot-time preflight saw pin 63 = 0 with no recorded mount
+            # (audit F5): a head is physically on the UTM but this process
+            # can't tell which slot it belongs to — a blind swap would drive
+            # it into an occupied bay. Refuse until the operator resolves it.
+            self._err = ("a tool head is already mounted but I don't know "
+                         "which — unmount it by hand, or tell me via "
+                         "/tool_state, then try again")
+            return
         if current == self._target:
             self._noop = True
             return
@@ -751,15 +921,32 @@ class EnsureTool(py_trees.behaviour.Behaviour):
         if target_index is None:
             self._err = f"no configured index for tool '{self._target}'"
             return
-        self._baseline = time.monotonic()
-        ok = True
-        if current is not None and current in self._by_name:
-            r = self._bridge.publish(f"T_{self._by_name[current]}_2")  # unmount current
-            ok = ok and r.status in ("sent", "simulated")
-        rm = self._bridge.publish(f"T_{target_index}_1")               # mount target
-        rd = self._bridge.publish("D_C")
-        self._published = (ok and rm.status in ("sent", "simulated")
-                           and rd.status in ("sent", "simulated"))
+        if current is not None:
+            cur_index = self._by_name.get(current)
+            if cur_index is None:
+                self._err = f"no configured index for mounted tool '{current}'"
+                return
+            rec = self._bridge.publish(f"T_{cur_index}_2")  # release current head
+            self._phase = "unmount"
+        else:
+            rec = self._bridge.publish(f"T_{target_index}_1")
+            self._phase = "mount"
+        if rec.status not in ("sent", "simulated"):
+            self._err = "tool command publish failed"
+
+    def _poll_pin(self, now: float) -> Optional[float]:
+        """Re-issue D_C on the poll cadence; return a pin-63 value fresher
+        than the last poll, or None while waiting. The choreography's own
+        final CHECK also lands here, so detection never depends on our
+        cadence alone."""
+        if now - self._last_poll >= self._POLL_INTERVAL_S:
+            self._poll_baseline = now
+            self._bridge.publish("D_C")
+            self._last_poll = now
+        reading = self._bridge.last_reading(
+            TOOL_PIN, newer_than=self._poll_baseline
+        )
+        return None if reading is None else float(reading[0])
 
     def update(self):
         if self._noop:
@@ -768,24 +955,43 @@ class EnsureTool(py_trees.behaviour.Behaviour):
         if self._err:
             self.feedback_message = self._err
             return py_trees.common.Status.FAILURE
-        if not self._published:
-            self.feedback_message = "tool command publish failed"
-            return py_trees.common.Status.FAILURE
         if self._task_state.estop_requested():
             self.feedback_message = "estop requested mid tool-change"
             return py_trees.common.Status.FAILURE
 
-        reading = self._bridge.last_reading(TOOL_PIN, newer_than=self._baseline)
-        if reading is not None:
-            if abs(reading[0]) < 0.5:  # pin 63 == 0 -> mounted
-                self._tool_state.set(self._target)
-                self.feedback_message = f"mounted {self._target}"
-                return py_trees.common.Status.SUCCESS
-            self.feedback_message = f"mount not confirmed (pin63={reading[0]:.0f})"
+        now = time.monotonic()
+        if now - self._start >= self._timeout_s:
+            self.feedback_message = f"tool change timed out during {self._phase}"
             return py_trees.common.Status.FAILURE
-        if self._baseline is not None and (
-            time.monotonic() - self._baseline >= self._timeout_s
-        ):
-            self.feedback_message = "tool change timeout"
-            return py_trees.common.Status.FAILURE
+
+        if self._phase == "unmount":
+            value = self._poll_pin(now)
+            if value is not None and abs(value - 1.0) < 0.5:
+                # Old head released — record it, then start the mount.
+                self._tool_state.clear()
+                rec = self._bridge.publish(f"T_{self._by_name[self._target]}_1")
+                if rec.status not in ("sent", "simulated"):
+                    self.feedback_message = "mount publish failed"
+                    return py_trees.common.Status.FAILURE
+                self._phase = "mount"
+                self._last_poll = 0.0  # fresh poll cycle for the mount
+            return py_trees.common.Status.RUNNING
+
+        if self._phase == "mount":
+            value = self._poll_pin(now)
+            if value is not None and abs(value) < 0.5:  # 0 -> seated
+                self._phase = "quiesce"
+                self._quiesce.reset()
+                self.feedback_message = (
+                    f"{self._target} seated; waiting for the bay "
+                    "choreography to finish"
+                )
+            return py_trees.common.Status.RUNNING
+
+        # quiesce — no more polls (a D_C would itself cycle busy and reset
+        # the very quiet we're waiting for).
+        if self._quiesce.done():
+            self._tool_state.set(self._target)
+            self.feedback_message = f"mounted {self._target}"
+            return py_trees.common.Status.SUCCESS
         return py_trees.common.Status.RUNNING

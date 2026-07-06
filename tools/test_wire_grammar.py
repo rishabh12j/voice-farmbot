@@ -254,7 +254,15 @@ def main() -> int:
         for c, why in bad:
             print(f"         REJECTED {c!r}: {why}")
 
-    # --- 3c. Vacuity guards --------------------------------------------------
+    # --- 3c. Interleave tripwire (audit F2) ---------------------------------
+    # The sim bridge records any motion/pump command published while a tool
+    # choreography still had queued moves — the sim-level USC.
+    if bridge.sim_interleave_violations:
+        failures += len(bridge.sim_interleave_violations)
+        print("\nFAIL interleave tripwire — motion published mid-choreography:"
+              f" {bridge.sim_interleave_violations}")
+
+    # --- 3d. Vacuity guards --------------------------------------------------
     must_see = {"T_1_1", "T_1_2", "T_2_1", "T_2_2"}  # both swap directions
     missing = must_see - seen
     if missing:

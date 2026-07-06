@@ -45,6 +45,7 @@ from growmate_pi.schemas import (
     TreeResult,
 )
 from growmate_pi.task_state import get_task_state
+from growmate_pi.tool_state import get_tool_state
 
 
 DEFAULT_CONFIG = (
@@ -744,6 +745,38 @@ def build_app(
 
     app = FastAPI(title="GrowMate Pi", version=SCHEMA_VERSION)
 
+    # Boot-time tool preflight (audit F5): ToolState is process memory, so a
+    # restart forgets what's physically on the UTM. In real mode, read pin 63
+    # once; if a head is seated with no recorded mount, mark the state
+    # unknown — EnsureTool then refuses tool work (with spoken guidance)
+    # instead of blindly swapping into an occupied bay. Runs in a daemon
+    # thread: the D_C answer takes a firmware round-trip and boot shouldn't
+    # block on it.
+    def _tool_preflight() -> None:
+        try:
+            rec = _bridge.publish("D_C")
+            if rec.status != "sent":
+                return
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                reading = _bridge.last_reading(63)
+                if reading is not None:
+                    if reading[0] < 0.5 and get_tool_state().current() is None:
+                        get_tool_state().mark_unknown()
+                        print("[growmate_pi] Preflight: pin 63 reads MOUNTED "
+                              "but no tool is recorded — tool state set to "
+                              "'unknown'; resolve via POST /tool_state or "
+                              "hand-unmount before tool commands.")
+                    return
+                time.sleep(0.25)
+        except Exception:
+            pass  # preflight is best-effort; never block serving
+
+    if _bridge.ros2_enabled:
+        threading.Thread(
+            target=_tool_preflight, name="growmate_tool_preflight", daemon=True
+        ).start()
+
     # CORS so a phone-side web app can call us. Wide-open by default; tighten
     # by passing an explicit origin list from the CLI in production.
     app.add_middleware(
@@ -768,7 +801,31 @@ def build_app(
             "config": str((config_path or DEFAULT_CONFIG)),
             "task": get_task_state().snapshot(),
             "position": _bridge.position(),
+            "tool": get_tool_state().current(),
         }
+
+    @app.post("/tool_state")
+    def set_tool_state(body: Dict[str, Any]):
+        """Operator override for the mounted-tool record (audit F5).
+
+        ``{"tool": "watering_nozzle"}`` — declare what is physically on the
+        UTM (must be a configured tool name); ``{"tool": null}`` — declare
+        the head empty (e.g. after a hand-unmount). Clears the boot-time
+        'unknown' refusal.
+        """
+        tool = body.get("tool")
+        if tool is not None:
+            tool = str(tool)
+            if tool not in _garden.tools_by_name():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unknown tool '{tool}' — configured: "
+                           f"{sorted(_garden.tools_by_name())}",
+                )
+            get_tool_state().set(tool)
+        else:
+            get_tool_state().clear()
+        return {"ok": True, "tool": get_tool_state().current()}
 
     @app.on_event("shutdown")
     def _on_shutdown():

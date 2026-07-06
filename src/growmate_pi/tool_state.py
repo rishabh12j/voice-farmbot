@@ -16,6 +16,13 @@ import threading
 from typing import Optional
 
 
+# Sentinel for "pin 63 says a head is seated, but this process doesn't know
+# which" — the state after an intent-server restart with a tool still on the
+# UTM (audit F5). Tool-requiring trees refuse until an operator resolves it
+# (hand-unmount, or POST /tool_state with the actual name).
+UNKNOWN_TOOL = "unknown"
+
+
 class ToolState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -28,6 +35,15 @@ class ToolState:
     def clear(self) -> None:
         with self._lock:
             self._current = None
+
+    def mark_unknown(self) -> None:
+        """Record that *some* head is physically mounted but unidentified."""
+        with self._lock:
+            self._current = UNKNOWN_TOOL
+
+    def is_unknown(self) -> bool:
+        with self._lock:
+            return self._current == UNKNOWN_TOOL
 
     def current(self) -> Optional[str]:
         with self._lock:

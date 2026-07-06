@@ -104,7 +104,8 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
             f"Move to ({x:.0f}, {y:.0f}, {z:.0f})",
             CheckAvailable(bridge),
             CheckBounds(garden, x=x, y=y, z=z),
-            MoveTo(bridge, x=x, y=y, z=z, verify=True, timeout_s=MOVE_TIMEOUT_S),
+            MoveTo(bridge, x=x, y=y, z=z, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   check_mm=garden.position_verify_mm()),
             Respond(intent.response),
         )
     # Named target move — resolve from the garden config first, then the live
@@ -128,7 +129,8 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
                 f"Move to {target} (map)",
                 CheckAvailable(bridge),
                 MoveTo(bridge, x=float(p["x"]), y=float(p["y"]), z=0.0,
-                       verify=True, timeout_s=MOVE_TIMEOUT_S),
+                       verify=True, timeout_s=MOVE_TIMEOUT_S,
+                       check_mm=garden.position_verify_mm()),
                 Respond(intent.response),
             )
         return _seq(
@@ -139,7 +141,8 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     return _seq(
         f"Move to {intent.target}",
         *_safety_and_target(bridge, garden, intent.target),
-        MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S),
+        MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
+               check_mm=garden.position_verify_mm()),
         Respond(intent.response),
     )
 
@@ -248,7 +251,8 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, step_label, name=f"Step({i}/{total})"),
             MoveTo(bridge, x=x, y=y, z=z, verify=True,
-                   timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})"),
+                   timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})",
+                   check_mm=garden.position_verify_mm()),
             PublishCmd("D_W_1", bridge, verify=True,
                        timeout_s=PUMP_TIMEOUT_S, name=f"PumpOn({i})"),
             Wait(duration, name=f"Pulse({duration}s, {i})"),
@@ -353,7 +357,8 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, step_label, name=f"Step({i}/{total})"),
             MoveTo(bridge, x=x, y=y, z=z, verify=True,
-                   timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})"),
+                   timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})",
+                   check_mm=garden.position_verify_mm()),
             PublishCmd("D_W_1", bridge, verify=True,
                        timeout_s=PUMP_TIMEOUT_S, name=f"PumpOn({i})"),
             Wait(duration, name=f"Pulse({duration}s, {i})"),
@@ -385,6 +390,19 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         find_plants_by_species,
     )
 
+    # Audit F4: until this greenhouse's soil thresholds are MEASURED, a
+    # dry/wet decision is a guess about sensor polarity — refuse cleanly
+    # rather than water on it (Q-design; honest-or-blank). check_sensor still
+    # works (it speaks the raw number), and water/water_all are unaffected.
+    if not garden.soil_calibrated():
+        return _seq(
+            "Water smart (uncalibrated)",
+            Respond("My soil sensor isn't calibrated for this garden yet, so "
+                    "I can't tell dry from wet. Say 'water all the "
+                    f"{(intent.target or 'plants').strip()}' instead, or run "
+                    "the soil calibration first."),
+        )
+
     target = (intent.target or "").strip()
     if target:
         matches = find_plants_by_species(target)
@@ -412,6 +430,7 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
             return 6
 
     tools = garden.tools_by_name()
+    dry_above, wet_below = garden.soil_thresholds()
     task_id = _uuid.uuid4().hex[:8]
     total = len(matches)
     # Shared between the two passes: per-plant readings + watered/skipped tallies.
@@ -434,8 +453,10 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
             CheckEstop(name=f"CheckEstop.sense({i})"),
             StepNotify(i, f"checking {pname} ({i}/{total})", name=f"Sense({i}/{total})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
-                   name=f"MoveTo.sense({pname})"),
-            RecordSoil(bridge, state["readings"], pidx, pname),
+                   name=f"MoveTo.sense({pname})",
+                   check_mm=garden.position_verify_mm()),
+            RecordSoil(bridge, state["readings"], pidx, pname,
+                       dry_above=dry_above, wet_below=wet_below),
         ])
 
     # --- Pass 2: water only the dry ones with the nozzle ---
@@ -463,11 +484,13 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
 
         water_seq = _seq(
             f"WaterIfDry({pname})",
-            CheckDry(state["readings"], pidx, name=f"CheckDry({pname})"),
+            CheckDry(state["readings"], pidx, dry_above=dry_above,
+                     name=f"CheckDry({pname})"),
             CheckEstop(name=f"CheckEstop.water({i})"),
             StepNotify(i, f"watering {pname} ({i}/{total})", name=f"Water({i}/{total})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
-                   name=f"MoveTo.water({pname})"),
+                   name=f"MoveTo.water({pname})",
+                   check_mm=garden.position_verify_mm()),
             PublishCmd("D_W_1", bridge, verify=True, timeout_s=PUMP_TIMEOUT_S,
                        name=f"PumpOn({i})"),
             Wait(dur, name=f"Pulse({dur}s, {i})"),
@@ -607,11 +630,14 @@ def _tree_clear_weeds(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, f"weed {i}/{total}", name=f"Weed({i}/{total})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
-                   name=f"OverWeed({i})"),
+                   name=f"OverWeed({i})",
+                   check_mm=garden.position_verify_mm()),
             MoveTo(bridge, x=x, y=y, z=WEED_PLUNGE_Z, verify=True,
-                   timeout_s=MOVE_TIMEOUT_S, name=f"Plunge({i})"),
+                   timeout_s=MOVE_TIMEOUT_S, name=f"Plunge({i})",
+                   check_mm=garden.position_verify_mm()),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
-                   name=f"Raise({i})"),
+                   name=f"Raise({i})",
+                   check_mm=garden.position_verify_mm()),
             LogPlantEvent(_make_log_fn(x, y), name=f"LogWeeded({i})"),
         ])
 
@@ -667,7 +693,8 @@ def _tree_scan_bed(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavio
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, f"scanning {i}/{total}", name=f"Scan({i}/{total})"),
             MoveTo(bridge, x=x, y=y, z=SCAN_Z, verify=True, timeout_s=MOVE_TIMEOUT_S,
-                   name=f"MoveTo.scan({i})"),
+                   name=f"MoveTo.scan({i})",
+                   check_mm=garden.position_verify_mm()),
             PublishCmd("I_4", bridge, name=f"Detect({i})"),
             Wait(SCAN_DWELL_S, name=f"Dwell({i})"),
         ])
@@ -793,12 +820,16 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
                 CheckBounds(garden),
                 # Verified move so the reading is taken once the gantry has
                 # actually arrived at the plant, not mid-travel.
-                MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S),
+                MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                       check_mm=garden.position_verify_mm()),
             ]
         )
     # ReadSensor speaks the result ("the soil reads 512 — that's moist"), so no
-    # trailing generic Respond — that would talk over the real reading.
-    children.append(ReadSensor(bridge))
+    # trailing generic Respond — that would talk over the real reading. While
+    # uncalibrated it speaks the raw value without a dry/wet verdict (F4).
+    dry_above, wet_below = garden.soil_thresholds()
+    children.append(ReadSensor(bridge, dry_above=dry_above, wet_below=wet_below,
+                               calibrated=garden.soil_calibrated()))
     return _seq(f"Check sensor at {intent.target or 'current'}", *children)
 
 
