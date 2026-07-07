@@ -77,10 +77,27 @@ class StandardCameraNode(Node):
         ret, image = self.camera.read()
 
         if not ret:
-            self.get_logger().error('Problem getting image.')
+            # Bugfix: a USB glitch (e.g. the Farmduino resetting on the shared
+            # bus when uart_controller opens the serial port) stalls the V4L2
+            # stream, and a stalled capture NEVER recovers without a reopen —
+            # the node used to log this error forever. After a few consecutive
+            # failures, release and rescan so a bus glitch costs seconds, not
+            # the session. read() blocks ~10 s on a stalled stream, so 3
+            # failures ≈ 30 s of grace before the reopen.
+            self._fail_streak = getattr(self, '_fail_streak', 0) + 1
+            self.get_logger().error(
+                f'Problem getting image ({self._fail_streak} consecutive).')
+            if self._fail_streak >= 3:
+                self.get_logger().warn('Stream stalled — reopening camera...')
+                try:
+                    self.camera.release()
+                except Exception:
+                    pass
+                self.init_camera()
+                self._fail_streak = 0
             return
 
-        # Save image to file
+        self._fail_streak = 0
         image_msg = self.bridge_.cv2_to_imgmsg(image, "bgr8")
         self.rgb_publisher_.publish(image_msg)
 
