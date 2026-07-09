@@ -108,42 +108,52 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
                    check_mm=garden.position_verify_mm()),
             Respond(intent.response),
         )
-    # Named target move — resolve from the garden config first, then the live
-    # active_map (a voice-labelled species may exist only in the map). An
-    # unknown name refuses CLEANLY (success + spoken refusal) like _tree_water:
-    # a hard FAILURE reads as a robot fault, but an unknown place is a
-    # user-vocabulary issue, not a malfunction (Q-design).
+    # Named target move. Resolution order (single source of plant truth):
+    #   1. the live active_map — where the plant ACTUALLY is (same source as
+    #      _tree_water). This is authoritative; the config plant positions are
+    #      a frozen snapshot that calibrate.py never refreshes, so they must
+    #      not drive motion.
+    #   2. the config, ONLY for named non-plant LOCATIONS (e.g. "home", a
+    #      named corner) that live in config and aren't in the plant map.
+    #   3. neither -> clean refusal (success + spoken), like _tree_water: an
+    #      unknown place is a user-vocabulary issue, not a robot malfunction.
     target = (intent.target or "").strip()
     if not target:
         return _seq(
             "Move (no target)",
             Respond("I need to know where to move. Try 'move to the lettuce'."),
         )
-    if garden.resolve_target(target) is None:
-        from growmate_pi.intent_server import find_plants_by_species
 
-        matches = find_plants_by_species(target)
-        if matches:
-            p = matches[0]
-            return _seq(
-                f"Move to {target} (map)",
-                CheckAvailable(bridge),
-                MoveTo(bridge, x=float(p["x"]), y=float(p["y"]), z=0.0,
-                       verify=True, timeout_s=MOVE_TIMEOUT_S,
-                       check_mm=garden.position_verify_mm()),
-                Respond(intent.response),
-            )
+    from growmate_pi.intent_server import find_plants_by_species
+
+    matches = find_plants_by_species(target)
+    if matches:
+        p = matches[0]
+        px, py, pz = float(p["x"]), float(p["y"]), 0.0
+        # Full safety prefix on the explicit coords the map gave us — the map
+        # branch used to skip CheckBounds; as the primary path it must guard
+        # bounds like every other move (research contract, CLAUDE.md rule 2).
         return _seq(
-            f"Move to {target} (no match)",
-            Respond(f"I don't see any {target} in this garden. "
-                    "Tell me a different plant."),
+            f"Move to {target} (map)",
+            CheckAvailable(bridge),
+            CheckBounds(garden, x=px, y=py, z=pz),
+            MoveTo(bridge, x=px, y=py, z=pz, verify=True,
+                   timeout_s=MOVE_TIMEOUT_S, check_mm=garden.position_verify_mm()),
+            Respond(intent.response),
+        )
+    if garden.resolve_target(target) is not None:
+        # A named location (not a plant) — resolve from config, fully guarded.
+        return _seq(
+            f"Move to {intent.target}",
+            *_safety_and_target(bridge, garden, intent.target),
+            MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
+                   check_mm=garden.position_verify_mm()),
+            Respond(intent.response),
         )
     return _seq(
-        f"Move to {intent.target}",
-        *_safety_and_target(bridge, garden, intent.target),
-        MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
-               check_mm=garden.position_verify_mm()),
-        Respond(intent.response),
+        f"Move to {target} (no match)",
+        Respond(f"I don't see any {target} in this garden. "
+                "Tell me a different plant."),
     )
 
 
