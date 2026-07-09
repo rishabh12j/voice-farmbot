@@ -88,6 +88,42 @@ def _safety_and_target(
     ]
 
 
+def _move_to_named_target(
+    bridge: FarmBotROS2Bridge,
+    garden: GardenConfig,
+    target: str,
+) -> List[py_trees.behaviour.Behaviour]:
+    """Guarded nodes to move to a NAMED target — position from the live
+    active_map FIRST (authoritative, same source as water/move), config only
+    for named non-plant locations. Shared by photo and check_sensor so every
+    plant-targeting move uses one source of plant truth; the config
+    garden.plants positions are a stale snapshot and must not drive motion.
+
+    On a known map plant: CheckBounds+MoveTo on the map's explicit coords.
+    Otherwise: the config ResolveTarget path (a named location, or — for an
+    unknown target — a ResolveTarget that fails so CheckPlantFound aborts the
+    tree cleanly, preserving photo/check_sensor's prior behaviour).
+    """
+    from growmate_pi.intent_server import find_plants_by_species
+
+    matches = find_plants_by_species(target)
+    if matches:
+        p = matches[0]
+        px, py, pz = float(p["x"]), float(p["y"]), 0.0
+        return [
+            CheckBounds(garden, x=px, y=py, z=pz),
+            MoveTo(bridge, x=px, y=py, z=pz, verify=True,
+                   timeout_s=MOVE_TIMEOUT_S, check_mm=garden.position_verify_mm()),
+        ]
+    return [
+        ResolveTarget(garden, target),
+        CheckPlantFound(),
+        CheckBounds(garden),
+        MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
+               check_mm=garden.position_verify_mm()),
+    ]
+
+
 # ---------- Per-action subtree builders ---------------------------------------
 
 
@@ -547,16 +583,11 @@ def _tree_light(bridge, intent: Intent, on: bool) -> py_trees.behaviour.Behaviou
 
 def _tree_photo(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     # If a target is given, move there first; otherwise take photo at current pos.
+    # Target position comes from the live active_map (via _move_to_named_target),
+    # not the stale config — same source as move/water.
     children = [CheckAvailable(bridge)]
     if intent.target:
-        children.extend(
-            [
-                ResolveTarget(garden, intent.target),
-                CheckPlantFound(),
-                CheckBounds(garden),
-                MoveTo(bridge),
-            ]
-        )
+        children.extend(_move_to_named_target(bridge, garden, intent.target))
     children.append(PublishCmd("I_1", bridge, name="TakePhoto"))
     children.append(Respond(intent.response))
     return _seq(f"Photo of {intent.target or 'current pos'}", *children)
@@ -830,17 +861,10 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
                    pin_usable=garden.tool_verify_pin()),
     ]
     if intent.target:
-        children.extend(
-            [
-                ResolveTarget(garden, intent.target),
-                CheckPlantFound(),
-                CheckBounds(garden),
-                # Verified move so the reading is taken once the gantry has
-                # actually arrived at the plant, not mid-travel.
-                MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
-                       check_mm=garden.position_verify_mm()),
-            ]
-        )
+        # Move to the plant using the live active_map position (verified move,
+        # so the reading is taken once the gantry has actually arrived) — same
+        # source as move/water, not the stale config.
+        children.extend(_move_to_named_target(bridge, garden, intent.target))
     # ReadSensor speaks the result ("the soil reads 512 — that's moist"), so no
     # trailing generic Respond — that would talk over the real reading. While
     # uncalibrated it speaks the raw value without a dry/wet verdict (F4).
