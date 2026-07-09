@@ -16,95 +16,11 @@ robot:
 # Your garden - where plants are located
 # The AI uses this to resolve "the tomatoes" -> coordinates
 garden:
-  plants:
-    # Real Maynooth garden — 42 plants, positions from active_map.yaml
-    # Representative (central) plant used per type for voice targeting.
-
-    - name: lettuce
-      aliases: [the lettuce, lettuce bed, little gem, salad, salad greens]
-      position: {x: 1850, y: 1100, z: 0}   # plant #12 of 8 Lettuce_little_gem
-      water_quantity: 2
-      stage: seedling
-
-    - name: marigold
-      aliases: [the marigold, marigolds, marigold bed]
-      position: {x: 1150, y: 1150, z: 0}   # plant #3 of 6 Marigolds
-      water_quantity: 2
-      stage: seedling
-
-    - name: scallion
-      aliases: [the scallion, scallions, spring onion, spring onions]
-      position: {x: 2400, y: 1450, z: 0}   # plant #16 of 9 Scallions
-      water_quantity: 1
-      stage: seedling
-
-    - name: pepper
-      aliases: [the pepper, peppers, mixed pepper, mixed peppers, chilli]
-      position: {x: 2700, y: 1150, z: 0}   # plant #20 of 8 Mixed Peppers
-      water_quantity: 2
-      stage: seedling
-
-    - name: tomatoes
-      aliases: [the tomatoes, tomato bed, tomato plants, tomato section]
-      position: {x: 4250, y: 1150, z: 0}   # plant #34 of 11 Tomatoes
-      water_quantity: 2
-      stage: seedling
-
-    # Herbs — placeholders, refine x/y once they're planted
-    - name: basil
-      aliases: [the basil, basil pot, basil patch]
-      position: {x: 1500, y: 800, z: 0}
-      water_quantity: 2
-      stage: seedling
-
-    - name: spearmint
-      aliases: [the spearmint, spearmint, mint, the mint]
-      position: {x: 1500, y: 1200, z: 0}
-      water_quantity: 2
-      stage: seedling
-
-    # Ornamental flowers — placeholders, update after planting
-    - name: lily
-      aliases: [the lily, lilies, the lilies, asiatic lily]
-      position: {x: 3500, y: 400, z: 0}
-      water_quantity: 3
-      stage: seedling
-
-    - name: geranium
-      aliases: [the geranium, geraniums, the geraniums, pelargonium]
-      position: {x: 3500, y: 800, z: 0}
-      water_quantity: 2
-      stage: seedling
-
-    - name: cardinal flower
-      aliases: [cardinal flowers, the cardinal flower, cardinal, lobelia]
-      position: {x: 3500, y: 1200, z: 0}
-      water_quantity: 4
-      stage: seedling
-
-    - name: dianthus
-      aliases: [the dianthus, dianthuses, carnation, sweet william]
-      position: {x: 3500, y: 1600, z: 0}
-      water_quantity: 2
-      stage: seedling
-
-    - name: euonymus
-      aliases: [the euonymus, euonymus shrub, the shrub]
-      position: {x: 5200, y: 2400, z: 0}
-      water_quantity: 4
-      stage: seedling
-
-    - name: petunia
-      aliases: [the petunia, petunias, the petunias]
-      position: {x: 3500, y: 2000, z: 0}
-      water_quantity: 2
-      stage: seedling
-
-    - name: begonia
-      aliases: [the begonia, begonias, the begonias]
-      position: {x: 3500, y: 2400, z: 0}
-      water_quantity: 2
-      stage: seedling
+  # plants: RETIRED 2026-07-08 — plant positions now come from the live
+  # active_map (calibrate.py maintains it); move/water/photo/check_sensor
+  # all resolve there. The old static positions here were a frozen snapshot
+  # calibrate.py never refreshed. Species vocab for the LLM comes from the
+  # live map (/plants/species), not this file.
 
   locations:
     - name: home
