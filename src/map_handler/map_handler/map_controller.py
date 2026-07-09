@@ -2,6 +2,7 @@ import os
 import yaml
 import copy
 import math
+import shutil
 
 import rclpy
 from rclpy.node import Node
@@ -10,13 +11,27 @@ from farmbot_interfaces.msg import MapCommand, PlantManage
 from farmbot_interfaces.srv import StringRepReq
 from map_handler.tool_sequencer import ToolDetails, ToolExchanger
 
+
+def farmbot_state_dir():
+    '''Single writable directory for MUTABLE robot state (active_map,
+    watering_guide), shared by the AURA stack and GrowMate and living OUTSIDE
+    the colcon build tree so a rebuild never clobbers it (previously the active
+    map lived in the install/share dir, which a clean rebuild would wipe and a
+    data_files rebuild would overwrite). Override with the FARMBOT_STATE_DIR
+    environment variable; defaults to ~/.farmbot. Created if missing.'''
+    d = os.environ.get('FARMBOT_STATE_DIR') or os.path.join(
+        os.path.expanduser('~'), '.farmbot')
+    os.makedirs(d, exist_ok=True)
+    return d
+
 class MapController(Node):
     '''
-    Node that saves, modifies and handles the map information of the 
-    farmbot. It saves the active map in the install share directory,
+    Node that saves, modifies and handles the map information of the
+    farmbot. It saves the active map in the shared writable state directory
+    (``farmbot_state_dir()`` — default ~/.farmbot, outside the build tree),
     recording information such as map details (dimensions, tool locations,
     tray locations) and plant details (plant locations, growth information,
-    )
+    ). Read-only schema templates stay in the package share dir.
     '''
     def __init__(self):
         '''
@@ -28,11 +43,15 @@ class MapController(Node):
         # The safe Z increment for the sequences
         self.safe_z_increment_ = 80.0
 
-        # Relevant directory and file names
-        self.directory_ = os.path.join(
+        # Read-only schema templates + seed data ship in the package share dir.
+        self.template_dir_ = os.path.join(
             get_package_share_directory('map_handler'),
             'config'
         )
+        # Mutable state (active_map, watering_guide) lives in ONE writable dir
+        # outside the build tree — shared with GrowMate, rebuild-proof (Option 2).
+        self.directory_ = farmbot_state_dir()
+
         self.active_map_file_ = 'active_map.yaml'
         tool_ref_file = 'tool_reference.yaml'
         tray_ref_file = 'tray_reference.yaml'
@@ -41,11 +60,17 @@ class MapController(Node):
         reference_map_file_ = 'map_references.yaml'
         watering_guide_file_ = 'watering_guide.yaml'
 
-        # Loading the map instance from memory
+        # First run on a fresh machine: seed the mutable watering_guide from the
+        # package template into the state dir (thereafter it's edited in place).
+        self.__seed_state_file(watering_guide_file_)
+
+        # Loading the map instance from the state dir; a fresh run with no saved
+        # map falls back to the empty template shipped in the package share.
         self.map_instance_ = self.retrieve_map(directory = self.directory_,
                                                file_name1 = self.active_map_file_,
-                                               file_name2 = reference_map_file_)
-        
+                                               file_name2 = reference_map_file_,
+                                               fallback_dir = self.template_dir_)
+
         self.water_guide_instance_ = self.load_from_yaml(self.directory_, watering_guide_file_)
 
         # Loading the tool exhanging module and the tool command object
@@ -55,13 +80,11 @@ class MapController(Node):
                                              map_max_z = -self.map_instance_['map_reference']['z_len'])
         self.tool_details_ = ToolDetails()
 
-        # Loading the plant referencing method
-        self.plant_ref_ = self.load_from_yaml(self.directory_, reference_plant_file_)
-        # Loading the tool referencing method
-        self.tool_ref_ = self.load_from_yaml(self.directory_, tool_ref_file)
-        # Loading the tray reference and 16 seed tray addon reference
-        self.tray_ref_ = self.load_from_yaml(self.directory_, tray_ref_file)
-        self.tray_16_ref_ = self.load_from_yaml(self.directory_, tray_16_ref_file)
+        # Schema templates are read-only package data — load from the share dir.
+        self.plant_ref_ = self.load_from_yaml(self.template_dir_, reference_plant_file_)
+        self.tool_ref_ = self.load_from_yaml(self.template_dir_, tool_ref_file)
+        self.tray_ref_ = self.load_from_yaml(self.template_dir_, tray_ref_file)
+        self.tray_16_ref_ = self.load_from_yaml(self.template_dir_, tray_16_ref_file)
 
         # MapCommand subscriber
         self.map_cmd_sub_ = self.create_subscription(MapCommand, 'map_cmd', self.map_cmd_callback, 10)
@@ -637,16 +660,32 @@ class MapController(Node):
             else:
                 self.get_logger().warn('Invalid YAML file format..')
 
-    def retrieve_map(self, directory = '', file_name1 = '', file_name2 = ''):
+    def __seed_state_file(self, file_name):
+        '''
+        Copy a mutable file (e.g. watering_guide.yaml) from the package
+        template dir into the writable state dir on first run, so a fresh
+        machine starts from the shipped defaults without keeping mutable state
+        in the build tree. No-op once the state copy exists.
+        '''
+        dst = os.path.join(self.directory_, file_name)
+        src = os.path.join(self.template_dir_, file_name)
+        if not os.path.exists(dst) and os.path.exists(src):
+            shutil.copy(src, dst)
+            self.get_logger().info(f'Seeded {file_name} into state dir {self.directory_}')
+
+    def retrieve_map(self, directory = '', file_name1 = '', file_name2 = '',
+                     fallback_dir = ''):
         '''
         Attempts to retrieve the map configuration file from memory.
         If it fails, it either means that the file was deleted or the
         current run is a fresh run.
 
         Args:
-            directory {String}: The share directory the yaml files are located at
+            directory {String}: The state dir the active map is saved in
             file_name1 {String}: The active config (i.e. the one from memory)
             file_name2 {String}: The initial empty config (i.e. fresh run)
+            fallback_dir {String}: Where the empty template lives (package
+                share); defaults to ``directory`` for backward compatibility.
         '''
         active_config = os.path.join(directory, file_name1)
         if os.path.exists(active_config):
@@ -654,7 +693,7 @@ class MapController(Node):
             return self.load_from_yaml(directory, file_name1)
         else:
             self.get_logger().warn('Previous map info could not be found! Unless you have a back-up, previous items need to be re-added')
-            return self.load_from_yaml(directory, file_name2)
+            return self.load_from_yaml(fallback_dir or directory, file_name2)
 
 
 def main(args=None):

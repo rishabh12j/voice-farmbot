@@ -41,6 +41,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     IncludeLaunchDescription,
+    SetEnvironmentVariable,
     TimerAction,
 )
 from launch.conditions import IfCondition, UnlessCondition
@@ -101,7 +102,21 @@ def generate_launch_description() -> LaunchDescription:
                         "calibration (I_0), scan_bed, panorama. Set camera:=false "
                         "for a watering-only run (no_camera.launch.py).",
         ),
+        DeclareLaunchArgument(
+            "state_dir",
+            default_value=os.path.join(os.path.expanduser("~"), ".farmbot"),
+            description="Single writable dir for MUTABLE robot state (active_map, "
+                        "watering_guide), shared by the AURA stack and GrowMate "
+                        "and OUTSIDE the build tree so a rebuild never clobbers it "
+                        "(Option 2). Exported as FARMBOT_STATE_DIR to every node.",
+        ),
     ]
+
+    # Export the state dir to EVERY node below (AURA bringup + intent server +
+    # scheduler) so map_controller, the camera nodes, and GrowMate all read and
+    # write the one active_map / watering_guide copy.
+    set_state_dir = SetEnvironmentVariable(
+        "FARMBOT_STATE_DIR", LaunchConfiguration("state_dir"))
 
     # 1. AURA bringup. Default (camera:=true) -> standard.launch.py, which is
     #    no_camera + camera_controller + standard_camera. camera:=false ->
@@ -149,4 +164,5 @@ def generate_launch_description() -> LaunchDescription:
     ])
 
     return LaunchDescription(
-        args + [bringup_camera, bringup_no_camera, intent_server, scheduler])
+        args + [set_state_dir, bringup_camera, bringup_no_camera,
+                intent_server, scheduler])

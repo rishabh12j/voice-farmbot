@@ -77,14 +77,33 @@ _PLANT_TYPE_MAP: Dict[str, str] = {
 }
 
 
+def _farmbot_state_dir() -> Path:
+    """The single writable state dir shared with the AURA map_controller —
+    where the live active_map now lives (Option 2). Mirrors
+    ``map_handler.map_controller.farmbot_state_dir``: FARMBOT_STATE_DIR or
+    ~/.farmbot. Not created here (read-only side); the map_controller owns it.
+    """
+    import os
+    return Path(os.environ.get("FARMBOT_STATE_DIR")
+                or (Path.home() / ".farmbot"))
+
+
 def _installed_map_path() -> Optional[Path]:
     """Locate the active_map.yaml the running map_handler is actually using.
 
-    Preferred location is the AURA install share directory (what's actually
-    loaded by the running map_controller). Falls back to the repo's source
-    copy so this also works when ament_index_python isn't available (tests
-    on Windows / WSL without colcon build).
+    Priority:
+      1. the shared writable state dir (~/.farmbot) — where map_controller
+         now reads/writes the active map (Option 2, rebuild-proof).
+      2. the AURA install share dir — legacy location for pre-Option-2 robots
+         (the map used to live in install/share/map_handler/config).
+      3. the repo source copy — so this works on Windows / WSL without a
+         colcon build (tests).
     """
+    # 1. shared state dir
+    state_map = _farmbot_state_dir() / "active_map.yaml"
+    if state_map.exists():
+        return state_map
+    # 2. legacy install share dir
     try:
         from ament_index_python.packages import get_package_share_directory
         share = Path(get_package_share_directory("map_handler")) / "config"
@@ -94,7 +113,7 @@ def _installed_map_path() -> Optional[Path]:
                 return candidate
     except Exception:
         pass
-    # Fallback: walk up from this file to repo root, then into the source tree
+    # 3. repo source tree
     here = Path(__file__).resolve()
     repo_src = here.parents[1]  # src/
     for sub in (

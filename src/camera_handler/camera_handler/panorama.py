@@ -100,7 +100,9 @@ class Panorama:
         # If the map dimensions were not set at the start of the run, load them from the active map
         if self.map_x == -1.0 or self.map_y == -1.0:
             # Load map instance
-            map_directory_ = os.path.join(get_package_share_directory('map_handler'), 'config')
+            # Active map now lives in the shared writable state dir (Option 2),
+            # not the package share — read it from there so we see the live map.
+            map_directory_ = os.environ.get('FARMBOT_STATE_DIR') or os.path.join(os.path.expanduser('~'), '.farmbot')
             map_file = 'active_map.yaml'
             map_instance = self.load_from_yaml(map_directory_, map_file)
             if map_instance:
@@ -255,7 +257,9 @@ class Panorama:
         
         if self.map_x == -1.0 or self.map_y == -1.0:
             # Load map instance
-            map_directory_ = os.path.join(get_package_share_directory('map_handler'), 'config')
+            # Active map now lives in the shared writable state dir (Option 2),
+            # not the package share — read it from there so we see the live map.
+            map_directory_ = os.environ.get('FARMBOT_STATE_DIR') or os.path.join(os.path.expanduser('~'), '.farmbot')
             map_file = 'active_map.yaml'
             map_instance = self.load_from_yaml(map_directory_, map_file)
             if map_instance:

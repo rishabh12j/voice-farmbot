@@ -20,7 +20,9 @@ class PlantDetection:
         self.map_width = -1.0
         self.map_height = -1.0
         self.config_directory = os.path.join(get_package_share_directory('camera_handler'), 'config')
-        self.map_directory = os.path.join(get_package_share_directory('map_handler'), 'config')
+        # Active map now lives in the shared writable state dir (Option 2),
+        # not the package share — read it from there so we see the live map.
+        self.map_directory = os.environ.get('FARMBOT_STATE_DIR') or os.path.join(os.path.expanduser('~'), '.farmbot')
         self.map_file = 'active_map.yaml'
         self.calib_file = 'camera_calibration.yaml'
         self.camera_config_file = 'standard_camera_config.yaml'
