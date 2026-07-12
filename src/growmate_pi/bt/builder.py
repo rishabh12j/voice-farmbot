@@ -162,6 +162,13 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
 
     from growmate_pi.intent_server import find_plants_by_species
 
+    # Named moves run under a TaskBoundary so the UI overlay tracks them like
+    # a watering (big STOP button on screen during ANY motion), and the final
+    # Respond is PAST-TENSE — it sits after the verified MoveTo in the
+    # Sequence, so "Arrived" is only ever spoken once the gantry actually
+    # confirmed at the target (honest-or-blank). The LLM's forward-tense
+    # intent.response remains the announcement on the async path.
+    task_id = _uuid.uuid4().hex[:8]
     matches = find_plants_by_species(target)
     if matches:
         p = matches[0]
@@ -171,20 +178,30 @@ def _tree_move(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         # bounds like every other move (research contract, CLAUDE.md rule 2).
         return _seq(
             f"Move to {target} (map)",
+            TaskBoundary("start", task_id=task_id,
+                         label=f"Moving to the {target}", total_steps=1,
+                         name="BeginTask(move)"),
             CheckAvailable(bridge),
             CheckBounds(garden, x=px, y=py, z=pz),
+            StepNotify(1, f"moving to the {target}", name="Step(1/1)"),
             MoveTo(bridge, x=px, y=py, z=pz, verify=True,
                    timeout_s=MOVE_TIMEOUT_S, check_mm=garden.position_verify_mm()),
-            Respond(intent.response),
+            Respond(f"Arrived at the {target}."),
+            TaskBoundary("end", name="EndTask"),
         )
     if garden.resolve_target(target) is not None:
         # A named location (not a plant) — resolve from config, fully guarded.
         return _seq(
             f"Move to {intent.target}",
+            TaskBoundary("start", task_id=task_id,
+                         label=f"Moving to {target}", total_steps=1,
+                         name="BeginTask(move)"),
             *_safety_and_target(bridge, garden, intent.target),
+            StepNotify(1, f"moving to {target}", name="Step(1/1)"),
             MoveTo(bridge, verify=True, timeout_s=MOVE_TIMEOUT_S,
                    check_mm=garden.position_verify_mm()),
-            Respond(intent.response),
+            Respond(f"Arrived at {target}."),
+            TaskBoundary("end", name="EndTask"),
         )
     return _seq(
         f"Move to {target} (no match)",
@@ -561,12 +578,19 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
 
 
 def _tree_go_home(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    # TaskBoundary so the overlay (and its STOP button) covers the homing
+    # travel too; past-tense Respond only after the verified H_0 completes.
     return _seq(
         "Go home",
+        TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
+                     label="Heading home", total_steps=1,
+                     name="BeginTask(home)"),
         CheckAvailable(bridge),
+        StepNotify(1, "heading home", name="Step(1/1)"),
         PublishCmd("H_0", bridge, verify=True, timeout_s=HOME_TIMEOUT_S,
                    name="GoHome"),
-        Respond(intent.response),
+        Respond("The robot is home."),
+        TaskBoundary("end", name="EndTask"),
     )
 
 
@@ -585,11 +609,24 @@ def _tree_photo(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     # If a target is given, move there first; otherwise take photo at current pos.
     # Target position comes from the live active_map (via _move_to_named_target),
     # not the stale config — same source as move/water.
-    children = [CheckAvailable(bridge)]
+    total = 2 if intent.target else 1
+    children = [
+        TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
+                     label="Taking a photo", total_steps=total,
+                     name="BeginTask(photo)"),
+        CheckAvailable(bridge),
+    ]
     if intent.target:
+        children.append(StepNotify(1, f"moving to the {intent.target}",
+                                   name=f"Step(1/{total})"))
         children.extend(_move_to_named_target(bridge, garden, intent.target))
+    children.append(StepNotify(total, "taking the photo",
+                               name=f"Step({total}/{total})"))
     children.append(PublishCmd("I_1", bridge, name="TakePhoto"))
-    children.append(Respond(intent.response))
+    # Honest wording: I_1 is dispatched to the camera service and is NOT
+    # confirmable over /busy_state — say what we actually know.
+    children.append(Respond("I've asked the camera for a photo."))
+    children.append(TaskBoundary("end", name="EndTask"))
     return _seq(f"Photo of {intent.target or 'current pos'}", *children)
 
 
@@ -598,7 +635,10 @@ def _tree_panorama(bridge, intent: Intent) -> py_trees.behaviour.Behaviour:
         "Panorama",
         CheckAvailable(bridge),
         PublishCmd("I_2", bridge, name="Panorama"),
-        Respond(intent.response),
+        # Honest wording — the stitch runs in the camera service and takes a
+        # while; we know it was requested, not that it finished.
+        Respond("I've asked the camera to build the panorama — "
+                "it takes a little while."),
     )
 
 
@@ -607,7 +647,10 @@ def _tree_scan_weeds(bridge, intent: Intent) -> py_trees.behaviour.Behaviour:
         "Scan weeds",
         CheckAvailable(bridge),
         PublishCmd("I_4", bridge, name="ScanWeeds"),
-        Respond(intent.response),
+        # Honest wording — detection runs in the camera service; we know it
+        # was requested, not that it finished.
+        Respond("I've asked the camera to scan for weeds. Ask me to clear "
+                "them once it's done."),
     )
 
 
@@ -855,8 +898,13 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
     # The soil probe is a tool head — make sure it's mounted before reading
     # (no-op if it already is). Move to the plant afterwards so the probe goes
     # in at the right spot.
+    total = 3 if intent.target else 2
     children = [
+        TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
+                     label="Checking the soil", total_steps=total,
+                     name="BeginTask(sensor)"),
         CheckAvailable(bridge),
+        StepNotify(1, "getting the soil probe", name=f"Step(1/{total})"),
         EnsureTool(bridge, "soil_sensor", garden.tools_by_name(),
                    pin_usable=garden.tool_verify_pin()),
     ]
@@ -864,13 +912,18 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
         # Move to the plant using the live active_map position (verified move,
         # so the reading is taken once the gantry has actually arrived) — same
         # source as move/water, not the stale config.
+        children.append(StepNotify(2, f"moving to the {intent.target}",
+                                   name=f"Step(2/{total})"))
         children.extend(_move_to_named_target(bridge, garden, intent.target))
+    children.append(StepNotify(total, "reading the soil",
+                               name=f"Step({total}/{total})"))
     # ReadSensor speaks the result ("the soil reads 512 — that's moist"), so no
     # trailing generic Respond — that would talk over the real reading. While
     # uncalibrated it speaks the raw value without a dry/wet verdict (F4).
     dry_above, wet_below = garden.soil_thresholds()
     children.append(ReadSensor(bridge, dry_above=dry_above, wet_below=wet_below,
                                calibrated=garden.soil_calibrated()))
+    children.append(TaskBoundary("end", name="EndTask"))
     return _seq(f"Check sensor at {intent.target or 'current'}", *children)
 
 

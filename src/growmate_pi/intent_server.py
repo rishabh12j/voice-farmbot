@@ -475,14 +475,36 @@ def _execute_intent_tree(req: IntentRequest, task_id: str) -> IntentResponse:
     new_commands = [
         r.command for r in bridge.command_log[len(commands_before):]
     ]
-    tts = read_tts_text() or " ".join(i.response for i in req.intents)
     status_str = tree_result.status
+
+    # Honest-or-blank on the OUTCOME line. On success the tree's own Respond
+    # nodes wrote past-tense tts ("Arrived at the marigolds."). On failure
+    # those never ran (Sequence), and the old fallback re-spoke the LLM's
+    # forward-tense announcement ("Moving to the marigolds.") — confidently
+    # wrong. Speak a friendly failure instead; the precise failed step stays
+    # in `error` for the screen.
+    tts = read_tts_text()
+    if status_str == "success":
+        tts = tts or " ".join(i.response for i in req.intents)
+    else:
+        tts = (tts + " " if tts else "") + _friendly_failure(tree_result)
 
     # Day 7: append a per-plant event row for every care-action intent that
     # didn't fail outright. Best-effort.
     if not req.emergency:
         for intent_obj in req.intents:
             _log_intent_outcome(intent_obj, status_str, bridge=bridge)
+
+    error = None if status_str == "success" else _summarise_error(tree_result)
+    # Record the terminal outcome where the UI's 1 Hz /status poll can see it
+    # AFTER the running panel closes — the overlay's completion state.
+    task_state.set_last_result(
+        task_id=task_id,
+        label=tree_result.label,
+        status=status_str,
+        summary=tts.strip(),
+        failed_step=error or "",
+    )
 
     return IntentResponse(
         status=status_str,
@@ -491,7 +513,7 @@ def _execute_intent_tree(req: IntentRequest, task_id: str) -> IntentResponse:
         commands_published=new_commands,
         tts_text=tts.strip(),
         duration_ms=duration_ms,
-        error=None if status_str == "success" else _summarise_error(tree_result),
+        error=error,
     )
 
 
@@ -1227,6 +1249,53 @@ def _summarise_error(tree_result) -> str:
         n = failed[0]
         return f"{n.name}: {n.message or 'failed'}"
     return "tree did not complete successfully"
+
+
+# Spoken failure lines by failed-node name prefix. Friendly + actionable for
+# the voice channel; the precise "NodeName: feedback" stays on screen via
+# `error`. Order matters — first prefix match wins.
+_FAILURE_SPEECH = [
+    ("CheckAvailable", "I can't reach the robot right now."),
+    ("CheckBounds",    "That spot is outside the safe area, so I didn't move."),
+    ("CheckPlantFound", "I couldn't find that plant in the garden."),
+    ("Resolve",        "I couldn't find that plant in the garden."),
+    ("CheckEstop",     "I was stopped, so I didn't finish."),
+    ("EnsureTool",     "The tool change didn't complete, so I stopped there."),
+    ("Mount",          "The tool change didn't complete, so I stopped there."),
+    ("Unmount",        "The tool change didn't complete, so I stopped there."),
+    ("MoveTo",         "The move didn't complete, so I stopped there."),
+    ("OverWeed",       "The move didn't complete, so I stopped there."),
+    ("Plunge",         "The move didn't complete, so I stopped there."),
+    ("Raise",          "The move didn't complete, so I stopped there."),
+    ("GoHome",         "I couldn't confirm the robot made it home."),
+    ("PumpOn",         "The water pump didn't respond, so I stopped."),
+    ("PumpOff",        "The water pump didn't confirm turning off — "
+                       "please check the robot."),
+    ("ReadSensor",     "I couldn't get a soil reading."),
+    ("RecordSoil",     "I couldn't get a soil reading."),
+]
+
+
+def _friendly_failure(tree_result) -> str:
+    """A spoken, honest, non-technical line for a failed/partial tree.
+
+    Estop takes priority (any node's feedback saying so), then the first
+    failed node's name picks a phrase. Never blames the user, never repeats
+    the forward-tense announcement, always says something rather than
+    claiming success.
+    """
+    failed = [n for n in tree_result.node_results if n.status == "failure"]
+    if any("estop" in (n.message or "").lower() or "stop" == (n.message or "").strip().lower()
+           for n in failed):
+        return "I stopped because you asked me to. Say reset when you're ready."
+    if failed:
+        name = failed[0].name or ""
+        for prefix, phrase in _FAILURE_SPEECH:
+            if name.startswith(prefix):
+                return phrase
+        return "I couldn't finish that, so I stopped safely."
+    # No failed leaf but not success => timeout/partial.
+    return "That was taking too long, so I stopped safely."
 
 
 # ---------- CLI entry point ---------------------------------------------------

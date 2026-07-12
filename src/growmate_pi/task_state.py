@@ -46,6 +46,11 @@ class TaskState:
         self._current_label: str = ""
         self._started_ts: Optional[float] = None
         self._estop_requested: bool = False
+        # Outcome of the LAST finished task — survives end() so the UI can
+        # render/speak a completion state ("Arrived at the marigolds" /
+        # "Stopped at: MoveTo(marigold)") after the running panel closes.
+        # Set by the intent server when the tree reaches a terminal status.
+        self._last_result: Optional[Dict[str, Any]] = None
         # We bump this each time _anything_ changes; the /status poller can
         # use it to short-circuit cheap renders when nothing's new.
         self._revision: int = 0
@@ -96,6 +101,26 @@ class TaskState:
             # latch to clear (via /reset_estop), not the task's.
             self._revision += 1
 
+    def set_last_result(self, task_id: str, label: str, status: str,
+                        summary: str = "", failed_step: str = "") -> None:
+        """Record the terminal outcome of a finished task (honest UX):
+
+        ``status``  terminal tree status ("success"/"failure"/"partial")
+        ``summary`` the spoken outcome line (past-tense, or friendly failure)
+        ``failed_step`` "NodeName: feedback" for the screen — precise, not
+        spoken. Survives ``end()``; replaced by the next task's outcome.
+        """
+        with self._lock:
+            self._last_result = {
+                "task_id": task_id,
+                "label": label,
+                "status": status,
+                "summary": summary,
+                "failed_step": failed_step or None,
+                "ended_ts": time.time(),
+            }
+            self._revision += 1
+
     # ------------------------------------------------------------------ estop flag
 
     def request_estop(self) -> None:
@@ -134,6 +159,7 @@ class TaskState:
                 "current_label": self._current_label,
                 "elapsed_s": elapsed,
                 "estop_requested": self._estop_requested,
+                "last_result": self._last_result,
                 "revision": self._revision,
             }
 
