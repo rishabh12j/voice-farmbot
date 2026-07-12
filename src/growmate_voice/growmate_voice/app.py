@@ -415,7 +415,6 @@ def _dispatch_via_pi(action: str, source: str,
             new_x = _clamp(_STATE.pos_x + (step * direction if axis == "x" else 0), *_BOUNDS["x"])
             new_y = _clamp(_STATE.pos_y + (step * direction if axis == "y" else 0), *_BOUNDS["y"])
             new_z = _clamp(_STATE.pos_z + (step * direction if axis == "z" else 0), *_BOUNDS["z"])
-            _STATE.pos_x, _STATE.pos_y, _STATE.pos_z = new_x, new_y, new_z
             direction_word = _FRIENDLY_DIRECTIONS.get((axis, +1 if direction > 0 else -1), "")
             if axis == "z":
                 friendly = f"{'Lifted' if direction > 0 else 'Lowered'} the arm by {int(step)} mm."
@@ -432,9 +431,23 @@ def _dispatch_via_pi(action: str, source: str,
                                    wait_for_completion=False)
             status = "sent" if reply.status == "success" else reply.status
             cmds = reply.commands_published or [f"M {new_x:.0f} {new_y:.0f} {new_z:.0f}"]
-            _record(source, action, cmds, status, f"{cmds[0]} [pi:{status}]")
-            payload = _position_payload(last_cmd=friendly)
-            payload["tts_text"] = friendly
+            # Honest position: only commit the local position once the Pi
+            # CONFIRMED the jog (verify gate + position check). The old code
+            # committed before posting — the map marker walked away from
+            # reality whenever a jog failed.
+            if reply.status in ("success", "running"):
+                _STATE.pos_x, _STATE.pos_y, _STATE.pos_z = new_x, new_y, new_z
+            detail = f"{cmds[0]} [pi:{status}]"
+            spoken = friendly
+            if reply.status not in ("success", "running"):
+                spoken = ((reply.tts_text or "").strip()
+                          or "That little move didn't confirm — the robot "
+                             "may not have moved.")
+                if getattr(reply, "error", None):
+                    detail += f" — {reply.error}"
+            _record(source, action, cmds, status, detail)
+            payload = _position_payload(last_cmd=spoken)
+            payload["tts_text"] = spoken
             return payload
 
         intent = app_action_to_intent(action)
@@ -454,16 +467,23 @@ def _dispatch_via_pi(action: str, source: str,
         )
         status = "sent" if reply.status == "success" else reply.status
         cmds = reply.commands_published or [intent.action]
-        _record(source, action, cmds, status, f"{' | '.join(cmds)} [pi:{status}]")
-        payload = _position_payload(last_cmd=friendly)
-        payload["tts_text"] = friendly
-        # A multi-plant water runs in the background ("running"); the live
-        # overlay's browser voice narrates it (announce -> per-plant -> "All
-        # done"), so keep Kokoro quiet to avoid two voices out of step. Quick
-        # commands (and a no-match water, which returns terminal) still speak.
-        payload["suppress_voice"] = (
-            intent.action in ("water", "water_all") and reply.status == "running"
-        )
+        detail = f"{' | '.join(cmds)} [pi:{status}]"
+        if reply.status not in ("success", "running") and getattr(reply, "error", None):
+            detail += f" — {reply.error}"
+        _record(source, action, cmds, status, detail)
+        # Terminal reply -> speak the Pi's HONEST outcome (past-tense
+        # confirmation, or the friendly failure line). Only a still-running
+        # task keeps the forward-tense announcement.
+        spoken = (reply.tts_text or "").strip()
+        if reply.status == "running" or not spoken:
+            spoken = friendly
+        payload = _position_payload(last_cmd=spoken)
+        payload["tts_text"] = spoken
+        # ANY backgrounded task ("running") is narrated by the live overlay's
+        # browser voice (announce -> progress -> outcome from last_result), so
+        # keep Kokoro quiet to avoid two voices out of step. Terminal replies
+        # (quick commands, refusals) still speak here.
+        payload["suppress_voice"] = (reply.status == "running")
         return payload
     except Exception as exc:
         # pi_url is set (guarded at the top), so a failure here means the Pi
@@ -1760,12 +1780,13 @@ def _dispatch_via_aicore(
             transcript=transcript)
     payload = _position_payload(last_cmd=friendly)
     payload["tts_text"] = friendly
-    # A multi-plant water runs in the background ("running") and the live
-    # overlay's browser voice narrates it; keep Kokoro quiet so the two voices
-    # don't talk over each other / out of order. A no-match water returns
-    # terminal, so its spoken refusal still plays.
-    is_water = any(i.get("action") in ("water", "water_all") for i in intents)
-    payload["suppress_voice"] = (is_water and reply.status == "running")
+    # ANY backgrounded task ("running") is narrated by the live overlay's
+    # browser voice (it announces the task label, tracks progress, and speaks
+    # the honest outcome from task_state.last_result) — keep Kokoro quiet so
+    # the two voices don't talk over each other / out of order. Every task
+    # now runs under a TaskBoundary (not just waters), so this applies
+    # uniformly. Terminal replies (quick commands, refusals) still speak.
+    payload["suppress_voice"] = (reply.status == "running")
     return payload
 
 
@@ -3558,6 +3579,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 /* Stopped-mode card variant: same shell, warm clay accent so it's
    obviously a different state from "running" */
 .task-card[data-mode="stopped"]{ border: 3px solid var(--clay); }
+.task-card[data-mode="failed"]{ border: 3px solid #c0392b; }
+.task-card[data-mode="failed"] .task-label.stopped{ color: #c0392b; }
 .task-card .task-label.stopped{
   color: var(--clay);
   font-size: 30px;
@@ -4754,6 +4777,10 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
     const said = result.raw_transcript || '';
     const did  = pos.last_cmd || result.matched_action || 'Done';
     const say  = result.tts_spoken || data.tts_text || '';
+    // Remember what the server-side voice will speak, so the overlay's
+    // outcome line (from last_result) can skip an identical utterance —
+    // quick inline tasks would otherwise be confirmed twice.
+    if (say) window._lastServerSpoken = say;
     if (typeof pos.x === 'number') state.pos = { x: pos.x, y: pos.y, z: pos.z };
     // Day 5: propagate confirm state if present (lifted to result or in position)
     const requiresConfirm = result.requires_confirm === true || pos.requires_confirm === true;
@@ -5366,7 +5393,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
 
     if (stopped && !_taskUserDismissed) {
       if (_taskLastMode !== 'stopped') {
+        // Restore the panel's estop wording (a prior task-failure render
+        // may have rewritten it).
         _showStoppedPanel();
+        taskCard.setAttribute('data-mode', 'stopped');
+        taskStoppedTitle.textContent = 'Robot stopped';
+        taskStoppedSub.textContent = 'The robot is held still until you reset it.';
+        taskStoppedStayBtn.textContent = 'Leave it stopped for now';
         _enqueueSpeech('Robot stopped. Press reset to continue.', { flush: true });
         _taskLastMode = 'stopped';
       }
@@ -5374,13 +5407,43 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible{
       return;
     }
 
-    // No task active, no estop latch, OR user dismissed: close.
-    // running -> idle without an estop latch = clean completion. Speak a
-    // prompt "All done." (flush any trailing progress line so it lands
-    // immediately). For a backgrounded water the app suppresses the Kokoro
-    // reply, so this is the single completion cue.
+    // A failure panel stays up until the user dismisses it (stay/reset
+    // buttons) or a new task starts — the next 1 Hz poll must not close it.
+    if (_taskLastMode === 'failed' && !_taskUserDismissed) {
+      _openOverlay();
+      return;
+    }
+
+    // running -> idle without an estop latch: the task ENDED — but honestly,
+    // how? task.last_result (survives task end on the Pi) carries the
+    // terminal status + the spoken outcome line. Success: speak the
+    // past-tense summary ("Arrived at the marigold." / "Done watering 3
+    // marigolds.") and close. Failure/partial: show a FAILED panel (sticky
+    // until dismissed) with the friendly line spoken and the precise failed
+    // step on screen — never a bare "All done." that might be a lie.
     if (_taskLastMode === 'running' && !task.estop_requested) {
-      _enqueueSpeech('All done.', { flush: true });
+      const lr = task.last_result || null;
+      const failed = lr && lr.status && lr.status !== 'success';
+      if (failed && !_taskUserDismissed) {
+        _showStoppedPanel();                       // reuse the panel chrome
+        taskCard.setAttribute('data-mode', 'failed');
+        taskStoppedTitle.textContent = "I couldn't finish";
+        taskStoppedSub.textContent = (lr.summary || 'Something stopped the task.')
+          + (lr.failed_step ? ('  — ' + lr.failed_step) : '');
+        taskStoppedStayBtn.textContent = 'Close';
+        _enqueueSpeech(lr.summary || "I couldn't finish that task.", { flush: true });
+        _openOverlay();
+        _taskLastMode = 'failed';
+        _taskLastLabel = '';
+        _taskLastCurLabel = '';
+        return;                                    // sticky until dismissed/reset
+      }
+      const summary = (lr && lr.summary) || 'All done.';
+      // Skip if the server voice already spoke this exact outcome (quick
+      // inline tasks are confirmed via Kokoro/tts_spoken).
+      if (summary !== window._lastServerSpoken) {
+        _enqueueSpeech(summary, { flush: true });
+      }
     }
     _closeOverlay();
     _taskLastMode = 'idle';

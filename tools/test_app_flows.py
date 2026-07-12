@@ -228,8 +228,12 @@ def scenario_estop_reset(s: Suite) -> None:
 
 def scenario_pattern_quick(s: Suite) -> None:
     print("\n=== 2. Pattern route: quick commands ===")
+    # go_home now speaks the PAST-TENSE confirmation ("The robot is home.")
+    # — the tree's Respond sits after the verified H_0, so by the time it's
+    # spoken the homing actually confirmed (task-outcome UX). Terminal
+    # replies speak the outcome, not the forward announcement.
     for phrase, want_action, want_tts in [
-        ("go home", "home", "heading home"),
+        ("go home", "home", "robot is home"),
         ("turn on the lights", "light_on", "lights on"),
         ("turn off the lights", "light_off", "lights off"),
     ]:
