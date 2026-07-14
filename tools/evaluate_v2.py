@@ -50,7 +50,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -188,6 +188,9 @@ class CaseResult:
     observed_event_types: List[str] = field(default_factory=list)
     elc_applicable: bool = False
     elc_pass: bool = False
+    # Extended-corpus scoring: forbidden command fragments that WERE emitted
+    # (negation / self-correction cases). Non-empty => dbsr_pass is False.
+    forbidden_hit: List[str] = field(default_factory=list)
 
 
 # ---- intent generation ------------------------------------------------------
@@ -357,10 +360,43 @@ def _await_terminal(client, base_url: str, reply: dict,
     return reply
 
 
+def load_external_corpus(path: str, sample: Optional[int] = None,
+                         seed: int = 42):
+    """Load the extended JSON corpus (tools/corpus) into the harness shape.
+
+    Returns (cases, forbidden) where cases are the same 5-tuples as
+    TEST_CASES — via the corpus's own load_corpus.py loader — and forbidden
+    maps utterance -> command fragments that must NOT be emitted (negation /
+    self-correction cases). ``sample`` draws a category-proportional,
+    seed-deterministic subset for smoke runs.
+    """
+    corpus_dir = Path(path).resolve().parent
+    sys.path.insert(0, str(corpus_dir))
+    from load_corpus import load_cases, load_forbidden  # type: ignore
+    cases = load_cases(path)
+    forbidden = load_forbidden(path)
+    if sample and sample < len(cases):
+        import random as _random
+        rng = _random.Random(seed)
+        by_cat: Dict[str, list] = {}
+        for c in cases:
+            by_cat.setdefault(c[4], []).append(c)
+        picked = []
+        for _cat, group in sorted(by_cat.items()):
+            n = max(1, round(sample * len(group) / len(cases)))
+            picked.extend(rng.sample(group, min(n, len(group))))
+        rng.shuffle(picked)
+        cases = picked[:sample]
+    return cases, forbidden
+
+
 def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
-             skip_long: bool = False) -> List[CaseResult]:
+             skip_long: bool = False, cases=None,
+             forbidden: Optional[Dict[str, list]] = None) -> List[CaseResult]:
     classifier = _try_import_ai_core() if use_llm else None
     results: List[CaseResult] = []
+    cases = cases if cases is not None else TEST_CASES
+    forbidden = forbidden or {}
 
     # Day 12: the /events endpoint lives on the same Pi but at a different path
     # — strip the /intent suffix so we can query the log between cases.
@@ -383,7 +419,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
         last_seen_id = pre_run_tail[0].get("id", 0) if pre_run_tail else 0
 
-        for utterance, _exp_type, exp_cmds, desc, category in TEST_CASES:
+        for utterance, exp_type, exp_cmds, desc, category in cases:
             if skip_long and category == "safety":
                 continue  # the 54-plant water_all walk (~5 min sim) — full runs only
             exp_cmds = _resolve_expected(client, base_url, exp_cmds, species_cache)
@@ -433,16 +469,29 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                 "out of bounds" in (n.get("message") or "").lower() for n in nodes
             )
 
-            if category in ("refusal", "negation"):
+            no_action = (category in ("refusal", "negation", "out_of_scope")
+                         or exp_type in ("refusal", "negation", "out_of_scope"))
+            if no_action:
                 # Pass only on a CLEAN decline: terminal success AND zero robot
                 # commands. Refusal = species not planted; negation = the user
-                # explicitly said NOT to act — watering on "don't water the
-                # tomatoes" would be the worst kind of confidently-wrong.
+                # explicitly said NOT to act; out_of_scope = not a garden task
+                # ("open the door") — acting on any of these is the worst kind
+                # of confidently-wrong.
                 dbsr_pass = (reply.get("status") == "success") and not commands
             elif exp_cmds:
                 dbsr_pass = all(any(c in cmd for cmd in commands) for c in exp_cmds)
             else:
                 dbsr_pass = reply.get("status") in ("success", "partial")
+
+            # Extended-corpus negative assertions: fragments that must NOT
+            # appear in the emitted commands (negation / self-correction —
+            # "water the tomatoes… no wait, the basil" must not water
+            # tomatoes even though it legitimately waters basil).
+            forb = forbidden.get(utterance) or []
+            forbidden_hit = [f for f in forb
+                             if any(f in cmd for cmd in commands)]
+            if forbidden_hit:
+                dbsr_pass = False
 
             # Day 12: pull recent log rows added since the last snapshot and
             # check expected event_types are present. Only counts when this
@@ -489,6 +538,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                     observed_event_types=observed_events,
                     elc_applicable=elc_applicable,
                     elc_pass=elc_pass,
+                    forbidden_hit=forbidden_hit,
                 )
             )
     return results
@@ -540,12 +590,42 @@ def main(argv=None) -> int:
         action="store_true",
         help="skip the ~5-min water-everything sim walk (fast iteration runs)",
     )
+    ap.add_argument(
+        "--corpus",
+        metavar="JSON",
+        default=None,
+        help="run the extended JSON corpus (tools/corpus/"
+             "growmate_test_corpus.json) instead of the built-in 43 cases",
+    )
+    ap.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="with --corpus: category-proportional deterministic subset size "
+             "(smoke runs; full corpus is 2000 cases ~hours)",
+    )
     args = ap.parse_args(argv)
 
     print(f"# V2 eval target: {args.pi_url}")
+    cases = forbidden = None
+    if args.corpus:
+        cases, forbidden = load_external_corpus(args.corpus, sample=args.sample)
+        print(f"# external corpus: {len(cases)} cases"
+              + (f" (sampled from 2000, seed 42)" if args.sample else ""))
     results = run_eval(args.pi_url, use_llm=not args.no_llm,
-                       http_timeout_s=args.timeout, skip_long=args.skip_long)
+                       http_timeout_s=args.timeout, skip_long=args.skip_long,
+                       cases=cases, forbidden=forbidden)
     summary = _summarise(results)
+    # Per-category DBSR breakdown — the analysis view the extended corpus is
+    # for (difficulty/category live in each case row of the JSON output).
+    by_cat: Dict[str, List[CaseResult]] = {}
+    for r in results:
+        by_cat.setdefault(r.category, []).append(r)
+    summary["DBSR_by_category"] = {
+        cat: round(100.0 * sum(r.dbsr_pass for r in rs) / len(rs), 1)
+        for cat, rs in sorted(by_cat.items())
+    }
+    summary["forbidden_violations"] = sum(bool(r.forbidden_hit) for r in results)
 
     if args.json:
         print(json.dumps({"summary": summary, "cases": [r.__dict__ for r in results]}, indent=2))
