@@ -121,15 +121,22 @@ tools:
 # as "sequence completed", never "verified". Record in the deviations ledger.
 tool_verify_pin: false
 
-# Soil-sensor interpretation (audit F4). calibrated stays FALSE until the
-# runbook B6 procedure measures this sensor in this soil (probe in air / dry
-# soil / watered soil) and writes the real thresholds here. Until then:
-# check_sensor speaks the raw number without a dry/wet verdict, and
-# water_smart refuses cleanly. Flip calibrated: true only with measured values.
+# Soil-sensor interpretation (audit F4). CALIBRATED ON HARDWARE 2026-07-15,
+# probe at z=-435 in gh1's bed. Measured raw pin-59 values (10-bit ADC):
+#   air        1022  (pegged max — driest possible; confirms higher = drier)
+#   wet soil    225-226
+#   dry soil    476   (unwatered bed — note this is "garden dry", not bone dry)
+# Thresholds = midpoint(225, 476) = 350, +/-50 for margin. Both samples land
+# ~75 counts clear of their band.
+#
+# NOTE the old placeholder dry_above: 600 would have SILENTLY BROKEN
+# water_smart here: real dry soil reads 476 < 600, so every plant would have
+# classified "moist" and nothing would ever have been watered. The
+# calibrated: false gate is what stopped that shipping.
 soil:
-  dry_above: 600   # placeholder — assumes higher = drier; MEASURE before trusting
-  wet_below: 350   # placeholder
-  calibrated: false
+  dry_above: 400   # >= this = dry -> water it (measured dry soil: 476)
+  wet_below: 300   # <= this = wet -> skip     (measured wet soil: 225)
+  calibrated: true
 
 # Safety rules
 safety:
