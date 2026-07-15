@@ -392,11 +392,43 @@ def load_external_corpus(path: str, sample: Optional[int] = None,
 
 def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
              skip_long: bool = False, cases=None,
-             forbidden: Optional[Dict[str, list]] = None) -> List[CaseResult]:
+             forbidden: Optional[Dict[str, list]] = None,
+             stream_path: Optional[str] = None,
+             resume: bool = False) -> List[CaseResult]:
     classifier = _try_import_ai_core() if use_llm else None
     results: List[CaseResult] = []
     cases = cases if cases is not None else TEST_CASES
     forbidden = forbidden or {}
+
+    # Crash-safe incremental output (born of the 2026-07-15 03:11 Windows
+    # Update reboot that ate a 10-hour single-shot run): every finished case
+    # is appended to ``stream_path`` as one JSON line and flushed, so a crash
+    # costs one case, not the night. ``resume`` preloads those lines and
+    # skips their utterances. The JSONL line count doubles as the exact
+    # live progress counter.
+    done_utterances: set = set()
+    if stream_path and resume and Path(stream_path).exists():
+        with open(stream_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue  # torn final line from the crash — redo the case
+                results.append(CaseResult(**row))
+                done_utterances.add(row["utterance"])
+        print(f"# resume: {len(done_utterances)} cases loaded from "
+              f"{stream_path}", file=sys.stderr)
+    stream = open(stream_path, "a", encoding="utf-8") if stream_path else None
+    total = len(cases)
+
+    def _emit(r: CaseResult, idx: int) -> None:
+        results.append(r)
+        if stream:
+            stream.write(json.dumps(r.__dict__) + "\n")
+            stream.flush()
+        print(f"[{idx}/{total}] {r.category:<13} "
+              f"{'PASS' if r.dbsr_pass else 'MISS':<4} {r.utterance[:60]}",
+              file=sys.stderr, flush=True)
 
     # Day 12: the /events endpoint lives on the same Pi but at a different path
     # — strip the /intent suffix so we can query the log between cases.
@@ -419,19 +451,22 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
         last_seen_id = pre_run_tail[0].get("id", 0) if pre_run_tail else 0
 
-        for utterance, exp_type, exp_cmds, desc, category in cases:
+        for idx, (utterance, exp_type, exp_cmds, desc, category) in enumerate(
+                cases, start=1):
             if skip_long and category == "safety":
                 continue  # the 54-plant water_all walk (~5 min sim) — full runs only
+            if utterance in done_utterances:
+                continue  # already in the resume stream
             exp_cmds = _resolve_expected(client, base_url, exp_cmds, species_cache)
             payload = _build_intent_payload(utterance, category, classifier,
                                             live_plants=live_species)
             if payload is None:
                 # LLM requested but unavailable — an honest miss, no dispatch.
-                results.append(CaseResult(
+                _emit(CaseResult(
                     utterance=utterance, expected_commands=exp_cmds,
                     category=category, pi_status="classify_error",
                     error="classifier unavailable / returned no intents",
-                ))
+                ), idx)
                 continue
             expected_events = _expected_events_for_intents(
                 payload.get("intents") or [], category == "emergency"
@@ -447,7 +482,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                 reply = _await_terminal(client, base_url, reply)
             except Exception as exc:
                 elapsed = int((time.monotonic() - t0) * 1000)
-                results.append(
+                _emit(
                     CaseResult(
                         utterance=utterance,
                         expected_commands=exp_cmds,
@@ -456,7 +491,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                         duration_ms=elapsed,
                         error=str(exc),
                         expected_event_types=expected_events,
-                    )
+                    ), idx
                 )
                 continue
 
@@ -521,7 +556,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                 except Exception:
                     pass
 
-            results.append(
+            _emit(
                 CaseResult(
                     utterance=utterance,
                     expected_commands=exp_cmds,
@@ -539,8 +574,10 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                     elc_applicable=elc_applicable,
                     elc_pass=elc_pass,
                     forbidden_hit=forbidden_hit,
-                )
+                ), idx
             )
+    if stream:
+        stream.close()
     return results
 
 
@@ -604,6 +641,19 @@ def main(argv=None) -> int:
         help="with --corpus: category-proportional deterministic subset size "
              "(smoke runs; full corpus is 2000 cases ~hours)",
     )
+    ap.add_argument(
+        "--stream",
+        metavar="JSONL",
+        default=None,
+        help="append each finished case to this JSONL as it completes "
+             "(crash-safe; line count = live progress)",
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="with --stream: skip cases already present in the JSONL "
+             "(continue an interrupted run)",
+    )
     args = ap.parse_args(argv)
 
     print(f"# V2 eval target: {args.pi_url}")
@@ -614,7 +664,8 @@ def main(argv=None) -> int:
               + (f" (sampled from 2000, seed 42)" if args.sample else ""))
     results = run_eval(args.pi_url, use_llm=not args.no_llm,
                        http_timeout_s=args.timeout, skip_long=args.skip_long,
-                       cases=cases, forbidden=forbidden)
+                       cases=cases, forbidden=forbidden,
+                       stream_path=args.stream, resume=args.resume)
     summary = _summarise(results)
     # Per-category DBSR breakdown — the analysis view the extended corpus is
     # for (difficulty/category live in each case row of the JSON output).
