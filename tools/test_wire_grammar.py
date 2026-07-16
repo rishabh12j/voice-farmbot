@@ -1,7 +1,7 @@
 """Wire-grammar contract test — everything the BT publishes must parse
 against the REAL farmbot_controller acceptor.
 
-Why this exists (audit F1, documentation/sim2real_gap_audit.md): the sim
+Why this exists (sim-to-real audit finding F1): the sim
 bridge accepted ``T2_1`` while the real ``farmbot_controller`` silently
 dropped it — its command ``match`` has **no default arm**, so a wrong wire
 format produces no motion, no warning, and passes every sim gate. This test

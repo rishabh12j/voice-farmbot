@@ -25,14 +25,27 @@ tools/_*.yaml
 tools/_*.csv
 tools/_*.py
 
-# Personal / academic artefacts — do not commit (working thesis files live in
-# documentation/ but only the .md notes belong in git)
+# Personal / academic artefacts — do not commit.
 demo/Interim_Report_*.pdf
 *.pdf
 *.pptx
 documentation/*.docx
 documentation/*.xlsx
 documentation/*.zip
+
+# The repo carries code, README, and RUNBOOK — what the thing is and how to run
+# it. Everything below is thesis/agent working material that lives on the
+# author's machine only. It is NOT required to run the code, and it is NOT
+# backed up by this repo — keep your own copy.
+/AGENTS.md
+/CLAUDE.md
+/HANDOVER.md
+/PLANS.md
+documentation/thesis.md
+documentation/eval_v2_results.md
+documentation/eval/
+documentation/paper/
+documentation/MU EE696/
 
 # Agent scratch dirs
 .codex-tmp/

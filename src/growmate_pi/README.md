@@ -80,7 +80,7 @@ The server listens on `0.0.0.0:8000` by default.
 PYTHONPATH=src python3 -m growmate_pi.verify_sim
 ```
 
-Walks 8 representative intents through the full build → tick path with
+Walks representative intents through the full build → tick path with
 the bridge in sim mode. Prints the FarmBot commands that *would* be
 published. Exit code 0 on success.
 
@@ -115,13 +115,14 @@ curl -X POST http://localhost:8000/intent -H 'Content-Type: application/json' -d
 
 ## Development status
 
-| Component                  | Status |
-|----------------------------|--------|
-| Schema, bridge, BT nodes   | Done — runs in sim |
-| Intent server endpoints    | Done — `/intent`, `/estop`, `/reset_estop`, `/status`, `/history` |
-| Scheduler                  | Done — fires `water_all` via HTTP |
-| `verify_sim.py`            | Done |
-| `--pi-url` wiring in `growmate_voice.app` | Done |
-| `tools/evaluate_v2.py`     | Done — needs running Pi |
-| PlanSys2 mission controller| Stubbed — wiring deferred until first multi-step demo |
-| Real-hardware test         | Pending physical FarmBot |
+| Component | Status |
+|---|---|
+| Schema, bridge, BT nodes | Live |
+| Intent server endpoints | Live: `/intent`, `/intent_status`, `/estop`, `/reset_estop`, `/status`, `/history`, `/plants` |
+| Task outcome state | Live; browser polls honest terminal outcome |
+| Scheduler | Live; fires greenhouse-local `water_all` |
+| `verify_sim.py` | Standard regression gate |
+| `--pi-url` wiring in `growmate_voice.app` | Live |
+| `tools/evaluate_v2.py` / stress harness | Live |
+| PlanSys2 mission controller | Stubbed; deferred |
+| Real hardware | gh1/farmbotdev bringup exists; hardware Run 2 metrics still pending |

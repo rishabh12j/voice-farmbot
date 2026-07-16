@@ -30,8 +30,7 @@ Override paths/port if your layout differs, e.g.:
         src:=/home/gh1/Rishabh_Growmate_FarmBot/src port:=8000
 
 If the firmware isn't publishing /busy_state yet, start the intent server with
-the gate off instead (run it by hand with --no-verify) — see
-demo/verify_gate_hardware.md.
+the gate off instead (run it by hand with --no-verify) — see RUNBOOK.md §5.
 """
 
 import os

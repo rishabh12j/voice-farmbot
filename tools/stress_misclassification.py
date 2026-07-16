@@ -39,7 +39,7 @@ Also per case: an honesty check — a failed case must not carry
 success-claiming speech (extends the honest-or-blank contract to the
 experiment).
 
-Run (sim Pi first — see demo/eval_v2_results.md "Fastest loop"):
+Run (sim Pi first — see documentation/eval_v2_results.md "How to run"):
 
     PYTHONPATH=src python tools/stress_misclassification.py \
         --pi-url http://localhost:8123/intent [--n 20] [--seed 42] [--json out.json]

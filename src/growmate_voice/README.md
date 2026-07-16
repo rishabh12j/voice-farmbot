@@ -1,131 +1,102 @@
 # growmate_voice
 
-A FastAPI web app that gives the AURA FarmBot a browser-based jog d-pad and
-an offline voice pipeline. Voice commands are matched against a fixed FarmBot
-vocabulary (no LLM in the runtime path) and published to `keyboard_topic` —
-making this a drop-in companion to `keyboard_controller`.
+Browser/desktop client for GrowMate. It provides the web UI, microphone/STT,
+LLM intent classification, TTS, manual controls, and the HTTP bridge to the Pi
+intent server.
 
-## What's in the package
+The current runtime path **does include an LLM**:
 
+```text
+browser mic/text -> STT -> AICore (gemma3:4b via Ollama)
+                 -> flat IntentRequest JSON -> Pi /intent
+                 -> task polling / honest terminal outcome -> TTS
 ```
+
+The research boundary is that the LLM only classifies a flat intent:
+`{action, target, params, response}`. It does not emit behaviour trees, plans,
+code, command strings, or control flow.
+
+## What Lives Here
+
+```text
 growmate_voice/
-├── app.py                    FastAPI app + embedded HTML/JS UI (entry point: voice_app)
-├── ros2_publisher.py         Publishes std_msgs/String to keyboard_topic
-├── logger.py                 Rotating-file + ANSI console logger
-├── stt_test.py               Terminal CLI for STT/TTS sanity checks
-└── edgespeech/
-    ├── audio_utils.py        WAV decode/encode, padding, resample
-    ├── command_map.py        FarmBot vocabulary, normalisation, fuzzy matcher
-    ├── stt/                  Vosk, Faster-Whisper, Moonshine backends
-    └── tts/                  Piper, Kokoro backends
+  app.py              FastAPI app and embedded browser UI
+  ai_core.py          LLM classifier and prompt rules
+  pi_client.py        HTTP client for growmate_pi
+  ros2_publisher.py   Legacy/direct publisher path
+  scheduler.py        Legacy scheduler path
+  logger.py           Rotating-file and console logger
+  stt_test.py         STT/TTS workbench
+  edgespeech/
+    command_map.py    Emergency/pattern fast paths and normalisation
+    stt/              Vosk, Faster-Whisper, Moonshine backends
+    tts/              Piper, Kokoro backends
 ```
 
-## Architecture
+## Runtime Modes
 
-- **Frontend** (HTML embedded in `app.py`): browser records mono PCM at 16 kHz
-  via the Web Audio API, encodes a WAV client-side, POSTs it to `/api/voice`
-  as multipart form data.
-- **Backend** (`/api/voice`): decodes WAV → runs STT → matches command →
-  publishes the corresponding FarmBot command(s) to `keyboard_topic` →
-  synthesises a TTS confirmation → returns JSON with the result and a
-  base64-encoded TTS WAV.
-- **TTS playback**: inlined as `data:audio/wav;base64,...` in an `<audio>` tag —
-  no HTTP streaming, no static file serving.
+| Mode | Command shape | Use |
+|---|---|---|
+| Pi-backed V2 | `--no-ros2 --pi-url http://<pi>:8000/intent` | Normal GrowMate architecture: this app classifies, Pi builds/ticks BTs. |
+| Local sim | Pi intent server running with `--no-ros2` | Development/eval without a robot. |
+| Legacy/direct ROS2 | no `--pi-url` and ROS sourced | Older path; keep for manual testing, not the thesis architecture. |
 
-The same UI exposes a manual jog d-pad, FarmBot bringup controls
-(`Power ON / OFF / Check Status`), and a hardware-level emergency stop that
-bypasses STT entirely.
-
-## Voice vocabulary
-
-| Action     | Spoken variants                                | FarmBot emission |
-|------------|------------------------------------------------|------------------|
-| `estop`    | stop, emergency, halt, freeze, abort            | `e`              |
-| `reset`    | reset, resume, clear stop                       | `E`              |
-| `home`     | home, go home, return home                      | `H_0`            |
-| `x_plus`   | right, x plus, x+                               | `M …` (jog +X)   |
-| `x_minus`  | left, x minus, x-                               | `M …` (jog −X)   |
-| `y_plus`   | forward, ahead, y plus, y+                      | `M …` (jog +Y)   |
-| `y_minus`  | back, backward, y minus, y-                     | `M …` (jog −Y)   |
-| `z_plus`   | up, raise, arm up, z plus                       | `M …` (jog +Z)   |
-| `z_minus`  | down, lower, arm down, z minus                  | `M …` (jog −Z)   |
-| `water`    | water, water plant, water the plants            | `P_4`            |
-| `photo`    | take photo, capture, take picture               | `I_1`            |
-
-Matching is exact-substring first, then fuzzy via `difflib.SequenceMatcher`
-with a 0.70 threshold. Common homophones (`why plus → y plus`,
-`zee plus → z plus`) are normalised before matching.
-
-## Running on Windows (development)
+## Running On Windows
 
 ```powershell
-conda activate moderation
-pip install -r src\growmate_voice\requirements.txt
-cd src\growmate_voice
-python -m growmate_voice.app --no-ros2
+cd C:\Users\risha\growmate-bt\voice-farmbot
+$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;" + $env:PYTHONPATH
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
 ```
 
-Then open `http://127.0.0.1:7860`. The header tag shows
-`simulation` (commands are printed) or `ROS2 live`.
+Open `http://127.0.0.1:7860`.
 
-### Optional STT / TTS backends
-
-Faster-Whisper auto-downloads `tiny.en` on first use. The other backends need
-a one-time model download:
+For local sim, start the Pi server in another terminal:
 
 ```powershell
-# Vosk small EN (~40 MB)
-mkdir C:\Users\risha\edge_models
-curl -L -o C:\Users\risha\edge_models\vosk-small-en.zip ^
-  https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-powershell -c "Expand-Archive C:\Users\risha\edge_models\vosk-small-en.zip -DestinationPath C:\Users\risha\edge_models\"
-setx VOSK_MODEL_PATH "C:\Users\risha\edge_models\vosk-model-small-en-us-0.15"
-
-# Piper voice (~60 MB)
-curl -L -o C:\Users\risha\edge_models\en_US-lessac-medium.onnx ^
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -L -o C:\Users\risha\edge_models\en_US-lessac-medium.onnx.json ^
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-setx PIPER_VOICE_MODEL "C:\Users\risha\edge_models\en_US-lessac-medium.onnx"
-setx PIPER_VOICE_CONFIG "C:\Users\risha\edge_models\en_US-lessac-medium.onnx.json"
+$env:PYTHONPATH = "src"
+python -m growmate_pi.intent_server --no-ros2 --port 8123
+python -m growmate_voice.app --no-ros2 --pi-url http://localhost:8123/intent
 ```
 
-Reopen the terminal so `setx` takes effect.
+## LLM Contract
 
-## Running on the Pi (real robot)
+`AICore.ACTIONS` mirrors `src/growmate_pi/schemas.py`:
 
-```bash
-cd ~/farmbot_ws
-colcon build --packages-select growmate_voice
-source install/setup.bash
+- `move`, `water`, `water_all`, `water_smart`
+- `go_home`, `light_on`, `light_off`
+- `photo`, `panorama`, `scan_weeds`, `clear_weeds`
+- `scan_bed`, `find_plants`, `label_plants`
+- `check_sensor`, `check_moisture`
+- `emergency_stop`, `general_question`
 
-# Start the FarmBot stack first
-ros2 launch farmbot_bringup standard.launch.py
-# In a second terminal:
-ros2 launch growmate_voice growmate_voice.launch.py
-# or, both in one shot:
-ros2 launch growmate_voice growmate_voice.launch.py with_farmbot:=true
-```
+Emergency words such as "stop" are matched before the LLM and go straight to
+the Pi emergency endpoint.
 
-## HTTP API
+## HTTP Surface
 
-| Method | Path                  | Purpose                                              |
-|--------|-----------------------|------------------------------------------------------|
-| GET    | `/`                   | Single-page HTML UI                                  |
-| GET    | `/api/status`         | Position + FarmBot status + ros2 mode                |
-| GET    | `/api/commands`       | Full vocabulary as JSON                              |
-| POST   | `/api/jog`            | `axis,direction,step` → execute move                 |
-| POST   | `/api/estop`          | Hardware emergency stop                              |
-| POST   | `/api/reset`          | Clear emergency stop                                 |
-| POST   | `/api/farmbot/power`  | `action=on|off|status` for farmbot_bringup           |
-| POST   | `/api/voice`          | Multipart `audio` WAV + `stt`, `tts`, `enable_tts`   |
+| Method | Path | Purpose |
+|---|---|---|
+| `GET /` | Browser UI |
+| `GET /api/status` | App/Pi/robot status and task outcome |
+| `POST /api/voice` | Audio upload -> STT -> classify -> dispatch |
+| `POST /api/text` | Text command -> classify -> dispatch |
+| `POST /api/confirm` | Confirm destructive queued action |
+| `POST /api/estop` | Emergency stop |
+| `POST /api/reset` | Reset emergency stop |
+| `POST /api/jog` | Manual jog from UI |
 
-## CLI sanity check
+The final spoken result should come from the Pi's terminal task outcome, not
+from a hopeful client-side "done" string.
 
-```powershell
-python -m growmate_voice.stt_test --stt whisper  --mode mic
-python -m growmate_voice.stt_test --stt vosk     --mode file --audio sample.wav
-python -m growmate_voice.stt_test --stt moonshine --tts piper --mode mic
-```
+## STT / TTS Backends
 
-Logs go to `~/.growmate_voice/logs/growmate.log` (rotating, 2 MB × 3).
+The app supports Faster-Whisper, Vosk, and Moonshine for STT, plus Piper and
+Kokoro for TTS. Model download details are intentionally kept out of this
+README; use [RUNBOOK.md](../../RUNBOOK.md) when setting up a demo machine.
+
+## Development Rule
+
+Changing prompt rules or `AICore.ACTIONS` is evaluation-sensitive. Re-run at
+least the relevant corpus slice, and for broad prompt changes re-run the full
+evaluation or extended corpus before quoting numbers.
