@@ -256,6 +256,31 @@ Return JSON only. No explanations. Classify:"""
 
     # -- Classification --------------------------------
 
+    @staticmethod
+    def _flatten_intents(items) -> Optional[List[dict]]:
+        """Coerce the model's "intents" into a flat list of intent dicts.
+
+        A 4B model occasionally wraps its intents in an extra array —
+        {"intents": [[{...}]]} — and nothing downstream expected that. Every
+        consumer does i.get("action") (app.py's validation gate, the eval's
+        event mapping), so a nested list raised AttributeError: 'list' object
+        has no attribute 'get'. Observed live: it killed a corpus run at case 9.
+
+        One level of nesting is unwrapped because it is a formatting slip, not
+        a semantic one — the intent inside is still checked against the ACTIONS
+        allowlist, still validated by schemas.Action at /intent, and still
+        guarded by the BT. Anything that is not a dict after that is dropped:
+        the LLM emitting non-intents is a classification failure, and the
+        caller must see None (an honest miss) rather than a half-parsed batch.
+        """
+        flat: List[dict] = []
+        for item in items:
+            if isinstance(item, dict):
+                flat.append(item)
+            elif isinstance(item, list):
+                flat.extend(x for x in item if isinstance(x, dict))
+        return flat or None
+
     def _classify(self, text, live_plants: Optional[List[str]] = None,
                   memory: Optional[dict] = None) -> Optional[List[dict]]:
         resp = self.llm.chat(self._classify_prompt(live_plants, memory), text,
@@ -265,7 +290,7 @@ Return JSON only. No explanations. Classify:"""
         if not parsed: return None
         # New format: {"intents": [...]}
         if "intents" in parsed and isinstance(parsed["intents"], list):
-            return parsed["intents"]
+            return self._flatten_intents(parsed["intents"])
         # Old format fallback: {"action": ..., "target": ..., "response": ...}
         if "action" in parsed:
             return [parsed]

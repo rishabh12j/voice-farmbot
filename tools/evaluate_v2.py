@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -245,9 +246,15 @@ def _build_intent_payload(
         # A classification outage must score as a miss, not water the world.
         return None
 
-    # --no-llm (Pi-only smoke test): canned intents so the Pi still does
+    # --no-llm ONLY (Pi-only smoke test): canned intents so the Pi still does
     # something measurable. Emergency stops the BT; general asks a question;
     # everything else is a deliberate water_all exercising the long path.
+    #
+    # Reaching here with classifier=None because the LLM was WANTED but
+    # unavailable is what silently turned a corpus run into 2000 full-garden
+    # waters. _try_import_ai_core now raises instead of returning None, so the
+    # only way in is an explicit --no-llm. Numbers from this path are NOT
+    # classifier measurements and must never be reported as DBSR.
     if category == "emergency":
         intents = [{"action": "emergency_stop", "target": None, "response": "Stop."}]
     elif category == "general":
@@ -276,6 +283,11 @@ def _expected_events_for_intents(intents: list, is_emergency: bool) -> List[str]
         return []
     out: List[str] = []
     for i in intents:
+        # Defensive: ai_core flattens nested "intents" now, but a malformed
+        # batch must never take down a multi-hour run from here. Skip, don't
+        # crash — the case still gets dispatched and scored on its merits.
+        if not isinstance(i, dict):
+            continue
         ev = _ACTION_TO_EVENT.get(i.get("action") or "")
         if ev:
             out.append(ev)
@@ -298,13 +310,51 @@ def _fetch_event_log_tail(client, base_url: str, limit: int = 20) -> List[dict]:
 
 
 def _try_import_ai_core():
-    try:
-        from growmate_voice.ai_core import AICore  # type: ignore[import-not-found]
-        cfg = REPO_ROOT / "src" / "growmate_voice" / "config" / "farmbot.yaml"
-        return AICore(config_path=str(cfg))
-    except Exception as exc:
-        print(f"[eval] AICore unavailable ({exc}); using fallback intents")
-        return None
+    """The real classifier. Raises if it can't be had — never returns None.
+
+    Returning None here used to be survivable, and that was the bug: a None
+    classifier falls through to the canned-intent path in
+    _build_intent_payload, which fires **water_all for every non-emergency
+    case**. A whole run then walks the garden 2000 times, scores some of it as
+    PASS (a full-garden water contains the expected @move coordinate, so the
+    substring assertion is satisfied), and reports a DBSR for a pipeline that
+    never called an LLM. The file already forbids this — "A classification
+    outage must score as a miss, not water the world" — but that guard only
+    covers a classifier that imported and then went unreachable. An ImportError
+    walked straight past it.
+
+    Measured 2026-07-16 (this session): the import DOES fail under
+    `PYTHONPATH=src`, because the python package is at
+    src/growmate_voice/growmate_voice/ while `src` only exposes the ROS package
+    directory. So the failure was not hypothetical — the smoke run was silently
+    in canned mode at ~230 s/case.
+
+    Now: the path is fixed, and any remaining failure is fatal. If the caller
+    asked for the LLM, they get the LLM or an exit — not a quiet substitute.
+
+    ``GROWMATE_OLLAMA_URL`` overrides AICore's localhost default, for when the
+    harness and Ollama aren't the same host (eval in WSL, Ollama on Windows).
+    """
+    # The ROS package dir holds the python package of the same name, so
+    # `growmate_voice.ai_core` needs THIS on the path, not just src/.
+    voice_pkg = REPO_ROOT / "src" / "growmate_voice"
+    if str(voice_pkg) not in sys.path:
+        sys.path.insert(0, str(voice_pkg))
+
+    from growmate_voice.ai_core import AICore  # type: ignore[import-not-found]
+
+    cfg = REPO_ROOT / "src" / "growmate_voice" / "config" / "farmbot.yaml"
+    url = os.environ.get("GROWMATE_OLLAMA_URL", "http://localhost:11434")
+    core = AICore(config_path=str(cfg), ollama_url=url)
+    if not core.llm.is_available():
+        raise RuntimeError(
+            f"{core.llm.model} not reachable at {url}. The classifier is real "
+            "and the run is meaningless without it; set GROWMATE_OLLAMA_URL or "
+            "start Ollama. (Pass --no-llm only if you actually want the canned "
+            "Pi-only smoke intents.)"
+        )
+    print(f"# classifier: {core.llm.model} via {url}")
+    return core
 
 
 # ---- main eval loop ---------------------------------------------------------
