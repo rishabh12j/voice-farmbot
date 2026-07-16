@@ -47,6 +47,7 @@ import json
 import statistics
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -60,6 +61,11 @@ try:
 except ImportError:
     print("httpx not installed. Run: python3 -m pip install --user httpx")
     sys.exit(2)
+
+# Declare the version we actually speak rather than a hardcoded string: this
+# harness emits mount_tool/stow_tool, which are 1.1.0 verbs. /intent only
+# enforces the major, but a stale literal here is a lie waiting to matter.
+from growmate_pi.schemas import SCHEMA_VERSION  # noqa: E402
 
 
 # ---- test cases -------------------------------------------------------------
@@ -175,6 +181,10 @@ class CaseResult:
     expected_commands: List[str]
     category: str
     pi_status: str
+    # Corpus case id (GM-nnnn). Carried so a JSONL row can be joined back to
+    # its case and so --resume can key on identity: utterances repeat across
+    # ids, and resuming on the text silently skipped cases that never ran.
+    case_id: str = ""
     commands_published: List[str] = field(default_factory=list)
     node_count: int = 0
     nodes_success: int = 0
@@ -191,6 +201,12 @@ class CaseResult:
     # Extended-corpus scoring: forbidden command fragments that WERE emitted
     # (negation / self-correction cases). Non-empty => dbsr_pass is False.
     forbidden_hit: List[str] = field(default_factory=list)
+    # Harness artifact, NOT a result. True when the case never got a fair run:
+    # the Pi refused it as busy, or its async task outlived the poll timeout.
+    # The 2026-07-16 run had 243 of these and no way to tell them apart from
+    # real misses — they had to be reconstructed from a 0 ms / no-commands
+    # signature after the fact. Excluded from DBSR/USC by summarise().
+    artifact: bool = False
 
 
 # ---- intent generation ------------------------------------------------------
@@ -221,7 +237,7 @@ def _build_intent_payload(
                     "emergency": category == "emergency",
                     "client_id": "evaluate_v2",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "schema_version": "1.0.0",
+                    "schema_version": SCHEMA_VERSION,
                 }
         # LLM was REQUESTED but is down / returned nothing: never fabricate an
         # intent. The old fallback hand-crafted water_all here — when Ollama
@@ -246,7 +262,7 @@ def _build_intent_payload(
         "emergency": category == "emergency",
         "client_id": "evaluate_v2",
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "schema_version": "1.0.0",
+        "schema_version": SCHEMA_VERSION,
     }
 
 
@@ -336,8 +352,56 @@ def _resolve_expected(client, base_url: str, exp_cmds: List[str],
     return out
 
 
+# A full-garden water_smart walk pulses every plant in real time and can run
+# far past the old 600 s. When it did, the harness abandoned the poll while the
+# tree was STILL EXECUTING, posted the next case into a busy server, and scored
+# the instant refusal as a miss — 243 such artifacts in the 2026-07-16 run, all
+# clustered in indirect/hard. Keep this <= the server's _INTENT_RESULT_TTL_S or
+# a result can be pruned before it is read.
+POLL_TIMEOUT_S = 1800.0
+POLL_INTERVAL_S = 2.0
+
+# How long to wait for the server to go idle before posting a case.
+IDLE_TIMEOUT_S = POLL_TIMEOUT_S
+IDLE_POLL_S = 2.0
+
+# Busy retries. Belt and braces with the idle gate: the gate makes a busy reply
+# unlikely, this makes it non-fatal. A busy reply is NOT evidence about the
+# classifier or the tree, so it must never be scored as a case result.
+BUSY_MAX_RETRIES = 5
+BUSY_BACKOFF_S = 5.0
+
+
+def _wait_until_idle(client, base_url: str, timeout_s: float = IDLE_TIMEOUT_S) -> bool:
+    """Block until the Pi will admit a new intent. True if idle, False on timeout.
+
+    Gates on /status intent_active — the flag /intent itself admits on. Do NOT
+    substitute task.task_active: it goes false while _intent_running is still
+    set, leaving a window where this returns idle and the POST is still refused.
+    Falls back to task_active only for older servers that don't publish
+    intent_active, which is strictly better than not waiting at all.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            r = client.get(f"{base_url}/status")
+            r.raise_for_status()
+            st = r.json()
+        except Exception:
+            time.sleep(IDLE_POLL_S)
+            continue
+        active = st.get("intent_active")
+        if active is None:  # pre-1.1.0 server
+            active = bool((st.get("task") or {}).get("task_active"))
+        if not active:
+            return True
+        time.sleep(IDLE_POLL_S)
+    return False
+
+
 def _await_terminal(client, base_url: str, reply: dict,
-                    poll_s: float = 2.0, timeout_s: float = 600.0) -> dict:
+                    poll_s: float = POLL_INTERVAL_S,
+                    timeout_s: float = POLL_TIMEOUT_S) -> dict:
     """Follow an async /intent reply ("running" + task_id) to its terminal
     result via /intent_status. Long trees (multi-plant waters) return
     immediately with a task_id; the commands/tree only exist in the terminal
@@ -357,6 +421,64 @@ def _await_terminal(client, base_url: str, reply: dict,
         if status.get("status") != "running":
             return status
     reply["error"] = f"async task {task_id} still running after {timeout_s:.0f}s"
+    reply["timed_out"] = True
+    return reply
+
+
+def _park_tool_state(client, base_url: str, category: str,
+                     exp_cmds: List[str]) -> None:
+    """Put the UTM into the state a tool case's expectation assumes.
+
+    ToolState is process state that survives between cases, so without this the
+    expected command for "put it back" is whatever the previous case left
+    mounted. Derived from the expectation itself rather than a new corpus field:
+    T_<n>_2 is a release (something must be on), T_<n>_1 is a mount (the UTM
+    must be empty), and a tool refusal must not be able to succeed by accident.
+
+    /tool_state only updates the software record — no motion — so this is a
+    cheap precondition, not a robot action.
+    """
+    if category != "tool":
+        return
+    wants_release = any(c.endswith("_2") for c in exp_cmds)
+    # watering_nozzle is the bay the stow cases expect (T_2_2); see
+    # generate_corpus.py STOW_BAY.
+    tool = "watering_nozzle" if wants_release else None
+    try:
+        client.post(f"{base_url}/tool_state", json={"tool": tool})
+    except Exception:
+        pass  # older server without /tool_state — the case just gets noisier
+
+
+def _is_busy(reply: dict) -> bool:
+    """True if the Pi refused this case because a tree was already running.
+
+    The server says so explicitly (error="busy", HTTP 200), and the old harness
+    threw it away — reply["error"] was read nowhere, so a busy refusal was
+    indistinguishable from a real miss except by its 0 ms / no-commands
+    signature.
+    """
+    return reply.get("error") == "busy"
+
+
+def _post_intent(client, pi_url: str, base_url: str, payload: dict) -> dict:
+    """POST one case, waiting for idle first and retrying while busy.
+
+    Returns the terminal reply. A reply still marked busy after the retries is
+    handed back for the caller to record as a harness state rather than score.
+    """
+    _wait_until_idle(client, base_url)
+    reply: dict = {}
+    for attempt in range(BUSY_MAX_RETRIES):
+        r = client.post(pi_url, json=payload)
+        r.raise_for_status()
+        reply = r.json()
+        if not _is_busy(reply):
+            return _await_terminal(client, base_url, reply)
+        # Something was still running despite the idle gate. Back off, wait it
+        # out, try again — never score this.
+        time.sleep(BUSY_BACKOFF_S * (attempt + 1))
+        _wait_until_idle(client, base_url)
     return reply
 
 
@@ -406,7 +528,10 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
     # costs one case, not the night. ``resume`` preloads those lines and
     # skips their utterances. The JSONL line count doubles as the exact
     # live progress counter.
-    done_utterances: set = set()
+    # Keyed on case_id, not utterance: the corpus reuses the same wording
+    # across ids, so the old utterance-keyed resume skipped cases that had
+    # never run. Rows written before case_id existed fall back to the text.
+    done_keys: set = set()
     if stream_path and resume and Path(stream_path).exists():
         with open(stream_path, encoding="utf-8") as f:
             for line in f:
@@ -414,9 +539,13 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                     row = json.loads(line)
                 except ValueError:
                     continue  # torn final line from the crash — redo the case
-                results.append(CaseResult(**row))
-                done_utterances.add(row["utterance"])
-        print(f"# resume: {len(done_utterances)} cases loaded from "
+                # Drop fields the current CaseResult doesn't have, so an older
+                # stream still loads instead of crashing the resume.
+                known = {k: v for k, v in row.items()
+                         if k in CaseResult.__dataclass_fields__}
+                results.append(CaseResult(**known))
+                done_keys.add(known.get("case_id") or known["utterance"])
+        print(f"# resume: {len(done_keys)} cases loaded from "
               f"{stream_path}", file=sys.stderr)
     stream = open(stream_path, "a", encoding="utf-8") if stream_path else None
     total = len(cases)
@@ -451,11 +580,14 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
         last_seen_id = pre_run_tail[0].get("id", 0) if pre_run_tail else 0
 
-        for idx, (utterance, exp_type, exp_cmds, desc, category) in enumerate(
-                cases, start=1):
+        for idx, case in enumerate(cases, start=1):
+            # 6-tuple from load_corpus; the built-in TEST_CASES are 5-tuples
+            # with no corpus id.
+            utterance, exp_type, exp_cmds, desc, category = case[:5]
+            case_id = case[5] if len(case) > 5 else ""
             if skip_long and category == "safety":
                 continue  # the 54-plant water_all walk (~5 min sim) — full runs only
-            if utterance in done_utterances:
+            if (case_id or utterance) in done_keys:
                 continue  # already in the resume stream
             exp_cmds = _resolve_expected(client, base_url, exp_cmds, species_cache)
             payload = _build_intent_payload(utterance, category, classifier,
@@ -463,7 +595,8 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             if payload is None:
                 # LLM requested but unavailable — an honest miss, no dispatch.
                 _emit(CaseResult(
-                    utterance=utterance, expected_commands=exp_cmds,
+                    utterance=utterance, case_id=case_id,
+                    expected_commands=exp_cmds,
                     category=category, pi_status="classify_error",
                     error="classifier unavailable / returned no intents",
                 ), idx)
@@ -472,25 +605,51 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                 payload.get("intents") or [], category == "emergency"
             )
 
+            # Tool cases depend on what is already on the UTM: "put it back"
+            # publishes the bay of whatever ToolState holds, and ToolState
+            # persists across cases. Park it so the expected command is
+            # deterministic instead of a function of the previous case.
+            _park_tool_state(client, base_url, category, exp_cmds)
+
             t0 = time.monotonic()
             try:
-                r = client.post(pi_url, json=payload)
-                r.raise_for_status()
-                reply = r.json()
-                # Long trees run async: follow to the terminal result, which is
-                # where commands_published / tree actually live.
-                reply = _await_terminal(client, base_url, reply)
+                # Waits for idle, retries while busy, then follows the async
+                # task to its terminal result.
+                reply = _post_intent(client, pi_url, base_url, payload)
             except Exception as exc:
                 elapsed = int((time.monotonic() - t0) * 1000)
                 _emit(
                     CaseResult(
                         utterance=utterance,
+                        case_id=case_id,
                         expected_commands=exp_cmds,
                         category=category,
                         pi_status="error",
                         duration_ms=elapsed,
                         error=str(exc),
                         expected_event_types=expected_events,
+                        # A transport error leaves the tree in flight and the
+                        # server busy — not a judgement on the classifier.
+                        artifact=True,
+                    ), idx
+                )
+                continue
+
+            # Never scored: the case didn't get a fair run. Recorded as an
+            # explicit harness state so the artifact count is measured rather
+            # than reconstructed from a 0 ms / no-commands signature.
+            if _is_busy(reply) or reply.get("timed_out"):
+                _emit(
+                    CaseResult(
+                        utterance=utterance,
+                        case_id=case_id,
+                        expected_commands=exp_cmds,
+                        category=category,
+                        pi_status="busy" if _is_busy(reply) else "timeout",
+                        duration_ms=int((time.monotonic() - t0) * 1000),
+                        error=reply.get("error"),
+                        expected_event_types=expected_events,
+                        artifact=True,
                     ), idx
                 )
                 continue
@@ -559,6 +718,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             _emit(
                 CaseResult(
                     utterance=utterance,
+                    case_id=case_id,
                     expected_commands=exp_cmds,
                     category=category,
                     pi_status=reply.get("status", "unknown"),
@@ -581,7 +741,15 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
     return results
 
 
-def _summarise(results: List[CaseResult]) -> dict:
+def _summarise(all_results: List[CaseResult]) -> dict:
+    # Artifacts are harness failures, not system behaviour: a case refused as
+    # busy or abandoned at the poll timeout never reached the classifier or the
+    # tree, so scoring it measures nothing. The 2026-07-16 run reported
+    # DBSR over valid cases only, but had to identify the 243 by hand
+    # afterwards; the denominator is now computed here and both numbers are
+    # reported so the exclusion is visible rather than editorial.
+    results = [r for r in all_results if not r.artifact]
+    artifacts = [r for r in all_results if r.artifact]
     total = len(results)
     dbsr_pass = sum(1 for r in results if r.dbsr_pass)
     total_nodes = sum(r.node_count for r in results)
@@ -592,6 +760,12 @@ def _summarise(results: List[CaseResult]) -> dict:
     elc_applicable = [r for r in results if r.elc_applicable]
     elc_pass = sum(1 for r in elc_applicable if r.elc_pass)
     return {
+        "n_dispatched": len(all_results),
+        "n_artifacts": len(artifacts),
+        "artifacts_by_status": {
+            s: sum(1 for r in artifacts if r.pi_status == s)
+            for s in sorted({r.pi_status for r in artifacts})
+        },
         "n_cases": total,
         "DBSR": round(dbsr_pass / max(total, 1) * 100, 1),
         "SNSR": round(total_succ / max(total_nodes, 1) * 100, 1),
@@ -669,14 +843,22 @@ def main(argv=None) -> int:
     summary = _summarise(results)
     # Per-category DBSR breakdown — the analysis view the extended corpus is
     # for (difficulty/category live in each case row of the JSON output).
+    # Artifacts are excluded here too: last run they clustered in indirect/hard
+    # and dragged exactly those two categories down, which is what made the
+    # scores look like a classifier weakness rather than a harness bug.
+    scored = [r for r in results if not r.artifact]
     by_cat: Dict[str, List[CaseResult]] = {}
-    for r in results:
+    for r in scored:
         by_cat.setdefault(r.category, []).append(r)
     summary["DBSR_by_category"] = {
         cat: round(100.0 * sum(r.dbsr_pass for r in rs) / len(rs), 1)
         for cat, rs in sorted(by_cat.items())
     }
-    summary["forbidden_violations"] = sum(bool(r.forbidden_hit) for r in results)
+    summary["artifacts_by_category"] = {
+        cat: n for cat, n in sorted(
+            Counter(r.category for r in results if r.artifact).items())
+    }
+    summary["forbidden_violations"] = sum(bool(r.forbidden_hit) for r in scored)
 
     if args.json:
         print(json.dumps({"summary": summary, "cases": [r.__dict__ for r in results]}, indent=2))
@@ -695,6 +877,18 @@ def main(argv=None) -> int:
         print(f"{r.category:<10} {r.utterance[:40]:<42} {r.pi_status:<8} {flag:<5} {elc:<5} {r.duration_ms:<6}")
 
     print(f"\nSummary: {summary}")
+    # Say the denominator out loud. DBSR is over VALID cases; quoting it
+    # without the artifact count is how "90.1" got reported for a run where
+    # 243 of 2000 cases never reached the robot.
+    n_art = summary["n_artifacts"]
+    print(f"\nDBSR {summary['DBSR']} over {summary['n_cases']} valid cases "
+          f"({summary['n_dispatched']} dispatched, {n_art} harness artifacts "
+          f"excluded). USC {summary['USC']}.")
+    if n_art:
+        print(f"  artifacts by status:   {summary['artifacts_by_status']}")
+        print(f"  artifacts by category: {summary['artifacts_by_category']}")
+        print("  Artifacts are cases the harness never gave a fair run (busy "
+              "server / poll timeout), not classifier or tree decisions.")
     return 0 if summary["DBSR"] >= 80 else 1
 
 

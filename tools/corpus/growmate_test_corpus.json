@@ -2,9 +2,9 @@
   "metadata": {
     "name": "GrowMate voice-pipeline test corpus",
     "version": "1.0",
-    "generated": "2026-07-14",
+    "generated": "2026-07-16",
     "generator": "generate_corpus.py (seed=42, deterministic)",
-    "total_cases": 2000,
+    "total_cases": 2120,
     "seed_cases": 43,
     "target_greenhouse": "gh1 (Maynooth)",
     "active_species_gh1": [
@@ -43,14 +43,17 @@
       "refusal": 175,
       "hard": 340,
       "negation": 100,
-      "out_of_scope": 240
+      "out_of_scope": 240,
+      "tool": 120
     },
     "assertion_notes": {
       "@move:<species>": "pipeline moved to that species (any plant of it)",
       "M ": "an absolute move command was emitted",
       "photo_of_plant": "asserts I_1 only; tighten to @move + I_1 if your pipeline moves first",
       "forbidden_commands": "must NOT appear in the emitted sequence (negation and self-correction cases)",
-      "refusal/negation/general/out_of_scope": "terminal success requires zero robot commands"
+      "refusal/negation/general/out_of_scope": "terminal success requires zero robot commands",
+      "T_<n>_1 / T_<n>_2": "tool bay <n> mounted / released; bays are from gh1.yaml",
+      "tool category precondition": "stow cases (expected T_2_2) assume the watering nozzle is on, and mount cases assume an empty UTM. ToolState is process state that persists across cases, so the harness MUST park it via POST /tool_state before each tool case or the expected command is whatever the previous case happened to leave mounted."
     }
   },
   "cases": [
@@ -27365,6 +27368,1686 @@
       "expected_commands": [],
       "forbidden_commands": [],
       "description": "Out of scope (digital)",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2001",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "attach the nossle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2002",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "attach the probes",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2003",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "attach the soil soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2004",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "attach the you know water nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2005",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "bring the prob over",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2006",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "bring the seeder um over",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_3_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2007",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "bring the weeda over",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_4_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2008",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "bring the weeder weeder over",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_4_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2009",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "can you get get the watering nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2010",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "can you get the soil sensor sensor",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2011",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "could you please load up the nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2012",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "could you please put the soil sensor on",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2013",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "doctor says i'm to take it easy so can you fetch the soil sensor",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2014",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the chainsaw",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2015",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the hedge trimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2016",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the jackhammer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2017",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the lawnmower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2018",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the leaf blower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2019",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the pruning shears",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2020",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the rake",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2021",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the shovel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2022",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the strimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2023",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "fetch me the trowel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2024",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "fetch the the soil sensor",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2025",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the chainsaw",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2026",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the hedge trimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2027",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the jackhammer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2028",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the lawnmower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2029",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the leaf blower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2030",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "get the nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2031",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the pruning shears",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2032",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the rake",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2033",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the shovel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2034",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the strimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2035",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "get the trowel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2036",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "get the watering nozzel",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2037",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the chainsaw",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2038",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the hedge trimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2039",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the jackhammer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2040",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the lawnmower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2041",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the leaf blower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2042",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the pruning shears",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2043",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the rake",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2044",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the shovel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2045",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "grab the soil prob",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2046",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "grab the soil sensor sensor",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2047",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the strimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2048",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "grab the the probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2049",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "grab the trowel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2050",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "grab the water water nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2051",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "i can't get down the garden today can you attach the watering nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2052",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "i left my stick inside so can you pop it back in the bay",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2053",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "i need the soil probe for me dear",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2054",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "i need the soil probe thanks a million",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2055",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "i need the water nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2056",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "i'm not able for the watering can anymore can you can you get the soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2057",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "i'm not able for the watering can anymore can you get the seeder",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_3_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2058",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "like get the soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2059",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "load up the nozle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2060",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "load up the nozzle there's a good lad",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2061",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "load up the sealer",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_3_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2062",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "load up the um probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2063",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "load up the water nozzle please pet",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2064",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "mount the soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2065",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "mount the the watering nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2066",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "mount the water nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2067",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "my back is acting up would you fetch the nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2068",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "my knees are at me today so can you bring the probe over",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2069",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "my knees are at me today so can you grab the soil sensor",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2070",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the chainsaw",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2071",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the hedge trimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2072",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the jackhammer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2073",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the lawnmower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2074",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the leaf blower",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2075",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2076",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2077",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the pruning shears",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2078",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the rake",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2079",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "pick up the reader",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_4_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2080",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "pick up the sealer",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_3_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2081",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the seeder",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_3_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2082",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the shovel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2083",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2084",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the soil sensor",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2085",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the strimmer",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2086",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "pick up the trowel",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2087",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the water nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2088",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the watering nozzle",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2089",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "pick up the weeder",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_4_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2090",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "pop ehm it ehm back in the bay",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2091",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "put it back",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2092",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "put on the prob",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2093",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "put on the seeder seeder",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_3_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2094",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "put that back",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2095",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the chainsaw on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2096",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the hedge trimmer on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2097",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the jackhammer on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2098",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the lawnmower on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2099",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the leaf blower on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2100",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "put the nozzle nozzle on",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2101",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the pruning shears on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2102",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the rake on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2103",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "put the reader on",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_4_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2104",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the shovel on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2105",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "put the soil probe on for me dear",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2106",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "put the soil sensor on",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2107",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the strimmer on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2108",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "put the tool back",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2109",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "put the tool tool back",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2110",
+      "category": "tool",
+      "subcategory": "unknown_tool",
+      "difficulty": "medium",
+      "utterance": "put the trowel on",
+      "expected_class": "refusal",
+      "expected_commands": [],
+      "forbidden_commands": [
+        "T_"
+      ],
+      "description": "Tool this robot doesn't have",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2111",
+      "category": "tool",
+      "subcategory": "stt_noise",
+      "difficulty": "medium",
+      "utterance": "put the water nozle on",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_1"
+      ],
+      "forbidden_commands": [],
+      "description": "STT homophone corruption",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2112",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "return the tool to its er uh slot",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2113",
+      "category": "tool",
+      "subcategory": "plain",
+      "difficulty": "medium",
+      "utterance": "stow the tool",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Tool head request",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2114",
+      "category": "tool",
+      "subcategory": "stutter",
+      "difficulty": "medium",
+      "utterance": "take take it off",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Repeated word / stutter",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2115",
+      "category": "tool",
+      "subcategory": "fillers",
+      "difficulty": "medium",
+      "utterance": "take the tool like er off",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Disfluency fillers",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2116",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "take the tool off there's a good lad",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2117",
+      "category": "tool",
+      "subcategory": "elderly_context",
+      "difficulty": "medium",
+      "utterance": "the hip is giving me trouble so you'll have to load up the soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Elderly context preamble",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2118",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "when you get a chance can you return the tool to its slot",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_2_2"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2119",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "would you mind grab the soil probe",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
+      "source": "generated"
+    },
+    {
+      "id": "GM-2120",
+      "category": "tool",
+      "subcategory": "politeness",
+      "difficulty": "medium",
+      "utterance": "would you mind put the soil sensor on",
+      "expected_class": "robot_command",
+      "expected_commands": [
+        "T_1_1"
+      ],
+      "forbidden_commands": [],
+      "description": "Politeness wrapper",
       "source": "generated"
     }
   ]

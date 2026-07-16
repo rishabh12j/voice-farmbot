@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 Loader: convert growmate_test_corpus.json into the (utterance, expected_class,
-expected_commands, name, category) tuples the existing harness uses.
+expected_commands, name, category, case_id) tuples the existing harness uses.
+
+case_id is carried so results can be joined back to their case and so --resume
+can key on identity rather than on the utterance text — utterances repeat
+across ids, and resuming on the text skipped cases that had never run.
 
 Notes on class mapping: the corpus uses two labels the original 43-case suite
 didn't have, "negation" and "out_of_scope". By default they're passed through
@@ -26,7 +30,7 @@ def load_cases(path="growmate_test_corpus.json", categories=None):
         if FOLD_INTO_REFUSAL and cls in ("negation", "out_of_scope"):
             cls = "refusal"
         out.append((c["utterance"], cls, c["expected_commands"],
-                    f'{c["id"]} {c["description"]}', c["category"]))
+                    f'{c["id"]} {c["description"]}', c["category"], c["id"]))
     return out
 
 def load_forbidden(path="growmate_test_corpus.json"):

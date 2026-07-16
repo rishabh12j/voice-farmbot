@@ -659,33 +659,142 @@ for h in HARD_HAND:
     forbidden = h[5] if len(h) > 5 else None
     pool_hard.append((h[0], h[1], h[2], h[3], h[4], forbidden))
 
+# ---------------------------------------------------------------- tools -----
+# mount_tool / stow_tool. Added 2026-07 and deliberately ADDITIVE: this block
+# must not change any of the original 2000 cases, so it
+#   (a) runs on its own seeded stream and restores the global one after, and
+#   (b) is capped as a NEW category appended last in CAPS, so it displaces
+#       nothing and its cases sort to GM-2001+ leaving existing ids stable.
+# Without (a) every random.choice/shuffle below would shift and the whole
+# corpus would silently re-roll.
+#
+# The spread matters as much as the coverage: an older gardener asks for the
+# nozzle in many unexpected ways, so the same TRANSFORMS the hard category uses
+# (STT homophones, fillers, politeness, elderly preamble, stutter) are applied
+# here rather than hand-writing flat phrasings.
+
+# Bays are from gh1.yaml, the corpus's target robot; mounting bay N publishes
+# T_N_1 and releasing it publishes T_N_2. test_wire_grammar asserts every
+# configured index is mountable, so these stay honest.
+TOOL_HEADS = {
+    "watering nozzle": 2, "nozzle": 2, "water nozzle": 2,
+    "soil probe": 1, "soil sensor": 1, "probe": 1,
+    "weeder": 4,
+    "seeder": 3,
+}
+STOW_BAY = 2  # the harness parks watering_nozzle before each stow case
+
+# Sound like a tool, aren't on this robot -> clean refusal, and must never
+# move the UTM.
+NOT_TOOLS = ["jackhammer", "lawnmower", "hedge trimmer", "shovel", "rake",
+             "strimmer", "chainsaw", "leaf blower", "pruning shears", "trowel"]
+
+MOUNT_T = ["pick up the {t}", "get the {t}", "fetch the {t}", "put the {t} on",
+           "grab the {t}", "mount the {t}", "put on the {t}", "i need the {t}",
+           "can you get the {t}", "attach the {t}", "bring the {t} over",
+           "load up the {t}"]
+STOW_T = ["put it back", "put the tool back", "put that back", "stow the tool",
+          "take it off", "take the tool off", "put it away",
+          "put the tool away", "pop it back in the bay", "take that head off",
+          "back in the holder please", "you can put that down now",
+          "drop the tool off", "return the tool to its slot"]
+NOT_TOOL_T = ["pick up the {t}", "get the {t}", "fetch me the {t}",
+              "put the {t} on", "grab the {t}"]
+
+# Tool words the STT mishears. Kept OUT of the shared HOMOPHONES dict at module
+# scope: "watering" occurs in hard_bases, so adding it there would change which
+# word corrupt() picks for existing hard cases and re-roll them.
+TOOL_HOMOPHONES = {
+    "nozzle": ["nozzel", "nozle", "nossle"],
+    "probe": ["prob", "probes", "prowl"],
+    "weeder": ["weeda", "reader", "wheeler"],
+    "seeder": ["seeda", "cedar", "sealer"],
+    "tool": ["toole", "tull"],
+    "soil": ["soyle", "sile"],
+}
+
+pool_tool = []
+tool_priority = set()
+
+_rand_state = random.getstate()
+_homophones_backup = dict(HOMOPHONES)
+random.seed(4242)
+HOMOPHONES.update(TOOL_HOMOPHONES)
+
+tool_bases = []
+for _spoken, _bay in TOOL_HEADS.items():
+    for _tmpl in MOUNT_T:
+        tool_bases.append((_tmpl.format(t=_spoken), "robot_command", [f"T_{_bay}_1"]))
+for _tmpl in STOW_T:
+    tool_bases.append((_tmpl, "robot_command", [f"T_{STOW_BAY}_2"]))
+
+for _u, _cls, _cmds in tool_bases:
+    pool_tool.append(("plain", _u, _cls, _cmds, "Tool head request", None))
+
+# Refusals: never mount a different head just because the name was close.
+for _nt in NOT_TOOLS:
+    for _tmpl in NOT_TOOL_T:
+        _u = _tmpl.format(t=_nt)
+        pool_tool.append(("unknown_tool", _u, "refusal", [],
+                          "Tool this robot doesn't have", ["T_"]))
+        tool_priority.add(_u)
+
+# Guarantee a baseline, but keep it SMALL. The priority set is taken before the
+# shuffle, so if it approaches the cap it crowds out the transformed spread
+# entirely — which is the whole point of the category. Baseline is ~20% of the
+# cap; the rest is the many-ways-of-asking mix.
+for _spoken in list(TOOL_HEADS)[:8]:
+    tool_priority.add(f"pick up the {_spoken}")
+for _tmpl in STOW_T[:4]:
+    tool_priority.add(_tmpl)
+for _nt in NOT_TOOLS[:12]:
+    tool_priority.add(f"pick up the {_nt}")
+
+for _ in range(400):  # oversample; dedupe + the cap trim it
+    for _sub, _fn, _desc in TRANSFORMS:
+        _base_u, _cls, _cmds = random.choice(tool_bases)
+        _out = _fn(_base_u)
+        if _out:
+            pool_tool.append((_sub, _out, _cls, _cmds, _desc, None))
+
+HOMOPHONES.clear()
+HOMOPHONES.update(_homophones_backup)
+random.setstate(_rand_state)
+
 # ------------------------------------------------------------ assembly ------
 
+# "tool" is appended LAST on purpose. CAT_ORDER derives from these keys and ids
+# are assigned in that order, so a new category at the end takes GM-2001+ and
+# every original id stays put. Inserting it anywhere else would renumber the
+# corpus and orphan every GM- reference in the eval record.
 CAPS = {
     "direct": 380, "indirect": 200, "query": 180, "general": 190,
     "emergency": 40, "multi": 140, "safety": 15, "refusal": 175,
     "hard": 340, "negation": 100, "out_of_scope": 240,
+    "tool": 120,
 }
-assert sum(CAPS.values()) == 2000
+assert sum(CAPS.values()) == 2120
 
 POOLS = {
     "direct": pool_direct, "indirect": pool_indirect, "query": pool_query,
     "general": pool_general, "emergency": pool_emergency, "multi": pool_multi,
     "safety": pool_safety, "refusal": pool_refusal, "hard": pool_hard,
-    "negation": pool_negation, "out_of_scope": pool_oos,
+    "negation": pool_negation, "out_of_scope": pool_oos, "tool": pool_tool,
 }
 
 DIFFICULTY = {
     "direct": "easy", "indirect": "medium", "query": "easy", "general": "easy",
     "emergency": "easy", "multi": "medium", "safety": "medium",
     "refusal": "medium", "hard": "hard", "negation": "hard",
-    "out_of_scope": "medium",
+    "out_of_scope": "medium", "tool": "medium",
 }
 
-# Items that must survive sampling: hand-written hard cases and blanket negations
+# Items that must survive sampling: hand-written hard cases, blanket negations,
+# and the tool baseline (one mount per head, some plain stows, every refusal).
 PRIORITY = {
     "hard": set(h[1] for h in HARD_HAND),
     "negation": set(u for (sub, u, *_rest) in pool_negation if sub == "blanket_negation"),
+    "tool": tool_priority,
 }
 
 for cat, cap in CAPS.items():
@@ -742,6 +851,14 @@ corpus = {
             "photo_of_plant": "asserts I_1 only; tighten to @move + I_1 if your pipeline moves first",
             "forbidden_commands": "must NOT appear in the emitted sequence (negation and self-correction cases)",
             "refusal/negation/general/out_of_scope": "terminal success requires zero robot commands",
+            "T_<n>_1 / T_<n>_2": "tool bay <n> mounted / released; bays are from gh1.yaml",
+            "tool category precondition": (
+                "stow cases (expected T_2_2) assume the watering nozzle is on, and "
+                "mount cases assume an empty UTM. ToolState is process state that "
+                "persists across cases, so the harness MUST park it via POST "
+                "/tool_state before each tool case or the expected command is "
+                "whatever the previous case happened to leave mounted."
+            ),
         },
     },
     "cases": C.cases,
