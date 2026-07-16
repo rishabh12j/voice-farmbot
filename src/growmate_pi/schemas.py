@@ -21,7 +21,11 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SCHEMA_VERSION = "1.0.0"
+# 1.1.0: added mount_tool / stow_tool. Additive — only the MAJOR is enforced at
+# /intent, so a 1.0.0 client keeps working; a 1.1.0 client that says
+# "mount_tool" to a 1.0.0 server is rejected by the Literal below, which is the
+# safe direction to fail.
+SCHEMA_VERSION = "1.1.0"
 
 
 Action = Literal[
@@ -41,11 +45,16 @@ Action = Literal[
     "label_plants",
     "check_sensor",
     "check_moisture",
+    "mount_tool",
+    "stow_tool",
     "emergency_stop",
     "general_question",
 ]
 """Allowed action strings. Mirrors `AICore.ACTIONS` in the legacy package.
-Adding an action here without a matching tree builder on the Pi is a bug."""
+Adding an action here without a matching tree builder on the Pi is a bug: the
+`build_subtree` fallback would speak the LLM's forward-tense response ("Stowing
+the nozzle.") over a tree that does nothing. `tools/test_action_coverage.py`
+fails the build if this list and the builder's dispatch ever drift apart."""
 
 
 NodeStatus = Literal["success", "failure", "running", "skipped"]

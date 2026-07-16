@@ -177,6 +177,26 @@ def _load_plants_from_map_handler() -> Dict[str, Any]:
 # so the BT side stays a thin "give me the plants" caller.
 
 
+# Container nouns a speaker tacks onto a species ("the lettuce bed", "tomato
+# patch", "marigold plants") and leading articles. Stripped so the core species
+# survives to the substring match in find_plants_by_species.
+_TARGET_SUFFIXES = ("bed", "beds", "patch", "patches", "row", "rows",
+                    "section", "plants", "plant")
+_TARGET_PREFIXES = ("the ", "my ", "our ", "that ", "this ", "some ")
+
+
+def _plural_forms(t: str) -> set:
+    """Singular/plural folding for one word-form."""
+    forms = {t}
+    if t.endswith("ies") and len(t) > 3:
+        forms.add(t[:-3] + "y")
+    if t.endswith("es") and len(t) > 3:
+        forms.add(t[:-2])
+    if t.endswith("s") and len(t) > 1:
+        forms.add(t[:-1])
+    return forms
+
+
 def _species_forms(target: str) -> set:
     """All lowercase forms of a target string a plant entry might match.
 
@@ -185,20 +205,32 @@ def _species_forms(target: str) -> set:
     The active_map stores species like 'Lettuce_little_gem' or 'Mixed Pepper'
     so we match by substring against both the raw species name and the
     UI-projected type slug.
+
+    Container words are stripped too, so "the lettuce bed" and "marigold
+    plants" reach the same forms as "lettuce" and "marigold". The old code
+    claimed this in a comment but never implemented it: those phrasings matched
+    no plant and were refused as unknown, which is a share of the refusal
+    misses in the 2026-07-16 corpus run.
     """
     t = (target or "").lower().strip().rstrip("?.,").strip()
     if not t:
         return set()
-    forms = {t}
-    if t.endswith("ies") and len(t) > 3:
-        forms.add(t[:-3] + "y")
-    if t.endswith("es") and len(t) > 3:
-        forms.add(t[:-2])
-    if t.endswith("s") and len(t) > 1:
-        forms.add(t[:-1])
-    # Common LLM phrasings — "the lettuce", "lettuce bed" etc. shouldn't
-    # match here but we tolerate a trailing word the LLM might emit.
-    return forms
+    forms = _plural_forms(t)
+
+    core = t
+    for p in _TARGET_PREFIXES:
+        if core.startswith(p):
+            core = core[len(p):].strip()
+            break
+    words = core.split()
+    # Keep the last word if it is ALL we have — "water the plants" is a real
+    # (if vague) target, not an empty one.
+    while len(words) > 1 and words[-1] in _TARGET_SUFFIXES:
+        words.pop()
+    core = " ".join(words)
+    if core and core != t:
+        forms |= _plural_forms(core)
+    return {f for f in forms if f}
 
 
 # Plants within this many mm of X are treated as one column. Bigger than the
@@ -433,7 +465,11 @@ _event_log: Optional[EventLog] = None
 # tree is in flight (preserves the old one-at-a-time execution semantics).
 
 _INTENT_GRACE_S = 8.0          # return inline if the tree finishes this fast
-_INTENT_RESULT_TTL_S = 900.0   # keep finished results this long for late polls
+# Keep finished results this long for late polls. Must stay >= the eval
+# harness's poll timeout (tools/evaluate_v2._await_terminal): a full-garden
+# water_smart can run for many minutes, and if the result is pruned before the
+# poller reads it the case is scored as a timeout that never happened.
+_INTENT_RESULT_TTL_S = 2400.0
 
 _intent_lock = threading.Lock()
 _intent_results: Dict[str, Dict[str, Any]] = {}   # task_id -> {"resp": dict, "ts": float}
@@ -591,6 +627,11 @@ _INTENT_EVENT_MAP: Dict[str, str] = {
     "light_on":       "lights_on",
     "light_off":      "lights_off",
 }
+# Deliberately absent: move, go_home, jog, mount_tool, stow_tool. These are
+# mechanism, not plant care — the log feeds the care digest ("when was the
+# basil last watered"), and a tool swap says nothing about a plant. Adding
+# them would be noise here and would make ELC score cases that have no care
+# meaning. Actions missing from this map are simply not ELC-applicable.
 
 
 # Day 8: per-species "watering overdue" threshold, in days. Tweak per the
@@ -844,6 +885,15 @@ def build_app(
             "topic": _bridge.topic,
             "config": str((config_path or DEFAULT_CONFIG)),
             "task": get_task_state().snapshot(),
+            # The flag /intent actually admits on. task.task_active is NOT the
+            # same thing and must not be used as an idle check: it is toggled
+            # by the tree inside _execute_intent_tree, while _intent_running is
+            # reserved before the worker thread starts and cleared after the
+            # tree has already gone quiet. Polling task_active therefore has a
+            # window where it reads false and the next POST is still refused as
+            # busy — which is exactly the timeout/busy cascade that produced
+            # the 243 harness artifacts in the 2026-07-16 corpus run.
+            "intent_active": _intent_running is not None,
             "position": _bridge.position(),
             "tool": get_tool_state().current(),
         }

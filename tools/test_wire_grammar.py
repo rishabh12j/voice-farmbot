@@ -188,6 +188,18 @@ def run_corpus(bridge: FarmBotROS2Bridge, garden: GardenConfig
          [_intent("clear_weeds")], False),
         ("check_moisture", [_intent("check_moisture")], False),
         ("label_plants", [_intent("label_plants", "left lettuce")], False),
+        # Tool verbs publish T_<idx>_1 / T_<idx>_2 directly rather than as a
+        # side effect of a job, so they need their own rows — the corpus is a
+        # hardcoded list and a new verb is otherwise never ticked at all.
+        # Ordered as a chain: stow whatever the water_smart row left on, then
+        # a fresh mount by spoken alias, then stow it again.
+        ("stow_tool (unmount whatever is on)", [_intent("stow_tool")], False),
+        ("mount_tool by alias ('soil probe' -> soil_sensor)",
+         [_intent("mount_tool", "soil probe")], False),
+        ("stow_tool again (bay release)", [_intent("stow_tool")], False),
+        ("stow_tool on an empty UTM (no commands)", [_intent("stow_tool")], False),
+        ("mount_tool unknown tool (no commands)",
+         [_intent("mount_tool", "jackhammer")], False),
         ("emergency stop", [_intent("emergency_stop")], True),
     ]
 

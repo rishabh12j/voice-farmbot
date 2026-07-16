@@ -88,11 +88,15 @@ class OllamaClient:
             return None
 
 class AICore:
+    # Must stay identical to growmate_pi.schemas.Action — app.py uses this as
+    # the allowlist and silently coerces anything else to general_question, so
+    # a verb missing here is dead before it reaches the Pi.
+    # tools/test_action_coverage.py fails the build if the two ever drift.
     ACTIONS = ["move", "water", "water_all", "water_smart", "go_home",
                "light_on", "light_off", "photo", "panorama", "scan_weeds",
                "clear_weeds", "scan_bed", "find_plants", "label_plants",
-               "check_sensor", "check_moisture", "emergency_stop",
-               "general_question"]
+               "check_sensor", "check_moisture", "mount_tool", "stow_tool",
+               "emergency_stop", "general_question"]
 
     def __init__(self, config_path, model="gemma3:4b", ollama_url="http://localhost:11434"):
         self.garden = GardenConfig(config_path)
@@ -158,7 +162,7 @@ Your job is to classify what the user wants into a list of intents.
 {garden_section}
 
 {self._memory_section(memory)}AVAILABLE ACTIONS:
-  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture
+  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture, mount_tool, stow_tool
   KNOWLEDGE: general_question
 
 OUTPUT FORMAT -- always return JSON:
@@ -181,11 +185,18 @@ RULES:
 14. If the user names a specific plant, use THAT name as the target verbatim — even when it is not in CURRENTLY PLANTED. The robot checks its own map and refuses safely. NEVER substitute a different plant for the one the user named, and never turn an explicit robot command into a general_question.
 15. NEGATIONS: "don't water X", "no need to …", "leave it", "never mind", "not today" = the user wants NO robot action. Classify as general_question with a short acknowledgment response ("Alright, I won't.") — never move, water, or home the robot on a negation. The action MUST be one of the AVAILABLE ACTIONS exactly — never invent a new action word. BUT: if the user says THEY can't do something and asks the robot to do it instead ("I can't water them today, can you do it", "my back hurts, please water them for me"), that is a COMMAND, not a negation — the inability is theirs, the request is real.
 16. "go/pop over to X and see/check how it's doing" = check_sensor on X (the robot moves there as part of the check).
-17. OUT OF SCOPE: this robot ONLY gardens (water, move, lights, photo, weeds, soil, plant map). Any request it cannot physically do as a garden robot — open a door, make tea, play music, move furniture, drive somewhere, answer non-garden trivia — is general_question with a response that politely says it only looks after the garden. NEVER map an out-of-scope request onto a robot action just because a word sounds similar ("door"/"home", "clean"/"clear"). When in doubt between a robot action and none, prefer general_question — a wrong move erodes trust more than a polite "I can't".
+17. OUT OF SCOPE: this robot ONLY gardens (water, move, lights, photo, weeds, soil, plant map). Any request it cannot physically do as a garden robot — open a door, make tea, play music, move furniture, drive somewhere off the garden, answer non-garden trivia — is general_question with a response that politely says it only looks after the garden. NEVER map an out-of-scope request onto a robot action just because a word sounds similar ("door"/"home", "clean"/"clear"). When in doubt between a robot action and none, prefer general_question — a wrong move erodes trust more than a polite "I can't".
+18. TOOL HEADS: "pick up / get / fetch / put on / grab the X" where X is a tool (watering nozzle, soil probe, weeder, seeder) = mount_tool with target X. "put it back", "put the X away", "stow it", "take it off", "drop the tool" = stow_tool with target null (the robot already knows what it is holding — never guess a target for stow_tool). Only use these when the user asks for the TOOL ITSELF; ordinary jobs like water/check_sensor fetch their own head, so "water the tomatoes" is water, NOT mount_tool + water.
+19. GOING somewhere IN the garden = move. "drive/head/pop/get over to X", "take the robot to X", "bring it to X", "over to X" where X is a plant or garden location = move with target X. The gantry moving to a plant is the robot's own workspace, NOT the "drive somewhere" of rule 17 — that means off the garden ("drive to the shop", "drive me to town"), which stays general_question. If the going is paired with seeing/checking ("go over and see how X is doing"), rule 16 wins and it is check_sensor.
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
 "move to the herbs" -> {{"intents": [{{"action":"move","target":"herbs","question":null,"response":"Moving to the herbs."}}]}}
+"drive over to the tomatoes" -> {{"intents": [{{"action":"move","target":"tomatoes","question":null,"response":"Driving over to the tomatoes."}}]}}
+"head to the lettuce" -> {{"intents": [{{"action":"move","target":"lettuce","question":null,"response":"Heading to the lettuce."}}]}}
+"take the robot over to the basil" -> {{"intents": [{{"action":"move","target":"basil","question":null,"response":"Taking it over to the basil."}}]}}
+"drive to the shop for me" -> {{"intents": [{{"action":"general_question","target":null,"question":null,"response":"Sorry, I only look after the garden — I can't drive anywhere."}}]}}
+"go over and see how the peppers are doing" -> {{"intents": [{{"action":"check_sensor","target":"peppers","question":null,"response":"Popping over to check the peppers."}}]}}
 "go home" -> {{"intents": [{{"action":"go_home","target":null,"question":null,"response":"Heading home."}}]}}
 "the herbs seem dry" -> {{"intents": [{{"action":"water","target":"herbs","question":null,"response":"The herbs look thirsty, watering now."}}]}}
 "how are the tomatoes looking" -> {{"intents": [{{"action":"check_sensor","target":"tomatoes","question":null,"response":"Let me check on the tomatoes."}}]}}
@@ -207,6 +218,14 @@ EXAMPLES:
 "they're all tomatoes" -> {{"intents": [{{"action":"label_plants","target":"all tomatoes","question":null,"response":"Labeling them all as tomatoes."}}]}}
 "the middle are scallions" -> {{"intents": [{{"action":"label_plants","target":"middle scallions","question":null,"response":"Labeling the middle as scallions."}}]}}
 "check moisture levels" -> {{"intents": [{{"action":"check_moisture","target":null,"question":null,"response":"Checking moisture."}}]}}
+"pick up the watering nozzle" -> {{"intents": [{{"action":"mount_tool","target":"watering nozzle","question":null,"response":"Fetching the watering nozzle."}}]}}
+"put the soil probe on" -> {{"intents": [{{"action":"mount_tool","target":"soil probe","question":null,"response":"Getting the soil probe."}}]}}
+"grab the weeder" -> {{"intents": [{{"action":"mount_tool","target":"weeder","question":null,"response":"Fetching the weeder."}}]}}
+"put it back" -> {{"intents": [{{"action":"stow_tool","target":null,"question":null,"response":"Putting it back."}}]}}
+"put the tool away please" -> {{"intents": [{{"action":"stow_tool","target":null,"question":null,"response":"Putting the tool away."}}]}}
+"take that head off" -> {{"intents": [{{"action":"stow_tool","target":null,"question":null,"response":"Taking it off."}}]}}
+"get the nozzle and water the basil" -> {{"intents": [{{"action":"mount_tool","target":"nozzle","question":null,"response":"Fetching the nozzle."}},{{"action":"water","target":"basil","question":null,"response":"Now watering the basil."}}]}}
+"check the soil on the tomatoes then put the probe away" -> {{"intents": [{{"action":"check_sensor","target":"tomatoes","question":null,"response":"Checking the tomatoes."}},{{"action":"stow_tool","target":null,"question":null,"response":"Then putting the probe away."}}]}}
 "when should I plant basil" -> {{"intents": [{{"action":"general_question","target":"basil","question":"When should I plant basil in {self.garden.location_context}?","response":"Let me look that up."}}]}}
 "the tomatoes look thirsty" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Tomatoes need water, on it!"}}]}}
 "give the lettuce a drink" -> {{"intents": [{{"action":"water","target":"lettuce","question":null,"response":"Giving the lettuce some water."}}]}}

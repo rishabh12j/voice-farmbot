@@ -21,6 +21,7 @@ from growmate_pi.bt.executor import execute_tree, read_tts_text
 from growmate_pi.farmbot_ros2_bridge import FarmBotROS2Bridge
 from growmate_pi.garden_config import GardenConfig
 from growmate_pi.schemas import Intent, IntentRequest
+from growmate_pi.tool_state import get_tool_state
 
 
 SCENARIOS: list[IntentRequest] = [
@@ -84,9 +85,60 @@ SCENARIOS: list[IntentRequest] = [
     ),
     IntentRequest(
         intents=[Intent(action="water", target="bananas", response="Watering bananas.")],
-        raw_text="water the bananas",  # should fail: unknown plant
+        raw_text="water the bananas",  # unknown plant -> clean refusal
         client_id="sim",
     ),
+    # --- tool verbs + the resolve-or-refuse guard ---------------------------
+    # Order is load-bearing and the scenarios form a chain: the nozzle is on
+    # from the water_smart scenario above, so this stows it and leaves the UTM
+    # EMPTY. The two refusal scenarios that follow depend on that: with the
+    # probe already mounted EnsureTool would no-op and publish nothing, so a
+    # regression that mounts before refusing would slip through unseen.
+    IntentRequest(
+        intents=[Intent(action="stow_tool", target=None, response="Putting it back.")],
+        raw_text="put the tool back",
+        client_id="sim",
+    ),
+    IntentRequest(
+        # Unknown target must refuse BEFORE the probe is fetched — the old
+        # order mounted first and then aborted the tree as a failure.
+        intents=[Intent(action="check_sensor", target="dragonfruit",
+                        response="Checking the dragonfruit.")],
+        raw_text="check on the dragonfruit",
+        client_id="sim",
+    ),
+    IntentRequest(
+        intents=[Intent(action="photo", target="dragonfruit",
+                        response="Photographing the dragonfruit.")],
+        raw_text="take a photo of the dragonfruit",
+        client_id="sim",
+    ),
+    IntentRequest(
+        # Spoken alias, not the config key: "soil probe" -> soil_sensor (T_1_1).
+        intents=[Intent(action="mount_tool", target="soil probe",
+                        response="Fetching the soil probe.")],
+        raw_text="pick up the soil probe",
+        client_id="sim",
+    ),
+    IntentRequest(
+        intents=[Intent(action="mount_tool", target="jackhammer",
+                        response="Fetching the jackhammer.")],
+        raw_text="pick up the jackhammer",  # not a tool -> clean refusal
+        client_id="sim",
+    ),
+    IntentRequest(
+        intents=[Intent(action="stow_tool", target=None, response="Putting it back.")],
+        raw_text="put the probe away",
+        client_id="sim",
+    ),
+    IntentRequest(
+        # UTM is empty now: stowing nothing is a clean refusal, not a failure.
+        intents=[Intent(action="stow_tool", target=None, response="Putting it back.")],
+        raw_text="take the tool off",
+        client_id="sim",
+    ),
+    # Emergency LATCHES the estop, so it stays last — anything after it would
+    # abort on the latch rather than on its own merits.
     IntentRequest(
         intents=[Intent(action="emergency_stop", target=None, response="Stopping.")],
         raw_text="stop",
@@ -100,6 +152,9 @@ def main() -> int:
     config_path = Path(__file__).parent / "config" / "farmbot.yaml"
     bridge = FarmBotROS2Bridge(ros2_enabled=False)
     garden = GardenConfig(config_path)
+    # Bay indices are config, not constants — assert against the real ones so
+    # the tool scenarios don't quietly rot if a bay is renumbered.
+    tools = garden.tools_by_name()
 
     failures = 0
     for idx, req in enumerate(SCENARIOS, start=1):
@@ -128,14 +183,84 @@ def main() -> int:
                 print("  -> expected nozzle mount (T*_1) BEFORE first move; "
                       f"mount={mount} first_move={first_move}")
 
-        is_refusal = "bananas" in req.raw_text
-        if is_refusal:
+        tool_cmds = [c for c in cmds if c.startswith("T_")]
+
+        # A1 regression guard: an unresolvable target must be refused BEFORE
+        # any tool is fetched. Asserting the ABSENCE of the mount is the whole
+        # point — the bug was mounting the probe and only then discovering
+        # there was nothing to check, so a status-only check would pass.
+        if "dragonfruit" in req.raw_text:
+            if result.status != "success" or "don't see" not in tts.lower():
+                failures += 1
+                print("  -> expected clean refusal (success + \"I don't see any\"), "
+                      f"got {result.status} / {tts!r}")
+            if tool_cmds:
+                failures += 1
+                print(f"  -> refused, but fetched a tool first: {tool_cmds}")
+            if cmds:
+                failures += 1
+                print(f"  -> refusal must publish nothing, got {cmds}")
+
+        elif "bananas" in req.raw_text:
             # No-match is a CLEAN refusal: success + an "I don't see any" message,
             # not a hard failure (Q-design — see _tree_water).
             if result.status != "success" or "don't see" not in tts.lower():
                 failures += 1
                 print("  -> expected clean refusal (success + \"I don't see any\"), "
                       f"got {result.status} / {tts!r}")
+
+        elif req.raw_text == "put the tool back":
+            # The nozzle is on from the water_smart scenario; stowing must
+            # publish that head's unmount and leave ToolState empty.
+            want = f"T_{tools['watering_nozzle']}_2"
+            if want not in cmds:
+                failures += 1
+                print(f"  -> expected {want} (stow the mounted nozzle), got {cmds}")
+            if get_tool_state().current() is not None:
+                failures += 1
+                print(f"  -> UTM should be empty after a stow, ToolState="
+                      f"{get_tool_state().current()!r}")
+
+        elif req.raw_text == "pick up the soil probe":
+            # Spoken alias resolved to the config key, fresh mount (UTM empty).
+            want = f"T_{tools['soil_sensor']}_1"
+            if want not in cmds:
+                failures += 1
+                print(f"  -> expected {want} ('soil probe' -> soil_sensor), got {cmds}")
+            if get_tool_state().current() != "soil_sensor":
+                failures += 1
+                print(f"  -> ToolState should be soil_sensor, got "
+                      f"{get_tool_state().current()!r}")
+
+        elif req.raw_text == "pick up the jackhammer":
+            if result.status != "success" or "don't have" not in tts.lower():
+                failures += 1
+                print("  -> expected clean refusal (success + \"I don't have\"), "
+                      f"got {result.status} / {tts!r}")
+            if tool_cmds:
+                failures += 1
+                print(f"  -> refused an unknown tool but still moved the UTM: {tool_cmds}")
+
+        elif req.raw_text == "put the probe away":
+            want = f"T_{tools['soil_sensor']}_2"
+            if want not in cmds:
+                failures += 1
+                print(f"  -> expected {want} (stow the probe), got {cmds}")
+            if get_tool_state().current() is not None:
+                failures += 1
+                print(f"  -> UTM should be empty after a stow, ToolState="
+                      f"{get_tool_state().current()!r}")
+
+        elif req.raw_text == "take the tool off":
+            # Nothing on: a clean spoken refusal, no motion, no failure.
+            if result.status != "success" or "no tool" not in tts.lower():
+                failures += 1
+                print("  -> expected clean refusal (success + \"no tool\"), "
+                      f"got {result.status} / {tts!r}")
+            if cmds:
+                failures += 1
+                print(f"  -> stowing an empty UTM must publish nothing, got {cmds}")
+
         elif result.status == "failure":
             failures += 1
             print("  -> UNEXPECTED FAILURE")

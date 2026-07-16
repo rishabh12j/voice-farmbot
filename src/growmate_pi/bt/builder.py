@@ -38,6 +38,7 @@ from growmate_pi.bt.action_nodes import (
     RecordSoil,
     Respond,
     StepNotify,
+    StowTool,
     SummariseSmart,
     TaskBoundary,
     Wait,
@@ -86,6 +87,36 @@ def _safety_and_target(
         CheckPlantFound(),
         CheckBounds(garden),
     ]
+
+
+def _target_resolvable(garden: GardenConfig, target: str) -> bool:
+    """True if ``target`` resolves the way ``_move_to_named_target`` will.
+
+    Mirrors that function's resolution order exactly — live active_map first,
+    config second — so a caller can decide to refuse *before* committing to a
+    tool change or any motion, and can never refuse a target the move would
+    have found. Keep the two in step: if the resolution order changes there, it
+    changes here.
+    """
+    from growmate_pi.intent_server import find_plants_by_species
+
+    if find_plants_by_species(target):
+        return True
+    return garden.resolve_target(target) is not None
+
+
+def _refuse_unknown_target(label: str, target: str) -> py_trees.behaviour.Behaviour:
+    """Clean refusal for a target that resolves to nothing.
+
+    Q-design, same as ``_tree_water``: an unknown place is a user-vocabulary
+    problem, not a robot malfunction. SUCCESS + a spoken "I don't see any X",
+    never a tree FAILURE and never a fallback coordinate.
+    """
+    return _seq(
+        f"{label} {target} (no match)",
+        Respond(f"I don't see any {target} in this garden. "
+                "Tell me a different plant."),
+    )
 
 
 def _move_to_named_target(
@@ -609,6 +640,16 @@ def _tree_photo(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
     # If a target is given, move there first; otherwise take photo at current pos.
     # Target position comes from the live active_map (via _move_to_named_target),
     # not the stale config — same source as move/water.
+    #
+    # Resolve-or-refuse comes FIRST, before the TaskBoundary: an unknown target
+    # used to reach _move_to_named_target's ResolveTarget/CheckPlantFound and
+    # abort the tree as a FAILURE mid-task, which the UI then narrated as "I
+    # couldn't finish". An unknown plant name is a vocabulary problem, not a
+    # malfunction — refuse cleanly like _tree_water does.
+    target = (intent.target or "").strip()
+    if target and not _target_resolvable(garden, target):
+        return _refuse_unknown_target("Photo of", target)
+
     total = 2 if intent.target else 1
     children = [
         TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
@@ -898,6 +939,15 @@ def _tree_check_sensor(bridge, garden, intent: Intent) -> py_trees.behaviour.Beh
     # The soil probe is a tool head — make sure it's mounted before reading
     # (no-op if it already is). Move to the plant afterwards so the probe goes
     # in at the right spot.
+    #
+    # Resolve-or-refuse BEFORE EnsureTool. The old order mounted the probe at
+    # step 1 and only discovered at step 2 that the target resolves to nothing:
+    # ~20 s of bay choreography spent to then abort as a FAILURE, with the head
+    # left on. Deciding first costs one map lookup and makes the refusal clean.
+    target = (intent.target or "").strip()
+    if target and not _target_resolvable(garden, target):
+        return _refuse_unknown_target("Check sensor at", target)
+
     total = 3 if intent.target else 2
     children = [
         TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
@@ -933,6 +983,84 @@ def _tree_check_moisture(bridge, intent: Intent) -> py_trees.behaviour.Behaviour
         CheckAvailable(bridge),
         PublishCmd("P_9", bridge, name="CheckMoisture"),
         Respond(intent.response),
+    )
+
+
+def _spoken_tool_list(garden: GardenConfig) -> str:
+    """The heads this robot actually has, as a spoken list.
+
+    Read from the config rather than hardcoded: gh2 has no rotating weeder, so
+    it must not offer one.
+    """
+    names = [t.replace("_", " ") for t in sorted(garden.tools_by_name())]
+    if not names:
+        return "no tools at all"
+    if len(names) == 1:
+        return f"the {names[0]}"
+    return "the " + ", the ".join(names[:-1]) + ", or the " + names[-1]
+
+
+def _tree_mount_tool(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Put a named head on the UTM.
+
+    ``EnsureTool`` does the work, including stowing whatever is already on —
+    so "pick up the nozzle" while the probe is mounted is a full swap, and
+    asking for the head that is already on is a no-op with no motion.
+    """
+    spoken = (intent.target or "").strip()
+    if not spoken:
+        return _seq(
+            "Mount tool (no target)",
+            Respond(f"Which tool would you like? I have "
+                    f"{_spoken_tool_list(garden)}."),
+        )
+    tool = garden.resolve_tool(spoken)
+    if tool is None:
+        # Clean refusal, same Q-design as an unknown plant: never mount a
+        # different head just because the name was close.
+        return _seq(
+            f"Mount {spoken} (unknown tool)",
+            Respond(f"I don't have a {spoken}. I can pick up "
+                    f"{_spoken_tool_list(garden)}."),
+        )
+
+    name = tool.replace("_", " ")
+    return _seq(
+        f"Mount {tool}",
+        TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
+                     label=f"Fetching the {name}", total_steps=1,
+                     name="BeginTask(mount_tool)"),
+        CheckAvailable(bridge),
+        StepNotify(1, f"fetching the {name}", name="Step(1/1)"),
+        EnsureTool(bridge, tool, garden.tools_by_name(),
+                   pin_usable=garden.tool_verify_pin()),
+        # Past-tense, and only as strong as the evidence: the seat is confirmed
+        # only where the pin can be read. See StowTool for the same rule.
+        Respond(f"The {name} is on."
+                if garden.tool_verify_pin()
+                else f"I've finished fetching the {name} — give it a quick "
+                     "look to be sure it's seated."),
+        TaskBoundary("end", name="EndTask"),
+    )
+
+
+def _tree_stow_tool(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
+    """Take the current head off and put it back in its bay.
+
+    Which head that is gets decided when the node ticks, not here — see
+    ``StowTool``. The node also speaks its own outcome, so there is no
+    trailing Respond to contradict it when the UTM turns out to be empty.
+    """
+    return _seq(
+        "Stow tool",
+        TaskBoundary("start", task_id=_uuid.uuid4().hex[:8],
+                     label="Putting the tool back", total_steps=1,
+                     name="BeginTask(stow_tool)"),
+        CheckAvailable(bridge),
+        StepNotify(1, "putting the tool back", name="Step(1/1)"),
+        StowTool(bridge, garden.tools_by_name(),
+                 pin_usable=garden.tool_verify_pin()),
+        TaskBoundary("end", name="EndTask"),
     )
 
 
@@ -998,6 +1126,10 @@ def build_subtree(
         return _tree_check_sensor(bridge, garden, intent)
     if a == "check_moisture":
         return _tree_check_moisture(bridge, intent)
+    if a == "mount_tool":
+        return _tree_mount_tool(bridge, garden, intent)
+    if a == "stow_tool":
+        return _tree_stow_tool(bridge, garden, intent)
     if a == "emergency_stop":
         return _tree_emergency(bridge, intent)
     if a == "general_question":
