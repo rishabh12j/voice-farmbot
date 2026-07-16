@@ -46,6 +46,14 @@ documentation/eval_v2_results.md
 documentation/eval/
 documentation/paper/
 documentation/MU EE696/
+# Community demo day: scanned questionnaire packets and named attendee
+# transcripts. Personal data with no consent basis for publication — origin is
+# a public remote. Never commit; use the anonymised themes in
+# documentation/eval/older_adult_demo_feedback.md instead.
+documentation/demo/
+# Page images rendered from those scans (the PDFs are image-only, so reading
+# them meant rasterising). Same personal data, same rule.
+.tmp_feedback_pages/
 
 # Agent scratch dirs
 .codex-tmp/
