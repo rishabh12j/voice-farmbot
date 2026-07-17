@@ -26,7 +26,7 @@ set -uo pipefail
 # name | ssh target | repo path on that Pi | expected plants | config (blank = launch default)
 GREENHOUSES=(
   "gh1|gh1@192.168.0.38|/home/gh1/Rishabh_Growmate_FarmBot|56|"
-  "gh2|farmbot@192.168.0.54|/home/farmbot/Rishabh_Growmate_FarmBot|35|src/growmate_pi/config/farmbotdev.yaml"
+  "gh2|farmbotdev@192.168.0.53|/home/farmbotdev/Rishabh_Growmate_FarmBot|35|src/growmate_pi/config/farmbotdev.yaml"
 )
 
 LOG="${GM_CONTROLLER_LOG:-$HOME/growmate-controller.log}"

@@ -10,16 +10,17 @@ must preserve — see [README.md](README.md).
 
 | | gh1 | gh2 |
 |---|---|---|
-| Address | `192.168.0.38` | `192.168.0.54` |
-| SSH user | `gh1` | `farmbot` |
+| Address | `192.168.0.38` | `192.168.0.53` |
+| SSH user | `gh1` | `farmbotdev` |
 | Plants | 56 | 35 |
 | Garden config | `src/growmate_pi/config/gh1.yaml` | `src/growmate_pi/config/farmbotdev.yaml` |
 | Map seed | `tools/maps/gh1.yaml` | `tools/maps/gh2.yaml` |
 | Status | primary thesis hardware | second greenhouse |
 
 Naming note: gh2 is the greenhouse previously called **farmbotdev**. Its Pi
-hostname is `farmbot` and its config file is still `farmbotdev.yaml` — the file
-has local edits, so the rename is deferred rather than forgotten.
+hostname and SSH user are both `farmbotdev` and its config file is still
+`farmbotdev.yaml` — the file has local edits, so the rename is deferred rather
+than forgotten.
 
 `src/growmate_pi/config/farmbot.yaml` is neither greenhouse: it is the **sim
 default** used by the desktop client and the eval harness.
@@ -28,7 +29,7 @@ default** used by the desktop client and the eval harness.
 
 ## 1. Pi — update
 
-SSH in (`ssh gh1@192.168.0.38` / `ssh farmbot@192.168.0.54`), then:
+SSH in (`ssh gh1@192.168.0.38` / `ssh farmbotdev@192.168.0.53`), then:
 
 ```bash
 cd ~/Rishabh_Growmate_FarmBot
@@ -185,7 +186,7 @@ $env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;" + $env:PYTHONP
 python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
 
 # gh2
-python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.54:8000/intent
+python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.53:8000/intent
 ```
 
 Look for `V2 mode: dispatching to Pi at ...` and `Pi ready: ...`, then open

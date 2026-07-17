@@ -19,8 +19,8 @@ is built this way see [README.md](README.md).
 controller box (always on)
   cron 08:00 / 17:00
     └─ tools/growmate-water-all.sh
-         ├── ssh gh1@192.168.0.38 ─┐   (detached — survives an SSH drop)
-         └── ssh farmbot@…0.54 ────┤
+         ├── ssh gh1@192.168.0.38 ──────┐   (detached — survives an SSH drop)
+         └── ssh farmbotdev@…0.53 ──────┤
                                    └─ tools/growmate-water-run.sh   ON EACH PI
                                         1. is the robot free?   no -> SKIP, log, exit 10
                                         2. launch stack (scheduler:=false)
@@ -64,11 +64,11 @@ The cron job cannot type a password. From the controller:
 ```bash
 ssh-keygen -t ed25519 -C growmate-controller     # if you don't have a key
 ssh-copy-id gh1@192.168.0.38
-ssh-copy-id farmbot@192.168.0.54
+ssh-copy-id farmbotdev@192.168.0.53
 
 # must both print 'ok' with no prompt:
 ssh -o BatchMode=yes gh1@192.168.0.38 'echo ok'
-ssh -o BatchMode=yes farmbot@192.168.0.54 'echo ok'
+ssh -o BatchMode=yes farmbotdev@192.168.0.53 'echo ok'
 ```
 
 `BatchMode=yes` is what the script uses. If that command prompts or hangs, cron
@@ -85,7 +85,7 @@ chmod +x tools/growmate-water-run.sh
 ls -l ~/use-rishabh.sh || cp tools/use-rishabh.sh ~/use-rishabh.sh   # §1c of RUNBOOK
 ```
 
-Repeat on gh2 (`farmbot@192.168.0.54`).
+Repeat on gh2 (`farmbotdev@192.168.0.53`).
 
 ### 1c. The controller script
 
@@ -99,7 +99,7 @@ that Pi, and expected plant count:
 ```bash
 GREENHOUSES=(
   "gh1|gh1@192.168.0.38|/home/gh1/Rishabh_Growmate_FarmBot|56|"
-  "gh2|farmbot@192.168.0.54|/home/farmbot/Rishabh_Growmate_FarmBot|35|src/growmate_pi/config/farmbotdev.yaml"
+  "gh2|farmbotdev@192.168.0.53|/home/farmbotdev/Rishabh_Growmate_FarmBot|35|src/growmate_pi/config/farmbotdev.yaml"
 )
 ```
 
