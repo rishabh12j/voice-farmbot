@@ -144,6 +144,27 @@ class AICore:
 
     def _classify_prompt(self, live_plants: Optional[List[str]] = None,
                          memory: Optional[dict] = None):
+        # PROMPT-EDIT WARNING, learned the expensive way (2026-07-16, ablated
+        # against gemma3:4b at N=5 per probe):
+        #
+        # There is deliberately NO rule teaching "drive/head/go over to X =
+        # move". One was added and it did two things, both invisible in review:
+        #   * "water everything" flipped water_all -> water (5/5 -> 0/5), which
+        #     hits _tree_water's no-target stub and publishes NOTHING. The
+        #     safety category fell 100% -> 33% and a 1600-case corpus run had
+        #     to be thrown away.
+        #   * the model lifted the word "drive" straight out of the rule's prose
+        #     and emitted it as the ACTION, which pydantic 422s at /intent.
+        # The EXAMPLES below do the same job with none of the damage: they take
+        # "drive to the basil" -> move from 0/5 to 5/5 while water_all stays 5/5
+        # and "drive to the shop" stays general_question 5/5.
+        #
+        # Rule of thumb: teach this model with examples, not prose. A rule is a
+        # global instruction and bleeds into neighbouring intents; an example is
+        # local. If you add prose here, re-probe water_all before you trust it —
+        # rule 18 (tools) was ablated clean, so it is not the hazard; a rule that
+        # names an action-like verb is.
+        #
         # Ground the model in what is ACTUALLY planted (the live active_map from
         # the Pi) rather than a static config superset. This is the garden
         # "memory" the brain infers from: targets resolve to real plants, so we
@@ -185,9 +206,8 @@ RULES:
 14. If the user names a specific plant, use THAT name as the target verbatim — even when it is not in CURRENTLY PLANTED. The robot checks its own map and refuses safely. NEVER substitute a different plant for the one the user named, and never turn an explicit robot command into a general_question.
 15. NEGATIONS: "don't water X", "no need to …", "leave it", "never mind", "not today" = the user wants NO robot action. Classify as general_question with a short acknowledgment response ("Alright, I won't.") — never move, water, or home the robot on a negation. The action MUST be one of the AVAILABLE ACTIONS exactly — never invent a new action word. BUT: if the user says THEY can't do something and asks the robot to do it instead ("I can't water them today, can you do it", "my back hurts, please water them for me"), that is a COMMAND, not a negation — the inability is theirs, the request is real.
 16. "go/pop over to X and see/check how it's doing" = check_sensor on X (the robot moves there as part of the check).
-17. OUT OF SCOPE: this robot ONLY gardens (water, move, lights, photo, weeds, soil, plant map). Any request it cannot physically do as a garden robot — open a door, make tea, play music, move furniture, drive somewhere off the garden, answer non-garden trivia — is general_question with a response that politely says it only looks after the garden. NEVER map an out-of-scope request onto a robot action just because a word sounds similar ("door"/"home", "clean"/"clear"). When in doubt between a robot action and none, prefer general_question — a wrong move erodes trust more than a polite "I can't".
+17. OUT OF SCOPE: this robot ONLY gardens (water, move, lights, photo, weeds, soil, plant map). Any request it cannot physically do as a garden robot — open a door, make tea, play music, move furniture, drive somewhere, answer non-garden trivia — is general_question with a response that politely says it only looks after the garden. NEVER map an out-of-scope request onto a robot action just because a word sounds similar ("door"/"home", "clean"/"clear"). When in doubt between a robot action and none, prefer general_question — a wrong move erodes trust more than a polite "I can't".
 18. TOOL HEADS: "pick up / get / fetch / put on / grab the X" where X is a tool (watering nozzle, soil probe, weeder, seeder) = mount_tool with target X. "put it back", "put the X away", "stow it", "take it off", "drop the tool" = stow_tool with target null (the robot already knows what it is holding — never guess a target for stow_tool). Only use these when the user asks for the TOOL ITSELF; ordinary jobs like water/check_sensor fetch their own head, so "water the tomatoes" is water, NOT mount_tool + water.
-19. GOING somewhere IN the garden = move. "drive/head/pop/get over to X", "take the robot to X", "bring it to X", "over to X" where X is a plant or garden location = move with target X. The gantry moving to a plant is the robot's own workspace, NOT the "drive somewhere" of rule 17 — that means off the garden ("drive to the shop", "drive me to town"), which stays general_question. If the going is paired with seeing/checking ("go over and see how X is doing"), rule 16 wins and it is check_sensor.
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
