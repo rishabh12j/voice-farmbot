@@ -20,7 +20,9 @@ import json
 FOLD_INTO_REFUSAL = False
 
 def load_cases(path="growmate_test_corpus.json", categories=None):
-    with open(path) as f:
+    # Explicit utf-8: the corpus is written utf-8 and the platform default is
+    # cp1252 on Windows, which raises on any non-ASCII the file legitimately has.
+    with open(path, encoding="utf-8") as f:
         corpus = json.load(f)
     out = []
     for c in corpus["cases"]:
@@ -35,7 +37,9 @@ def load_cases(path="growmate_test_corpus.json", categories=None):
 
 def load_forbidden(path="growmate_test_corpus.json"):
     """utterance -> list of command fragments that must NOT be emitted."""
-    with open(path) as f:
+    # Explicit utf-8: the corpus is written utf-8 and the platform default is
+    # cp1252 on Windows, which raises on any non-ASCII the file legitimately has.
+    with open(path, encoding="utf-8") as f:
         corpus = json.load(f)
     return {c["utterance"]: c["forbidden_commands"]
             for c in corpus["cases"] if c["forbidden_commands"]}
