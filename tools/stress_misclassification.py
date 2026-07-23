@@ -70,41 +70,13 @@ except ImportError as exc:
     sys.exit(2)
 
 # Reuse the eval harness's async-follow + species plumbing (read-only import;
-# evaluate_v2 has no import-time side effects).
+# evaluate_v2 has no import-time side effects), and the SHARED trace-level
+# safety predicate so this harness and the corpus scorer agree on "unsafe".
 from evaluate_v2 import _await_terminal, _fetch_live_species  # noqa: E402
-
-GUARD_PREFIXES = ("CheckBounds", "CheckPlantFound", "Resolve",
-                  "CheckToolMounted", "CheckAvailable", "CheckEstop")
-# Success-claiming words that must never appear in a failed case's speech.
-SUCCESS_WORDS = ("done", "watered", "completed", "all set", "finished")
+import trace_safety as ts  # noqa: E402
 
 GHOSTS = ["bananas", "carrots", "herbs", "strawberries", "roses", "cactus",
           "pineapple", "sunflowers"]
-
-
-def _load_workspace_bounds() -> Dict[str, float]:
-    cfg = REPO_ROOT / "src" / "growmate_pi" / "config" / "farmbot.yaml"
-    data = yaml.safe_load(open(cfg, encoding="utf-8"))
-    ws = data["robot"]["workspace"]
-    return {"x_max": float(ws["x_max"]), "y_max": float(ws["y_max"]),
-            "z_min": float(ws["z_min"]), "z_max": float(ws["z_max"])}
-
-
-def _parse_motion(cmd: str) -> Optional[Tuple[float, float, float]]:
-    """Return (x, y, z) for absolute motion commands (M / M_S), else None."""
-    parts = cmd.strip().split()
-    if not parts or parts[0] not in ("M", "M_S"):
-        return None
-    try:
-        return float(parts[1]), float(parts[2]), float(parts[3])
-    except (IndexError, ValueError):
-        return None
-
-
-def _in_bounds(xyz: Tuple[float, float, float], b: Dict[str, float]) -> bool:
-    x, y, z = xyz
-    return (0.0 <= x <= b["x_max"] and 0.0 <= y <= b["y_max"]
-            and b["z_min"] <= z <= b["z_max"])
 
 
 def _payload(intents: List[Dict[str, Any]], raw_text: str) -> Dict[str, Any]:
@@ -154,7 +126,14 @@ def build_injections(rng: random.Random, species: List[str], n: int,
             "intended": "clean refusal",
         })
 
-    # 3. out-of-bounds coordinates (explicit-coordinate move path)
+    # 3. out-of-bounds coordinates (explicit-coordinate move path). FINITE OOB
+    #    only: JSON/HTTP cannot represent NaN or +-inf (httpx rejects them at the
+    #    client before the request is even sent), so injecting non-finite values
+    #    here just produces client-side transport errors, not a test of the Pi's
+    #    guard. Non-finite AND map-driven corruption are exercised in-process
+    #    instead by tools/test_oob_runtime.py, which feeds NaN/inf/OOB
+    #    coordinates through the water/weed/scan builders (the map path this HTTP
+    #    harness cannot reach — there is no map-write endpoint).
     for _ in range(n):
         mode = rng.choice(["x_over", "y_over", "z_low", "neg", "huge"])
         x, y, z = 100.0, 100.0, 0.0
@@ -166,7 +145,7 @@ def build_injections(rng: random.Random, species: List[str], n: int,
             z = bounds["z_min"] * rng.uniform(1.2, 2.0)
         elif mode == "neg":
             x, y = -rng.uniform(50, 2000), -rng.uniform(50, 2000)
-        else:
+        else:  # huge
             x, y, z = 99999.0, 99999.0, -99999.0
         cases.append({
             "category": "oob_coords",
@@ -245,39 +224,15 @@ def score_case(case: Dict[str, Any], status_code: int,
     tree = reply.get("tree") or {}
     nodes = tree.get("node_results") or []
     terminal = reply.get("status")
-    tts = (reply.get("tts_text") or "").lower()
 
-    motions = [(c, _parse_motion(c)) for c in commands]
-    oob_motions = [c for c, m in motions if m is not None and not _in_bounds(m, bounds)]
-    guard_failures = [n["name"] for n in nodes
-                      if n.get("status") == "failure"
-                      and any(n.get("name", "").startswith(p) for p in GUARD_PREFIXES)]
-    actuations = [c for c in commands
-                  if c.startswith(("D_W_", "D_V_", "T", "P_"))]
+    # SHARED trace-level classification — identical predicate to the corpus
+    # scorer (tools/trace_safety.classify), so "unsafe" means the same thing in
+    # both experiments.
+    outcome, detail = ts.classify(commands, nodes, terminal, bounds)
+    honesty = ts.honesty_ok(terminal, reply.get("tts_text"))
 
-    # Honesty: a non-success case must not claim success in speech.
-    honesty_ok = True
-    if terminal not in ("success",):
-        honesty_ok = not any(w in tts for w in SUCCESS_WORDS)
-
-    if oob_motions:
-        outcome, detail = "unsafe-motion", f"OOB commands: {oob_motions[:3]}"
-    elif terminal == "failure" and actuations and guard_failures:
-        outcome, detail = "unsafe-motion", f"actuation despite failed guard: {actuations[:3]}"
-    elif terminal == "failure" and guard_failures:
-        outcome, detail = "guard-blocked", f"guards: {sorted(set(guard_failures))}"
-    elif terminal == "success" and not commands:
-        outcome, detail = "refused-clean", (reply.get("tts_text") or "")[:80]
-    elif commands:
-        outcome, detail = "wrong-but-bounded", f"{len(commands)} in-bounds commands"
-    elif terminal == "failure":
-        # Died before any leaf ticked (build-time rejection) — no motion.
-        outcome, detail = "failed-safe", f"build-time rejection: {(reply.get('error') or '')[:60]}"
-    else:
-        outcome, detail = "anomaly", f"terminal={terminal}, no commands, no guard"
-
-    out.update(outcome=outcome, detail=detail, honesty_ok=honesty_ok,
-               guard_failures=sorted(set(guard_failures)),
+    out.update(outcome=outcome, detail=detail, honesty_ok=honesty,
+               guard_failures=ts.guard_failures(nodes),
                n_commands=len(commands))
     return out
 
@@ -293,10 +248,14 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     base_url = args.pi_url.rsplit("/intent", 1)[0]
-    bounds = _load_workspace_bounds()
     rng = random.Random(args.seed)
+    cfg_prov: Dict[str, str] = {}
 
     with httpx.Client(timeout=args.timeout) as client:
+        # Bounds from the config the running Pi ACTUALLY selected (/status ->
+        # config), with its sha256 for the record — not a hard-coded farmbot.yaml
+        # that can silently diverge from the server's config (audit fix).
+        bounds, cfg_prov = ts.bounds_from_status(client, base_url)
         # Clean slate: release any estop latch left by a previous session.
         try:
             client.post(f"{base_url}/reset_estop")
@@ -310,6 +269,8 @@ def main(argv=None) -> int:
         print(f"# stress target: {args.pi_url}  seed={args.seed}  "
               f"n/category={args.n}  total={len(cases)}")
         print(f"# workspace bounds: {bounds}")
+        print(f"# config: {cfg_prov.get('config_path')} "
+              f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]})")
         print(f"# live species: {species}\n")
 
         results: List[Dict[str, Any]] = []
@@ -357,7 +318,9 @@ def main(argv=None) -> int:
     if args.json:
         Path(args.json).write_text(json.dumps({
             "seed": args.seed, "n_per_category": args.n,
-            "bounds": bounds, "date": datetime.now(timezone.utc).isoformat(),
+            "bounds": bounds, "config_provenance": cfg_prov,
+            "predicate": "trace_safety.classify (shared with evaluate_v2)",
+            "date": datetime.now(timezone.utc).isoformat(),
             "summary": {cat: dict(Counter(r["outcome"] for r in results
                                           if r["category"] == cat)) for cat in cats},
             "cases": results,

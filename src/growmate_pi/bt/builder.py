@@ -345,6 +345,11 @@ def _tree_water(bridge, garden, intent: Intent) -> py_trees.behaviour.Behaviour:
         children.extend([
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, step_label, name=f"Step({i}/{total})"),
+            # Guard the map coordinate before the gantry moves — the research
+            # contract's bounds prefix, made real for the multi-plant loop. A
+            # corrupt/mutated active_map coord fails here (fail-closed) instead
+            # of publishing an out-of-bounds M command.
+            CheckBounds(garden, x=x, y=y, z=z, name=f"CheckBounds({plant_name})"),
             MoveTo(bridge, x=x, y=y, z=z, verify=True,
                    timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})",
                    check_mm=garden.position_verify_mm()),
@@ -453,6 +458,9 @@ def _tree_water_all(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavi
         children.extend([
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, step_label, name=f"Step({i}/{total})"),
+            # Bounds prefix before the map-coordinate move (fail-closed). See
+            # _tree_water for the rationale.
+            CheckBounds(garden, x=x, y=y, z=z, name=f"CheckBounds({plant_name})"),
             MoveTo(bridge, x=x, y=y, z=z, verify=True,
                    timeout_s=MOVE_TIMEOUT_S, name=f"MoveTo({plant_name})",
                    check_mm=garden.position_verify_mm()),
@@ -550,6 +558,8 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         children.extend([
             CheckEstop(name=f"CheckEstop.sense({i})"),
             StepNotify(i, f"checking {pname} ({i}/{total})", name=f"Sense({i}/{total})"),
+            # Bounds prefix before the sense move (fail-closed).
+            CheckBounds(garden, x=x, y=y, z=0.0, name=f"CheckBounds.sense({pname})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
                    name=f"MoveTo.sense({pname})",
                    check_mm=garden.position_verify_mm()),
@@ -587,6 +597,8 @@ def _tree_water_smart(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
                      name=f"CheckDry({pname})"),
             CheckEstop(name=f"CheckEstop.water({i})"),
             StepNotify(i, f"watering {pname} ({i}/{total})", name=f"Water({i}/{total})"),
+            # Bounds prefix before the water move (fail-closed).
+            CheckBounds(garden, x=x, y=y, z=0.0, name=f"CheckBounds.water({pname})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
                    name=f"MoveTo.water({pname})",
                    check_mm=garden.position_verify_mm()),
@@ -760,12 +772,19 @@ def _tree_clear_weeds(bridge, garden, intent: Intent) -> py_trees.behaviour.Beha
         children.extend([
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, f"weed {i}/{total}", name=f"Weed({i}/{total})"),
+            # BT bounds guard before EVERY move, one per plunge level (the z
+            # differs). Belt-and-braces with the Python in-bounds pre-filter
+            # above: the research contract wants the guard leaf in the tree,
+            # not only trust in the pre-filter (audit closure criterion #1).
+            CheckBounds(garden, x=x, y=y, z=0.0, name=f"CheckBounds.over({i})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
                    name=f"OverWeed({i})",
                    check_mm=garden.position_verify_mm()),
+            CheckBounds(garden, x=x, y=y, z=WEED_PLUNGE_Z, name=f"CheckBounds.plunge({i})"),
             MoveTo(bridge, x=x, y=y, z=WEED_PLUNGE_Z, verify=True,
                    timeout_s=MOVE_TIMEOUT_S, name=f"Plunge({i})",
                    check_mm=garden.position_verify_mm()),
+            CheckBounds(garden, x=x, y=y, z=0.0, name=f"CheckBounds.raise({i})"),
             MoveTo(bridge, x=x, y=y, z=0.0, verify=True, timeout_s=MOVE_TIMEOUT_S,
                    name=f"Raise({i})",
                    check_mm=garden.position_verify_mm()),
@@ -823,6 +842,10 @@ def _tree_scan_bed(bridge, garden, intent: Intent) -> py_trees.behaviour.Behavio
         children.extend([
             CheckEstop(name=f"CheckEstop({i})"),
             StepNotify(i, f"scanning {i}/{total}", name=f"Scan({i}/{total})"),
+            # Grid coords are already clamped to config bounds above, so this
+            # guard should never fire — but the contract's bounds prefix belongs
+            # before every move, and it catches a future clamp/config bug.
+            CheckBounds(garden, x=x, y=y, z=SCAN_Z, name=f"CheckBounds.scan({i})"),
             MoveTo(bridge, x=x, y=y, z=SCAN_Z, verify=True, timeout_s=MOVE_TIMEOUT_S,
                    name=f"MoveTo.scan({i})",
                    check_mm=garden.position_verify_mm()),

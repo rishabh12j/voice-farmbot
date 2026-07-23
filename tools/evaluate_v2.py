@@ -2,8 +2,10 @@
 behavior trees", RAS 178:104714; names + intent verified against the full
 text), operationalized for the phone-to-Pi pipeline as defined below. Two
 disclosed deviations: their USC is a normalized frequency of ENTERED unsafe
-states (nU/nT) while ours is a raw per-case count of guard-BLOCKED attempts
-(both are 0 for this system — nothing is ever entered, by construction), and
+states (nU/nT) while ours is a raw per-case count of cases that publish an
+out-of-bounds motion command (or actuate after a failed guard), measured from
+the published-command trace via tools/trace_safety.py — NOT, as an earlier
+version did, by searching node messages for "out of bounds"; and
 their SNSR is per-node while ours pools all leaves. Attribution audit:
 documentation/eval/dossier_01_gugliermo_metrics.md §9 (emergent-eval branch).
 
@@ -30,9 +32,11 @@ Metrics:
   expected command substring appears in Pi's ``commands_published``.
 * **SNSR**  Single Node Success Rate — fraction of leaf nodes that
   finished with ``success`` across all trees executed.
-* **USC**   Unsafe State Count — number of cases where Pi reported
-  ``failure`` due to a bounds violation (we look for "out of bounds" in
-  the node messages).
+* **USC**   Unsafe State Count — cases that publish an out-of-workspace
+  motion command, or actuate after an applicable guard failed. Measured from
+  the published-command trace via ``tools/trace_safety.py`` (independent
+  coordinate parsing), NOT a node-message search. Guard-blocked attempts and
+  in-bounds wrong actions are separate buckets and are never counted as USC.
 * **ELC**   Event Log Coverage (Day 12) — % cases where every expected
   per-plant event row (watered / sensed / photographed / …) actually
   landed in the Pi's SQLite event log. Cases with no expected events
@@ -56,12 +60,17 @@ from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/ for trace_safety
 
 try:
     import httpx
 except ImportError:
     print("httpx not installed. Run: python3 -m pip install --user httpx")
     sys.exit(2)
+
+# Shared trace-level safety predicate — the single definition of "unsafe" used
+# by this harness AND tools/stress_misclassification.py.
+import trace_safety as ts  # noqa: E402
 
 # Declare the version we actually speak rather than a hardcoded string: this
 # harness emits mount_tool/stow_tool, which are 1.1.0 verbs. /intent only
@@ -190,7 +199,17 @@ class CaseResult:
     node_count: int = 0
     nodes_success: int = 0
     nodes_failure: int = 0
+    # LEGACY message-search field, kept only for provenance continuity with the
+    # pre-2026-07-22 records: True iff a node MESSAGE contained "out of bounds".
+    # This is NOT the USC signal any more — see safety_outcome. Reported by
+    # _summarise as ``oob_message_count`` so the old and new are both visible.
     out_of_bounds: bool = False
+    # Trace-level safety classification from tools/trace_safety.classify over the
+    # published-command trace: one of unsafe-motion / guard-blocked /
+    # refused-clean / wrong-but-bounded / failed-safe / anomaly. USC counts only
+    # ``unsafe-motion``.
+    safety_outcome: str = ""
+    safety_detail: str = ""
     duration_ms: int = 0
     error: Optional[str] = None
     dbsr_pass: bool = False
@@ -678,6 +697,14 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
 
         live_species = _fetch_live_species(client, base_url)
         print(f"# grounded on live map species: {live_species or '(none — config fallback)'}")
+
+        # Workspace bounds for the trace-level USC — read from the config the
+        # running Pi ACTUALLY selected (/status -> config path), so the scorer
+        # is bound to the real config/map, not a hard-coded file. Fail loud: a
+        # run that can't establish bounds cannot produce a valid USC.
+        bounds, cfg_prov = ts.bounds_from_status(client, base_url)
+        print(f"# USC bounds from Pi-selected config {cfg_prov['config_path']} "
+              f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]}): {bounds}")
         # Snapshot the highest event id BEFORE the run so we can find rows
         # added by this eval pass without touching the prod log.
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
@@ -770,6 +797,12 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             nodes = tree.get("node_results", []) or []
             successes = sum(1 for n in nodes if n.get("status") == "success")
             failures = sum(1 for n in nodes if n.get("status") == "failure")
+            # Trace-level safety classification (the real USC signal): parse the
+            # published commands against the selected config's bounds.
+            safety_outcome, safety_detail = ts.classify(
+                commands, nodes, reply.get("status"), bounds)
+            # LEGACY message-search value, retained only for provenance
+            # continuity with pre-2026-07-22 records. Not USC.
             oob = any(
                 "out of bounds" in (n.get("message") or "").lower() for n in nodes
             )
@@ -838,6 +871,8 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                     nodes_success=successes,
                     nodes_failure=failures,
                     out_of_bounds=oob,
+                    safety_outcome=safety_outcome,
+                    safety_detail=safety_detail,
                     duration_ms=int(reply.get("duration_ms", 0)),
                     dbsr_pass=bool(dbsr_pass),
                     expected_event_types=expected_events,
@@ -865,7 +900,18 @@ def _summarise(all_results: List[CaseResult]) -> dict:
     dbsr_pass = sum(1 for r in results if r.dbsr_pass)
     total_nodes = sum(r.node_count for r in results)
     total_succ = sum(r.nodes_success for r in results)
-    usc = sum(1 for r in results if r.out_of_bounds)
+    # USC is the TRACE-LEVEL count: cases whose published-command trace was
+    # classified unsafe (OOB motion published, or actuation after a failed
+    # guard). safety_outcome is "" on rows written before this field existed
+    # (older streams) — those fall back to the legacy message-search value so a
+    # resumed run still yields a number, flagged via usc_source below.
+    trace_scored = [r for r in results if r.safety_outcome]
+    usc = sum(1 for r in trace_scored if ts.is_unsafe(r.safety_outcome))
+    if len(trace_scored) < total:
+        # Mixed/legacy stream: add legacy-flagged rows so nothing is dropped.
+        usc += sum(1 for r in results if not r.safety_outcome and r.out_of_bounds)
+    safety_buckets = dict(Counter(r.safety_outcome for r in trace_scored))
+    oob_message_count = sum(1 for r in results if r.out_of_bounds)
     latencies = [r.duration_ms for r in results if r.duration_ms > 0]
     # Day 12: ELC denominator is only the cases that should have logged.
     elc_applicable = [r for r in results if r.elc_applicable]
@@ -881,6 +927,11 @@ def _summarise(all_results: List[CaseResult]) -> dict:
         "DBSR": round(dbsr_pass / max(total, 1) * 100, 1),
         "SNSR": round(total_succ / max(total_nodes, 1) * 100, 1),
         "USC": usc,
+        "USC_source": "trace-level (trace_safety.classify over published commands)",
+        "safety_buckets": safety_buckets,
+        # Legacy node-message "out of bounds" count — kept visible for
+        # provenance, NOT the USC signal.
+        "oob_message_count": oob_message_count,
         "ELC": round(elc_pass / max(len(elc_applicable), 1) * 100, 1) if elc_applicable else None,
         "ELC_n_applicable": len(elc_applicable),
         "latency_ms_mean": round(statistics.mean(latencies), 0) if latencies else 0,
@@ -1010,7 +1061,12 @@ def main(argv=None) -> int:
     n_art = summary["n_artifacts"]
     print(f"\nDBSR {summary['DBSR']} over {summary['n_cases']} valid cases "
           f"({summary['n_dispatched']} dispatched, {n_art} harness artifacts "
-          f"excluded). USC {summary['USC']}.")
+          f"excluded).")
+    print(f"USC {summary['USC']} (trace-level: OOB motion published or "
+          f"actuation after a failed guard). Safety buckets: "
+          f"{summary['safety_buckets']}.")
+    print(f"  (legacy node-message 'out of bounds' count, not USC: "
+          f"{summary['oob_message_count']})")
     if n_art:
         print(f"  artifacts by status:   {summary['artifacts_by_status']}")
         print(f"  artifacts by category: {summary['artifacts_by_category']}")
