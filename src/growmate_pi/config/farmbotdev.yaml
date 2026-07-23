@@ -22,15 +22,11 @@ robot:
     z_max: 0
 
 garden:
-  plants:
-    # TODO: populate from farmbotdev's plants (one representative entry per
-    # species for voice targeting). Example shape:
-    # - name: tomatoes
-    #   aliases: [the tomatoes, tomato bed]
-    #   position: {x: 0, y: 0, z: 0}   # central plant of that species
-    #   water_quantity: 2
-    #   stage: seedling
-    []
+  # plants: RETIRED 2026-07-08 — plant positions now come from the live
+  # active_map (calibrate.py maintains it); move/water/photo/check_sensor
+  # all resolve there. The old static positions here were a frozen snapshot
+  # calibrate.py never refreshed. Species vocab for the LLM comes from the
+  # live map (/plants/species), not this file.
 
   locations:
     - name: home
@@ -93,10 +89,11 @@ commands:
 # *** TODO: measure farmbotdev's own bays with tools/calibrate_tools.py — these
 # are PLACEHOLDERS (gh1's positions will be wrong for this greenhouse). ***
 tools:
-  soil_sensor:     {index: 1, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
-  watering_nozzle: {index: 2, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
-  seeder:          {index: 3, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
-  weeder:          {index: 4, x: 0.0, y: 0.0, z: -250.0, release_dir: 2}
+  # Measured on farmbotdev (calibrate_tools.py):
+  soil_sensor:     {index: 1, x: 10.0, y: 355.0, z: -399.04, release_dir: 2}
+  watering_nozzle: {index: 2, x: 10.0, y: 455.0, z: -399.04, release_dir: 2}
+  seeder:          {index: 3, x: 10.0, y: 555.0, z: -399.04, release_dir: 2}
+  weeder:          {index: 4, x: 10.0, y: 655.0, z: -399.04, release_dir: 2}
 
 # Safety rules (shared with gh1).
 safety:
