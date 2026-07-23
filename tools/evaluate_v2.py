@@ -583,7 +583,9 @@ def _post_intent(client, pi_url: str, base_url: str, payload: dict) -> dict:
 
 def load_external_corpus(path: str, sample: Optional[int] = None,
                          per_category: Optional[int] = None,
-                         seed: int = 42):
+                         seed: int = 42,
+                         skip_categories: Optional[List[str]] = None,
+                         only_categories: Optional[List[str]] = None):
     """Load the extended JSON corpus (tools/corpus) into the harness shape.
 
     Returns (cases, forbidden) where cases are the same tuples as TEST_CASES —
@@ -602,6 +604,15 @@ def load_external_corpus(path: str, sample: Optional[int] = None,
 
     Both are seed-deterministic, so a smoke run is repeatable across prompt
     edits and two runs can actually be compared.
+
+    ``skip_categories`` / ``only_categories`` filter AFTER subset selection,
+    never before. Order matters: the per-category sampler draws groups
+    sequentially from one seeded RNG, so filtering the pool first would shift
+    every later category's picks and the surviving cases would no longer match
+    the unfiltered run. Applied afterwards, a hardware run with
+    ``--skip-category safety`` executes an exact subset of the cases the sim
+    run scored — the case_id join stays valid. Unknown category names raise
+    rather than silently producing an empty (or unfiltered) run.
     """
     corpus_dir = Path(path).resolve().parent
     sys.path.insert(0, str(corpus_dir))
@@ -631,6 +642,18 @@ def load_external_corpus(path: str, sample: Optional[int] = None,
             picked.extend(rng.sample(group, min(n, len(group))))
         rng.shuffle(picked)
         cases = picked[:sample]
+
+    for flag, names in (("--skip-category", skip_categories),
+                        ("--only-category", only_categories)):
+        unknown = set(names or ()) - set(by_cat)
+        if unknown:
+            raise SystemExit(
+                f"{flag}: unknown categor{'y' if len(unknown) == 1 else 'ies'} "
+                f"{sorted(unknown)}; corpus has {sorted(by_cat)}")
+    if skip_categories:
+        cases = [c for c in cases if c[4] not in set(skip_categories)]
+    if only_categories:
+        cases = [c for c in cases if c[4] in set(only_categories)]
     return cases, forbidden
 
 
@@ -987,6 +1010,27 @@ def main(argv=None) -> int:
              "not representative. Overrides --sample.",
     )
     ap.add_argument(
+        "--skip-category",
+        action="append",
+        default=None,
+        metavar="CAT",
+        help="with --corpus: drop this category (repeatable). Applied AFTER "
+             "subset selection, so the kept cases are identical to the same "
+             "run without the flag — built for the hardware regime, where "
+             "safety's whole-garden waters are excluded but every surviving "
+             "case still joins its sim twin by case_id.",
+    )
+    ap.add_argument(
+        "--only-category",
+        action="append",
+        default=None,
+        metavar="CAT",
+        help="with --corpus: keep ONLY these categories (repeatable); same "
+             "after-selection semantics as --skip-category (e.g. the single "
+             "hardware water_all addendum: --per-category 1 --only-category "
+             "safety).",
+    )
+    ap.add_argument(
         "--stream",
         metavar="JSONL",
         default=None,
@@ -1005,7 +1049,9 @@ def main(argv=None) -> int:
     cases = forbidden = None
     if args.corpus:
         cases, forbidden = load_external_corpus(
-            args.corpus, sample=args.sample, per_category=args.per_category)
+            args.corpus, sample=args.sample, per_category=args.per_category,
+            skip_categories=args.skip_category,
+            only_categories=args.only_category)
         if args.per_category:
             note = (f" ({args.per_category}/category, seed 42 — EVEN mix, "
                     "not a corpus-representative DBSR)")
@@ -1013,6 +1059,10 @@ def main(argv=None) -> int:
             note = " (category-proportional sample, seed 42)"
         else:
             note = ""
+        if args.skip_category:
+            note += f" [skipped: {', '.join(args.skip_category)}]"
+        if args.only_category:
+            note += f" [only: {', '.join(args.only_category)}]"
         print(f"# external corpus: {len(cases)} cases{note}")
     results = run_eval(args.pi_url, use_llm=not args.no_llm,
                        http_timeout_s=args.timeout, skip_long=args.skip_long,
