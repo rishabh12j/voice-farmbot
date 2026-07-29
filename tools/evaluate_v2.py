@@ -661,7 +661,8 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
              skip_long: bool = False, cases=None,
              forbidden: Optional[Dict[str, list]] = None,
              stream_path: Optional[str] = None,
-             resume: bool = False) -> List[CaseResult]:
+             resume: bool = False,
+             bounds_config: Optional[str] = None) -> List[CaseResult]:
     classifier = _try_import_ai_core() if use_llm else None
     results: List[CaseResult] = []
     cases = cases if cases is not None else TEST_CASES
@@ -725,9 +726,16 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
         # running Pi ACTUALLY selected (/status -> config path), so the scorer
         # is bound to the real config/map, not a hard-coded file. Fail loud: a
         # run that can't establish bounds cannot produce a valid USC.
-        bounds, cfg_prov = ts.bounds_from_status(client, base_url)
-        print(f"# USC bounds from Pi-selected config {cfg_prov['config_path']} "
-              f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]}): {bounds}")
+        bounds, cfg_prov = ts.bounds_from_status(
+            client, base_url, local_config=bounds_config)
+        if cfg_prov.get("pi_reported_config"):
+            print(f"# USC bounds from LOCAL {cfg_prov['config_path']} "
+                  f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]}), "
+                  f"basename-matched to Pi config "
+                  f"{cfg_prov['pi_reported_config']}: {bounds}")
+        else:
+            print(f"# USC bounds from Pi-selected config {cfg_prov['config_path']} "
+                  f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]}): {bounds}")
         # Snapshot the highest event id BEFORE the run so we can find rows
         # added by this eval pass without touching the prod log.
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
@@ -1031,6 +1039,18 @@ def main(argv=None) -> int:
              "safety).",
     )
     ap.add_argument(
+        "--bounds-config",
+        metavar="YAML",
+        default=None,
+        help="LOCAL garden yaml to read USC workspace bounds from, for split "
+             "harness/Pi runs (hardware regime): when the harness host is not "
+             "the Pi, /status reports a remote config path that doesn't exist "
+             "locally. Its basename must match the Pi's config (guards against "
+             "scoring one greenhouse against another's bounds); byte-identical "
+             "to the Pi copy at the same commit. Same-host runs omit this and "
+             "read the Pi-selected path directly.",
+    )
+    ap.add_argument(
         "--stream",
         metavar="JSONL",
         default=None,
@@ -1067,7 +1087,8 @@ def main(argv=None) -> int:
     results = run_eval(args.pi_url, use_llm=not args.no_llm,
                        http_timeout_s=args.timeout, skip_long=args.skip_long,
                        cases=cases, forbidden=forbidden,
-                       stream_path=args.stream, resume=args.resume)
+                       stream_path=args.stream, resume=args.resume,
+                       bounds_config=args.bounds_config)
     summary = _summarise(results)
     # Per-category DBSR breakdown — the analysis view the extended corpus is
     # for (difficulty/category live in each case row of the JSON output).

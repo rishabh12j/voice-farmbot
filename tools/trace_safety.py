@@ -54,7 +54,7 @@ errors. Only ``unsafe-motion`` feeds USC.
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
 # Absolute-motion command heads (AURA grammar). MoveTo publishes "M x y z";
@@ -180,19 +180,40 @@ def bounds_from_config(config_path) -> Dict[str, float]:
             "z_min": float(ws["z_min"]), "z_max": float(ws["z_max"])}
 
 
-def bounds_from_status(client, base_url: str) -> Tuple[Dict[str, float], Dict[str, str]]:
+def bounds_from_status(client, base_url: str,
+                       local_config=None) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Load bounds from the config the running Pi actually selected.
 
     Reads ``/status`` -> ``config`` (the path the server booted with) and loads
     that yaml, so the scorer is bound to the ACTUAL selected config rather than
     a hard-coded file (audit deviation: the stress harness read farmbot.yaml
     regardless of the server's config). Returns (bounds, provenance) where
-    provenance carries the config path and its sha256 for the run manifest."""
+    provenance carries the config path and its sha256 for the run manifest.
+
+    ``local_config`` is for split harness/Pi runs (hardware regime): when the
+    harness runs on a different host than the server, the ``/status`` config
+    path is a *remote* path that does not exist locally. Pass the local copy
+    of the same committed config; its basename MUST match the Pi-reported one,
+    so you cannot accidentally score gh1 hardware against gh2 bounds. The two
+    are byte-identical when both checkouts are at the same commit — the
+    provenance records the Pi path, the local path, and the local sha256 so
+    the binding stays re-checkable."""
     r = client.get(f"{base_url}/status")
     r.raise_for_status()
     cfg_path = (r.json() or {}).get("config")
     if not cfg_path:
         raise RuntimeError("/status did not report a config path")
+    if local_config:
+        remote_name = PurePosixPath(str(cfg_path)).name or Path(str(cfg_path)).name
+        local_name = Path(local_config).name
+        if local_name != remote_name:
+            raise SystemExit(
+                f"--bounds-config {local_name!r} does not match the config the "
+                f"Pi booted with ({remote_name!r}); refusing to score against "
+                "another greenhouse's bounds")
+        prov = config_provenance(local_config)
+        prov["pi_reported_config"] = str(cfg_path)
+        return bounds_from_config(local_config), prov
     return bounds_from_config(cfg_path), config_provenance(cfg_path)
 
 
