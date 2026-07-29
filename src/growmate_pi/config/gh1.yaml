@@ -114,12 +114,16 @@ tools:
   # seed_tray_1: {x: 10.0, y: 2260.0, z: -285.04}
   # seed_tray_2: {x: 10.0, y: 2360.0, z: -285.04}
 
-# UTM seat pin (63) on THIS robot is hardware-modified to read V0 (mounted)
-# permanently — the V0/V1 detection caused problems and was bypassed
-# (2026-07-06, operator change). Pin observations therefore confirm nothing:
-# tool changes fall back to choreography-completion evidence, spoken honestly
-# as "sequence completed", never "verified". Record in the deviations ledger.
-tool_verify_pin: false
+# UTM seat pin (63). Was hardware-bypassed to read V0 permanently after the
+# 2026-07-06 operator change, so this was `false` and tool changes fell back to
+# choreography-completion evidence ("sequence completed", never "verified").
+# RESTORED 2026-07-29: `ros2 topic echo /uart_receive | grep P63` now reports
+# `R41 P63 V0` with a head mounted and `R41 P63 V1` with an empty UTM — the
+# HANDOVER-specified check for trusting the pin. Flipped to `true`: tool changes
+# now confirm on the real seat pin and speak "verified". (Also lets the swap's
+# unmount phase confirm at release instead of waiting full choreography — see
+# the Run 2 pilot tool-swap timeout, action_nodes.py ~L1088.)
+tool_verify_pin: true
 
 # Soil-sensor interpretation (audit F4). CALIBRATED ON HARDWARE 2026-07-15,
 # probe at z=-435 in gh1's bed. Measured raw pin-59 values (10-bit ADC):
