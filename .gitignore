@@ -51,6 +51,11 @@ documentation/MU EE696/
 # a public remote. Never commit; use the anonymised themes in
 # documentation/eval/older_adult_demo_feedback.md instead.
 documentation/demo/
+
+# Private docs at documentation/ root (public origin = code + README + RUNBOOK +
+# command refs only). These carry internal notes / local IPs and must stay private.
+documentation/RUNBOOK-local.md
+documentation/revision_board_audit.md
 # Page images rendered from those scans (the PDFs are image-only, so reading
 # them meant rasterising). Same personal data, same rule.
 .tmp_feedback_pages/
