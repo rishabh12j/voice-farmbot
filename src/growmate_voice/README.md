@@ -46,7 +46,7 @@ growmate_voice/
 ```powershell
 cd C:\Users\risha\growmate-bt\voice-farmbot
 $env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice;" + $env:PYTHONPATH
-python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
+python -m growmate_voice.app --no-ros2 --pi-url http://<pi-host>:8000/intent
 ```
 
 Open `http://127.0.0.1:7860`.

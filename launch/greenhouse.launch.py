@@ -26,8 +26,8 @@ positions / location / schedule):
 Override paths/port if your layout differs, e.g.:
 
     ros2 launch ./launch/greenhouse.launch.py \
-        venv_python:=/home/gh1/Rishabh_Growmate_FarmBot/venv/bin/python \
-        src:=/home/gh1/Rishabh_Growmate_FarmBot/src port:=8000
+        venv_python:=/path/to/repo/venv/bin/python \
+        src:=/path/to/repo/src port:=8000
 
 If the firmware isn't publishing /busy_state yet, start the intent server with
 the gate off instead (run it by hand with --no-verify) — see RUNBOOK.md §5.
