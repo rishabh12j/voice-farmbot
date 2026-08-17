@@ -99,43 +99,45 @@ record and the thesis write-up are kept outside this repo.
 ## Quick Start - Local Sim
 
 ```powershell
-cd C:\Users\risha\growmate-bt\voice-farmbot
-$env:PYTHONPATH = "src;" + $env:PYTHONPATH
+# from the repo root - Terminal 1: the intent server (brain)
+$env:PYTHONPATH = "src"
 python -m growmate_pi.intent_server --no-ros2 --port 8123
 ```
 
 In another terminal:
 
 ```powershell
-$env:PYTHONPATH = "src;src\growmate_voice;" + $env:PYTHONPATH
+# Terminal 2: the voice app (needs src AND the nested package)
+$env:PYTHONPATH = "src;src\growmate_voice"
 python -m growmate_voice.app --no-ros2 --pi-url http://localhost:8123/intent
 ```
 
-Open `http://127.0.0.1:7860`.
+Open `http://localhost:7860`. Running the server under WSL, and phone access via a
+Cloudflare tunnel, are covered in [RUNBOOK.md](RUNBOOK.md).
 
-## Quick Start - gh1 hardware
+## Quick Start - hardware
 
-On the Pi:
+On the Pi (already built and migrated):
 
 ```bash
-cd ~/Rishabh_Growmate_FarmBot
+cd <pi-repo>
 source /opt/ros/$ROS_DISTRO/setup.bash
 source install/setup.bash
-ros2 launch ./launch/greenhouse.launch.py scheduler:=false
+ros2 launch ./launch/greenhouse.launch.py \
+  config:=src/growmate_pi/config/<greenhouse>.yaml scheduler:=false
 ```
 
-On Windows:
+On the PC (Windows), from the repo root:
 
 ```powershell
-cd C:\Users\risha\growmate-bt\voice-farmbot
-$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice;" + $env:PYTHONPATH
-python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
+$env:PYTHONPATH = "src;src\growmate_voice"
+python -m growmate_voice.app --no-ros2 --pi-url http://<pi-host>:8000/intent
 ```
 
-That is the short version and it assumes a Pi that is already built and
-migrated. The full procedure — update, build, state-dir migration, launch args,
-how to confirm you are in real mode and not sim, and what to do when it
-misbehaves — is [RUNBOOK.md](RUNBOOK.md).
+That is the short version and it assumes a Pi that is already built and migrated.
+The full procedure — clone, update, build, state-dir migration, launch args, how to
+confirm real mode vs sim, phone access via a Cloudflare tunnel, and what to do when
+it misbehaves — is [RUNBOOK.md](RUNBOOK.md).
 
 ## Development Gates
 
