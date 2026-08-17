@@ -45,17 +45,21 @@ growmate_voice/
 
 ```powershell
 cd C:\Users\risha\growmate-bt\voice-farmbot
-$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;" + $env:PYTHONPATH
+$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice;" + $env:PYTHONPATH
 python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
 ```
 
 Open `http://127.0.0.1:7860`.
 
-For local sim, start the Pi server in another terminal:
+For local sim, run two terminals from the repo root:
 
 ```powershell
+# Terminal 1 - intent server (needs src)
 $env:PYTHONPATH = "src"
 python -m growmate_pi.intent_server --no-ros2 --port 8123
+
+# Terminal 2 - this app (needs src AND the nested growmate_voice package)
+$env:PYTHONPATH = "src;src\growmate_voice"
 python -m growmate_voice.app --no-ros2 --pi-url http://localhost:8123/intent
 ```
 

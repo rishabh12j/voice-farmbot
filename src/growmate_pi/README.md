@@ -110,8 +110,10 @@ curl -X POST http://localhost:8000/intent -H 'Content-Type: application/json' -d
 4. **`keyboard_topic` is the only ROS2 topic published.** The whole point
    of V2 is to remain a drop-in replacement for the existing
    `keyboard_controller`.
-5. **Plant names, aliases, and coords live in `config/farmbot.yaml`.**
-   Never hard-code coordinates in Python.
+5. **Config carries bounds, thresholds, and tool-bay geometry**
+   (`config/gh1.yaml`, `config/farmbot.yaml` = sim default); **plant positions
+   come from the live map** (`active_map.yaml`), not the config. Never hard-code
+   coordinates in Python.
 
 ## Development status
 
@@ -125,4 +127,4 @@ curl -X POST http://localhost:8000/intent -H 'Content-Type: application/json' -d
 | `--pi-url` wiring in `growmate_voice.app` | Live |
 | `tools/evaluate_v2.py` / stress harness | Live |
 | PlanSys2 mission controller | Stubbed; deferred |
-| Real hardware | gh1/farmbotdev bringup exists; hardware Run 2 metrics still pending |
+| Real hardware | gh1 validated end-to-end: 55-case hardware run, DBSR 92.78%, USC 0; farmbotdev (gh2) bringup exists |
