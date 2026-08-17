@@ -71,3 +71,9 @@ src/growmate_voice/intent_server_openapi.json
 /map.yaml
 /a.yaml
 tools/active_map.yaml
+
+# MSc final submission bundle — report, presentation, videos, demo photos, poster.
+# Contains personal/assessment material. Kept in-repo for the PRIVATE archive
+# backup only; must NEVER reach the public origin remote. Name-free pattern so
+# this tracked file does not embed a personal name.
+/*Final Submission/
