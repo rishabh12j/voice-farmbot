@@ -46,6 +46,19 @@ documentation/eval_v2_results.md
 documentation/eval/
 documentation/paper/
 documentation/MU EE696/
+# Community demo day: scanned questionnaire packets and named attendee
+# transcripts. Personal data with no consent basis for publication — origin is
+# a public remote. Never commit; use the anonymised themes in
+# documentation/eval/older_adult_demo_feedback.md instead.
+documentation/demo/
+
+# Private docs at documentation/ root (public origin = code + README + RUNBOOK +
+# command refs only). These carry internal notes / local IPs and must stay private.
+documentation/RUNBOOK-local.md
+documentation/revision_board_audit.md
+# Page images rendered from those scans (the PDFs are image-only, so reading
+# them meant rasterising). Same personal data, same rule.
+.tmp_feedback_pages/
 
 # Agent scratch dirs
 .codex-tmp/
@@ -63,3 +76,9 @@ src/growmate_voice/intent_server_openapi.json
 /map.yaml
 /a.yaml
 tools/active_map.yaml
+
+# MSc final submission bundle — report, presentation, videos, demo photos, poster.
+# Contains personal/assessment material. Kept in-repo for the PRIVATE archive
+# backup only; must NEVER reach the public origin remote. Name-free pattern so
+# this tracked file does not embed a personal name.
+/*Final Submission/
