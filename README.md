@@ -1,10 +1,10 @@
-# GrowMate - VoiceBT for FarmBot
+# GrowMate-BT — voice control for a FarmBot garden robot
 
-GrowMate is a voice-control layer for a FarmBot Genesis XL garden robot, built
-for elderly and disabled users who can describe what they want but may not be
+GrowMate-BT is a voice-control layer for a FarmBot Genesis XL garden robot, built
+for older and disabled users who can describe what they want but may not be
 able to use a keyboard, touchscreen, or coordinate map comfortably.
 
-The research contribution is **VoiceBT**: constrain a small on-device LLM to
+The research contribution is **GrowMate-BT**: constrain a small on-device LLM to
 flat intent classification, then let deterministic, inspectable behaviour trees
 own all structure, sequencing, and safety.
 
@@ -80,23 +80,21 @@ claim, not just the code.
 
 ## Evaluation Snapshot
 
-All simulation. The corpus and the BT are the same in sim and on hardware; what
-differs is motion timing and firmware verification. Hardware Run 2 has **not**
-been run — no hardware corpus numbers exist yet.
+The corpus and the behaviour tree are the same in simulation and on hardware;
+what differs is motion timing and firmware verification.
 
 | Run | Result |
 |---|---|
-| 43-case regression suite, sim | DBSR 100%, USC 0, ELC 100% |
-| Misclassification stress test, sim | 120 forced wrong intents, unsafe-motion 0, honesty violations 0 |
-| **2000-case corpus, sim** | 1757 valid cases, **DBSR 90.1, USC 0**; surfaced refusal/negation/self-correction work |
+| 2,500-case command corpus (sim, guarded code, trace-level scorer) | **DBSR 94.2%** (93.6% strict), **USC 0**, ELC 100%, 0 harness artifacts |
+| Misclassification stress test (sim) | 120 forced-wrong intents below the classifier: **unsafe-motion 0**, honesty violations 0 |
+| Hardware validation (physical gh1 FarmBot) | 55 even-mix commands end-to-end: **DBSR 92.78%, USC 0** |
 
-The 2000-case corpus is the honest headline: it drops DBSR from a flattering 100
-to a truer 90 and names four real classifier weaknesses, while the number that
-must not move — USC — stays 0.
-
-Reproduce them with the harness in `tools/evaluate_v2.py` against the corpus in
-`tools/corpus/` — see the sim quick start above. The full per-run record and the
-thesis write-up are kept outside this repo.
+The headline safety result is **USC 0** across 2,500 adversarial commands and 120
+forced misclassifications: no command ever entered an unsafe state. Task success
+is reported both as DBSR (94.2%) and a stricter DBSR that counts whole-garden
+over-actions as failures (93.6%). Reproduce with the harness in
+`tools/evaluate_v2.py` against the corpus in `tools/corpus/`. The full per-run
+record and the thesis write-up are kept outside this repo.
 
 ## Quick Start - Local Sim
 
@@ -109,7 +107,7 @@ python -m growmate_pi.intent_server --no-ros2 --port 8123
 In another terminal:
 
 ```powershell
-$env:PYTHONPATH = "src;" + $env:PYTHONPATH
+$env:PYTHONPATH = "src;src\growmate_voice;" + $env:PYTHONPATH
 python -m growmate_voice.app --no-ros2 --pi-url http://localhost:8123/intent
 ```
 
@@ -130,7 +128,7 @@ On Windows:
 
 ```powershell
 cd C:\Users\risha\growmate-bt\voice-farmbot
-$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;" + $env:PYTHONPATH
+$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice;" + $env:PYTHONPATH
 python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
 ```
 
