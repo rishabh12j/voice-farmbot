@@ -19,7 +19,7 @@ Workflow:
 Usage::
 
     python3 tools/calibrate.py                                   # on the Pi
-    python tools\\calibrate.py --url http://192.168.0.38:8000    # from Windows
+    python tools\\calibrate.py --url http://<pi-ip>:8000    # from Windows
     python3 tools/calibrate.py --csv per_bot/gh1.csv
 
 The species you type must exist in SPECIES at the top of build_active_map.py
@@ -92,7 +92,7 @@ def main(argv=None) -> int:
     ap.add_argument("--url", default="http://localhost:8000",
                     help="Pi intent server URL (default: %(default)s). Reads the "
                          "live R82 position from /status. On the Pi use "
-                         "localhost:8000; from Windows use http://192.168.0.38:8000")
+                         "localhost:8000; from Windows use http://<pi-ip>:8000")
     ap.add_argument("--csv", default="tools/placements.csv",
                     help="output CSV (will be created if missing)")
     args = ap.parse_args(argv)
