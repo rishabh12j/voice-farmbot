@@ -45,17 +45,21 @@ growmate_voice/
 
 ```powershell
 cd C:\Users\risha\growmate-bt\voice-farmbot
-$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;" + $env:PYTHONPATH
+$env:PYTHONPATH = "C:\Users\risha\growmate-bt\voice-farmbot\src;C:\Users\risha\growmate-bt\voice-farmbot\src\growmate_voice;" + $env:PYTHONPATH
 python -m growmate_voice.app --no-ros2 --pi-url http://192.168.0.38:8000/intent
 ```
 
 Open `http://127.0.0.1:7860`.
 
-For local sim, start the Pi server in another terminal:
+For local sim, run two terminals from the repo root:
 
 ```powershell
+# Terminal 1 - intent server (needs src)
 $env:PYTHONPATH = "src"
 python -m growmate_pi.intent_server --no-ros2 --port 8123
+
+# Terminal 2 - this app (needs src AND the nested growmate_voice package)
+$env:PYTHONPATH = "src;src\growmate_voice"
 python -m growmate_voice.app --no-ros2 --pi-url http://localhost:8123/intent
 ```
 
@@ -68,10 +72,18 @@ python -m growmate_voice.app --no-ros2 --pi-url http://localhost:8123/intent
 - `photo`, `panorama`, `scan_weeds`, `clear_weeds`
 - `scan_bed`, `find_plants`, `label_plants`
 - `check_sensor`, `check_moisture`
+- `mount_tool`, `stow_tool`
 - `emergency_stop`, `general_question`
 
+The mirror is enforced, not just documented: `tools/test_action_coverage.py`
+fails if this list, `schemas.Action`, the builder's dispatch, and the prompt
+ever disagree. A verb missing from `AICore.ACTIONS` is coerced to
+`general_question` by `app.py` before it reaches the Pi; a verb missing from
+the builder speaks the LLM's reply over a tree that does nothing.
+
 Emergency words such as "stop" are matched before the LLM and go straight to
-the Pi emergency endpoint.
+the Pi emergency endpoint — which is why `emergency_stop` is deliberately kept
+out of the prompt's action list.
 
 ## HTTP Surface
 
