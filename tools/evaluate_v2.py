@@ -2,8 +2,10 @@
 behavior trees", RAS 178:104714; names + intent verified against the full
 text), operationalized for the phone-to-Pi pipeline as defined below. Two
 disclosed deviations: their USC is a normalized frequency of ENTERED unsafe
-states (nU/nT) while ours is a raw per-case count of guard-BLOCKED attempts
-(both are 0 for this system — nothing is ever entered, by construction), and
+states (nU/nT) while ours is a raw per-case count of cases that publish an
+out-of-bounds motion command (or actuate after a failed guard), measured from
+the published-command trace via tools/trace_safety.py — NOT, as an earlier
+version did, by searching node messages for "out of bounds"; and
 their SNSR is per-node while ours pools all leaves. Attribution audit:
 documentation/eval/dossier_01_gugliermo_metrics.md §9 (emergent-eval branch).
 
@@ -30,9 +32,11 @@ Metrics:
   expected command substring appears in Pi's ``commands_published``.
 * **SNSR**  Single Node Success Rate — fraction of leaf nodes that
   finished with ``success`` across all trees executed.
-* **USC**   Unsafe State Count — number of cases where Pi reported
-  ``failure`` due to a bounds violation (we look for "out of bounds" in
-  the node messages).
+* **USC**   Unsafe State Count — cases that publish an out-of-workspace
+  motion command, or actuate after an applicable guard failed. Measured from
+  the published-command trace via ``tools/trace_safety.py`` (independent
+  coordinate parsing), NOT a node-message search. Guard-blocked attempts and
+  in-bounds wrong actions are separate buckets and are never counted as USC.
 * **ELC**   Event Log Coverage (Day 12) — % cases where every expected
   per-plant event row (watered / sensed / photographed / …) actually
   landed in the Pi's SQLite event log. Cases with no expected events
@@ -44,9 +48,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -54,12 +60,22 @@ from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/ for trace_safety
 
 try:
     import httpx
 except ImportError:
     print("httpx not installed. Run: python3 -m pip install --user httpx")
     sys.exit(2)
+
+# Shared trace-level safety predicate — the single definition of "unsafe" used
+# by this harness AND tools/stress_misclassification.py.
+import trace_safety as ts  # noqa: E402
+
+# Declare the version we actually speak rather than a hardcoded string: this
+# harness emits mount_tool/stow_tool, which are 1.1.0 verbs. /intent only
+# enforces the major, but a stale literal here is a lie waiting to matter.
+from growmate_pi.schemas import SCHEMA_VERSION  # noqa: E402
 
 
 # ---- test cases -------------------------------------------------------------
@@ -175,11 +191,25 @@ class CaseResult:
     expected_commands: List[str]
     category: str
     pi_status: str
+    # Corpus case id (GM-nnnn). Carried so a JSONL row can be joined back to
+    # its case and so --resume can key on identity: utterances repeat across
+    # ids, and resuming on the text silently skipped cases that never ran.
+    case_id: str = ""
     commands_published: List[str] = field(default_factory=list)
     node_count: int = 0
     nodes_success: int = 0
     nodes_failure: int = 0
+    # LEGACY message-search field, kept only for provenance continuity with the
+    # pre-2026-07-22 records: True iff a node MESSAGE contained "out of bounds".
+    # This is NOT the USC signal any more — see safety_outcome. Reported by
+    # _summarise as ``oob_message_count`` so the old and new are both visible.
     out_of_bounds: bool = False
+    # Trace-level safety classification from tools/trace_safety.classify over the
+    # published-command trace: one of unsafe-motion / guard-blocked /
+    # refused-clean / wrong-but-bounded / failed-safe / anomaly. USC counts only
+    # ``unsafe-motion``.
+    safety_outcome: str = ""
+    safety_detail: str = ""
     duration_ms: int = 0
     error: Optional[str] = None
     dbsr_pass: bool = False
@@ -191,9 +221,44 @@ class CaseResult:
     # Extended-corpus scoring: forbidden command fragments that WERE emitted
     # (negation / self-correction cases). Non-empty => dbsr_pass is False.
     forbidden_hit: List[str] = field(default_factory=list)
+    # Harness artifact, NOT a result. True when the case never got a fair run:
+    # the Pi refused it as busy, or its async task outlived the poll timeout.
+    # The 2026-07-16 run had 243 of these and no way to tell them apart from
+    # real misses — they had to be reconstructed from a 0 ms / no-commands
+    # signature after the fact. Excluded from DBSR/USC by summarise().
+    artifact: bool = False
 
 
 # ---- intent generation ------------------------------------------------------
+
+
+def _coerce_invented_actions(intents: List[dict], classifier) -> List[dict]:
+    """Mirror app.py's sanitiser so the eval measures the SHIPPED pipeline.
+
+    A small model invents action words ("drive", "no", "skip"). The real client
+    coerces those to general_question and speaks the model's own reply — the
+    user gets a polite non-answer, not a crash. The eval posted the raw intent
+    instead, so /intent 422'd and the case was recorded as a transport error.
+
+    That mismeasured twice over: the harness was harsher than the product, and
+    (until this commit) those 422s were flagged artifact=True and dropped from
+    the DBSR denominator — quietly deleting real classifier failures from the
+    score. Measured on the aborted 2026-07-16 gh1 run: 31 such cases.
+
+    Keep this in step with growmate_voice/app.py's _valid_actions block.
+    """
+    valid = set(getattr(classifier, "ACTIONS", [])) | {"emergency_stop"}
+    out: List[dict] = []
+    for i in intents:
+        if not isinstance(i, dict):
+            continue
+        if (i.get("action") or "") not in valid:
+            i = dict(i)
+            i["action"] = "general_question"
+            i.setdefault("response",
+                         "I wasn't sure what to do with that — could you rephrase?")
+        out.append(i)
+    return out
 
 
 def _build_intent_payload(
@@ -214,6 +279,7 @@ def _build_intent_payload(
     if classifier is not None:
         if classifier.is_available():
             intents = classifier._classify(utterance, live_plants=live_plants) or []
+            intents = _coerce_invented_actions(intents, classifier)
             if intents:
                 return {
                     "intents": intents,
@@ -221,7 +287,7 @@ def _build_intent_payload(
                     "emergency": category == "emergency",
                     "client_id": "evaluate_v2",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "schema_version": "1.0.0",
+                    "schema_version": SCHEMA_VERSION,
                 }
         # LLM was REQUESTED but is down / returned nothing: never fabricate an
         # intent. The old fallback hand-crafted water_all here — when Ollama
@@ -229,9 +295,15 @@ def _build_intent_payload(
         # A classification outage must score as a miss, not water the world.
         return None
 
-    # --no-llm (Pi-only smoke test): canned intents so the Pi still does
+    # --no-llm ONLY (Pi-only smoke test): canned intents so the Pi still does
     # something measurable. Emergency stops the BT; general asks a question;
     # everything else is a deliberate water_all exercising the long path.
+    #
+    # Reaching here with classifier=None because the LLM was WANTED but
+    # unavailable is what silently turned a corpus run into 2000 full-garden
+    # waters. _try_import_ai_core now raises instead of returning None, so the
+    # only way in is an explicit --no-llm. Numbers from this path are NOT
+    # classifier measurements and must never be reported as DBSR.
     if category == "emergency":
         intents = [{"action": "emergency_stop", "target": None, "response": "Stop."}]
     elif category == "general":
@@ -246,7 +318,7 @@ def _build_intent_payload(
         "emergency": category == "emergency",
         "client_id": "evaluate_v2",
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "schema_version": "1.0.0",
+        "schema_version": SCHEMA_VERSION,
     }
 
 
@@ -260,6 +332,11 @@ def _expected_events_for_intents(intents: list, is_emergency: bool) -> List[str]
         return []
     out: List[str] = []
     for i in intents:
+        # Defensive: ai_core flattens nested "intents" now, but a malformed
+        # batch must never take down a multi-hour run from here. Skip, don't
+        # crash — the case still gets dispatched and scored on its merits.
+        if not isinstance(i, dict):
+            continue
         ev = _ACTION_TO_EVENT.get(i.get("action") or "")
         if ev:
             out.append(ev)
@@ -282,13 +359,51 @@ def _fetch_event_log_tail(client, base_url: str, limit: int = 20) -> List[dict]:
 
 
 def _try_import_ai_core():
-    try:
-        from growmate_voice.ai_core import AICore  # type: ignore[import-not-found]
-        cfg = REPO_ROOT / "src" / "growmate_voice" / "config" / "farmbot.yaml"
-        return AICore(config_path=str(cfg))
-    except Exception as exc:
-        print(f"[eval] AICore unavailable ({exc}); using fallback intents")
-        return None
+    """The real classifier. Raises if it can't be had — never returns None.
+
+    Returning None here used to be survivable, and that was the bug: a None
+    classifier falls through to the canned-intent path in
+    _build_intent_payload, which fires **water_all for every non-emergency
+    case**. A whole run then walks the garden 2000 times, scores some of it as
+    PASS (a full-garden water contains the expected @move coordinate, so the
+    substring assertion is satisfied), and reports a DBSR for a pipeline that
+    never called an LLM. The file already forbids this — "A classification
+    outage must score as a miss, not water the world" — but that guard only
+    covers a classifier that imported and then went unreachable. An ImportError
+    walked straight past it.
+
+    Measured 2026-07-16 (this session): the import DOES fail under
+    `PYTHONPATH=src`, because the python package is at
+    src/growmate_voice/growmate_voice/ while `src` only exposes the ROS package
+    directory. So the failure was not hypothetical — the smoke run was silently
+    in canned mode at ~230 s/case.
+
+    Now: the path is fixed, and any remaining failure is fatal. If the caller
+    asked for the LLM, they get the LLM or an exit — not a quiet substitute.
+
+    ``GROWMATE_OLLAMA_URL`` overrides AICore's localhost default, for when the
+    harness and Ollama aren't the same host (eval in WSL, Ollama on Windows).
+    """
+    # The ROS package dir holds the python package of the same name, so
+    # `growmate_voice.ai_core` needs THIS on the path, not just src/.
+    voice_pkg = REPO_ROOT / "src" / "growmate_voice"
+    if str(voice_pkg) not in sys.path:
+        sys.path.insert(0, str(voice_pkg))
+
+    from growmate_voice.ai_core import AICore  # type: ignore[import-not-found]
+
+    cfg = REPO_ROOT / "src" / "growmate_voice" / "config" / "farmbot.yaml"
+    url = os.environ.get("GROWMATE_OLLAMA_URL", "http://localhost:11434")
+    core = AICore(config_path=str(cfg), ollama_url=url)
+    if not core.llm.is_available():
+        raise RuntimeError(
+            f"{core.llm.model} not reachable at {url}. The classifier is real "
+            "and the run is meaningless without it; set GROWMATE_OLLAMA_URL or "
+            "start Ollama. (Pass --no-llm only if you actually want the canned "
+            "Pi-only smoke intents.)"
+        )
+    print(f"# classifier: {core.llm.model} via {url}")
+    return core
 
 
 # ---- main eval loop ---------------------------------------------------------
@@ -336,8 +451,56 @@ def _resolve_expected(client, base_url: str, exp_cmds: List[str],
     return out
 
 
+# A full-garden water_smart walk pulses every plant in real time and can run
+# far past the old 600 s. When it did, the harness abandoned the poll while the
+# tree was STILL EXECUTING, posted the next case into a busy server, and scored
+# the instant refusal as a miss — 243 such artifacts in the 2026-07-16 run, all
+# clustered in indirect/hard. Keep this <= the server's _INTENT_RESULT_TTL_S or
+# a result can be pruned before it is read.
+POLL_TIMEOUT_S = 1800.0
+POLL_INTERVAL_S = 2.0
+
+# How long to wait for the server to go idle before posting a case.
+IDLE_TIMEOUT_S = POLL_TIMEOUT_S
+IDLE_POLL_S = 2.0
+
+# Busy retries. Belt and braces with the idle gate: the gate makes a busy reply
+# unlikely, this makes it non-fatal. A busy reply is NOT evidence about the
+# classifier or the tree, so it must never be scored as a case result.
+BUSY_MAX_RETRIES = 5
+BUSY_BACKOFF_S = 5.0
+
+
+def _wait_until_idle(client, base_url: str, timeout_s: float = IDLE_TIMEOUT_S) -> bool:
+    """Block until the Pi will admit a new intent. True if idle, False on timeout.
+
+    Gates on /status intent_active — the flag /intent itself admits on. Do NOT
+    substitute task.task_active: it goes false while _intent_running is still
+    set, leaving a window where this returns idle and the POST is still refused.
+    Falls back to task_active only for older servers that don't publish
+    intent_active, which is strictly better than not waiting at all.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            r = client.get(f"{base_url}/status")
+            r.raise_for_status()
+            st = r.json()
+        except Exception:
+            time.sleep(IDLE_POLL_S)
+            continue
+        active = st.get("intent_active")
+        if active is None:  # pre-1.1.0 server
+            active = bool((st.get("task") or {}).get("task_active"))
+        if not active:
+            return True
+        time.sleep(IDLE_POLL_S)
+    return False
+
+
 def _await_terminal(client, base_url: str, reply: dict,
-                    poll_s: float = 2.0, timeout_s: float = 600.0) -> dict:
+                    poll_s: float = POLL_INTERVAL_S,
+                    timeout_s: float = POLL_TIMEOUT_S) -> dict:
     """Follow an async /intent reply ("running" + task_id) to its terminal
     result via /intent_status. Long trees (multi-plant waters) return
     immediately with a task_id; the commands/tree only exist in the terminal
@@ -357,36 +520,140 @@ def _await_terminal(client, base_url: str, reply: dict,
         if status.get("status") != "running":
             return status
     reply["error"] = f"async task {task_id} still running after {timeout_s:.0f}s"
+    reply["timed_out"] = True
+    return reply
+
+
+def _park_tool_state(client, base_url: str, category: str,
+                     exp_cmds: List[str]) -> None:
+    """Put the UTM into the state a tool case's expectation assumes.
+
+    ToolState is process state that survives between cases, so without this the
+    expected command for "put it back" is whatever the previous case left
+    mounted. Derived from the expectation itself rather than a new corpus field:
+    T_<n>_2 is a release (something must be on), T_<n>_1 is a mount (the UTM
+    must be empty), and a tool refusal must not be able to succeed by accident.
+
+    /tool_state only updates the software record — no motion — so this is a
+    cheap precondition, not a robot action.
+    """
+    if category != "tool":
+        return
+    wants_release = any(c.endswith("_2") for c in exp_cmds)
+    # watering_nozzle is the bay the stow cases expect (T_2_2); see
+    # generate_corpus.py STOW_BAY.
+    tool = "watering_nozzle" if wants_release else None
+    try:
+        client.post(f"{base_url}/tool_state", json={"tool": tool})
+    except Exception:
+        pass  # older server without /tool_state — the case just gets noisier
+
+
+def _is_busy(reply: dict) -> bool:
+    """True if the Pi refused this case because a tree was already running.
+
+    The server says so explicitly (error="busy", HTTP 200), and the old harness
+    threw it away — reply["error"] was read nowhere, so a busy refusal was
+    indistinguishable from a real miss except by its 0 ms / no-commands
+    signature.
+    """
+    return reply.get("error") == "busy"
+
+
+def _post_intent(client, pi_url: str, base_url: str, payload: dict) -> dict:
+    """POST one case, waiting for idle first and retrying while busy.
+
+    Returns the terminal reply. A reply still marked busy after the retries is
+    handed back for the caller to record as a harness state rather than score.
+    """
+    _wait_until_idle(client, base_url)
+    reply: dict = {}
+    for attempt in range(BUSY_MAX_RETRIES):
+        r = client.post(pi_url, json=payload)
+        r.raise_for_status()
+        reply = r.json()
+        if not _is_busy(reply):
+            return _await_terminal(client, base_url, reply)
+        # Something was still running despite the idle gate. Back off, wait it
+        # out, try again — never score this.
+        time.sleep(BUSY_BACKOFF_S * (attempt + 1))
+        _wait_until_idle(client, base_url)
     return reply
 
 
 def load_external_corpus(path: str, sample: Optional[int] = None,
-                         seed: int = 42):
+                         per_category: Optional[int] = None,
+                         seed: int = 42,
+                         skip_categories: Optional[List[str]] = None,
+                         only_categories: Optional[List[str]] = None):
     """Load the extended JSON corpus (tools/corpus) into the harness shape.
 
-    Returns (cases, forbidden) where cases are the same 5-tuples as
-    TEST_CASES — via the corpus's own load_corpus.py loader — and forbidden
-    maps utterance -> command fragments that must NOT be emitted (negation /
-    self-correction cases). ``sample`` draws a category-proportional,
-    seed-deterministic subset for smoke runs.
+    Returns (cases, forbidden) where cases are the same tuples as TEST_CASES —
+    via the corpus's own load_corpus.py loader — and forbidden maps utterance
+    -> command fragments that must NOT be emitted (negation / self-correction
+    cases).
+
+    ``sample`` draws a category-PROPORTIONAL subset: good for estimating an
+    overall DBSR, useless for reading a small category, because safety (15
+    cases of 2120) rounds to ~1 at any sane sample size.
+
+    ``per_category`` draws N from EVERY category instead. That is the shape you
+    want for a pre-flight: it gives each category the same voice, so a
+    regression in safety or tool is as visible as one in direct. It does NOT
+    estimate the corpus DBSR — the mix is deliberately wrong for that.
+
+    Both are seed-deterministic, so a smoke run is repeatable across prompt
+    edits and two runs can actually be compared.
+
+    ``skip_categories`` / ``only_categories`` filter AFTER subset selection,
+    never before. Order matters: the per-category sampler draws groups
+    sequentially from one seeded RNG, so filtering the pool first would shift
+    every later category's picks and the surviving cases would no longer match
+    the unfiltered run. Applied afterwards, a hardware run with
+    ``--skip-category safety`` executes an exact subset of the cases the sim
+    run scored — the case_id join stays valid. Unknown category names raise
+    rather than silently producing an empty (or unfiltered) run.
     """
     corpus_dir = Path(path).resolve().parent
     sys.path.insert(0, str(corpus_dir))
     from load_corpus import load_cases, load_forbidden  # type: ignore
     cases = load_cases(path)
     forbidden = load_forbidden(path)
-    if sample and sample < len(cases):
-        import random as _random
-        rng = _random.Random(seed)
-        by_cat: Dict[str, list] = {}
-        for c in cases:
-            by_cat.setdefault(c[4], []).append(c)
+
+    by_cat: Dict[str, list] = {}
+    for c in cases:
+        by_cat.setdefault(c[4], []).append(c)
+
+    import random as _random
+    rng = _random.Random(seed)
+
+    if per_category:
+        picked = []
+        for _cat, group in sorted(by_cat.items()):
+            picked.extend(rng.sample(group, min(per_category, len(group))))
+        # Keep corpus order (category-grouped) so the live progress log reads
+        # category by category rather than jumping about.
+        order = {id(c): i for i, c in enumerate(cases)}
+        cases = sorted(picked, key=lambda c: order[id(c)])
+    elif sample and sample < len(cases):
         picked = []
         for _cat, group in sorted(by_cat.items()):
             n = max(1, round(sample * len(group) / len(cases)))
             picked.extend(rng.sample(group, min(n, len(group))))
         rng.shuffle(picked)
         cases = picked[:sample]
+
+    for flag, names in (("--skip-category", skip_categories),
+                        ("--only-category", only_categories)):
+        unknown = set(names or ()) - set(by_cat)
+        if unknown:
+            raise SystemExit(
+                f"{flag}: unknown categor{'y' if len(unknown) == 1 else 'ies'} "
+                f"{sorted(unknown)}; corpus has {sorted(by_cat)}")
+    if skip_categories:
+        cases = [c for c in cases if c[4] not in set(skip_categories)]
+    if only_categories:
+        cases = [c for c in cases if c[4] in set(only_categories)]
     return cases, forbidden
 
 
@@ -394,7 +661,8 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
              skip_long: bool = False, cases=None,
              forbidden: Optional[Dict[str, list]] = None,
              stream_path: Optional[str] = None,
-             resume: bool = False) -> List[CaseResult]:
+             resume: bool = False,
+             bounds_config: Optional[str] = None) -> List[CaseResult]:
     classifier = _try_import_ai_core() if use_llm else None
     results: List[CaseResult] = []
     cases = cases if cases is not None else TEST_CASES
@@ -406,7 +674,10 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
     # costs one case, not the night. ``resume`` preloads those lines and
     # skips their utterances. The JSONL line count doubles as the exact
     # live progress counter.
-    done_utterances: set = set()
+    # Keyed on case_id, not utterance: the corpus reuses the same wording
+    # across ids, so the old utterance-keyed resume skipped cases that had
+    # never run. Rows written before case_id existed fall back to the text.
+    done_keys: set = set()
     if stream_path and resume and Path(stream_path).exists():
         with open(stream_path, encoding="utf-8") as f:
             for line in f:
@@ -414,9 +685,13 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                     row = json.loads(line)
                 except ValueError:
                     continue  # torn final line from the crash — redo the case
-                results.append(CaseResult(**row))
-                done_utterances.add(row["utterance"])
-        print(f"# resume: {len(done_utterances)} cases loaded from "
+                # Drop fields the current CaseResult doesn't have, so an older
+                # stream still loads instead of crashing the resume.
+                known = {k: v for k, v in row.items()
+                         if k in CaseResult.__dataclass_fields__}
+                results.append(CaseResult(**known))
+                done_keys.add(known.get("case_id") or known["utterance"])
+        print(f"# resume: {len(done_keys)} cases loaded from "
               f"{stream_path}", file=sys.stderr)
     stream = open(stream_path, "a", encoding="utf-8") if stream_path else None
     total = len(cases)
@@ -446,16 +721,34 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
 
         live_species = _fetch_live_species(client, base_url)
         print(f"# grounded on live map species: {live_species or '(none — config fallback)'}")
+
+        # Workspace bounds for the trace-level USC — read from the config the
+        # running Pi ACTUALLY selected (/status -> config path), so the scorer
+        # is bound to the real config/map, not a hard-coded file. Fail loud: a
+        # run that can't establish bounds cannot produce a valid USC.
+        bounds, cfg_prov = ts.bounds_from_status(
+            client, base_url, local_config=bounds_config)
+        if cfg_prov.get("pi_reported_config"):
+            print(f"# USC bounds from LOCAL {cfg_prov['config_path']} "
+                  f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]}), "
+                  f"basename-matched to Pi config "
+                  f"{cfg_prov['pi_reported_config']}: {bounds}")
+        else:
+            print(f"# USC bounds from Pi-selected config {cfg_prov['config_path']} "
+                  f"(sha256 {cfg_prov.get('config_sha256', '?')[:12]}): {bounds}")
         # Snapshot the highest event id BEFORE the run so we can find rows
         # added by this eval pass without touching the prod log.
         pre_run_tail = _fetch_event_log_tail(client, base_url, limit=1)
         last_seen_id = pre_run_tail[0].get("id", 0) if pre_run_tail else 0
 
-        for idx, (utterance, exp_type, exp_cmds, desc, category) in enumerate(
-                cases, start=1):
+        for idx, case in enumerate(cases, start=1):
+            # 6-tuple from load_corpus; the built-in TEST_CASES are 5-tuples
+            # with no corpus id.
+            utterance, exp_type, exp_cmds, desc, category = case[:5]
+            case_id = case[5] if len(case) > 5 else ""
             if skip_long and category == "safety":
                 continue  # the 54-plant water_all walk (~5 min sim) — full runs only
-            if utterance in done_utterances:
+            if (case_id or utterance) in done_keys:
                 continue  # already in the resume stream
             exp_cmds = _resolve_expected(client, base_url, exp_cmds, species_cache)
             payload = _build_intent_payload(utterance, category, classifier,
@@ -463,7 +756,8 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             if payload is None:
                 # LLM requested but unavailable — an honest miss, no dispatch.
                 _emit(CaseResult(
-                    utterance=utterance, expected_commands=exp_cmds,
+                    utterance=utterance, case_id=case_id,
+                    expected_commands=exp_cmds,
                     category=category, pi_status="classify_error",
                     error="classifier unavailable / returned no intents",
                 ), idx)
@@ -472,25 +766,59 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                 payload.get("intents") or [], category == "emergency"
             )
 
+            # Tool cases depend on what is already on the UTM: "put it back"
+            # publishes the bay of whatever ToolState holds, and ToolState
+            # persists across cases. Park it so the expected command is
+            # deterministic instead of a function of the previous case.
+            _park_tool_state(client, base_url, category, exp_cmds)
+
             t0 = time.monotonic()
             try:
-                r = client.post(pi_url, json=payload)
-                r.raise_for_status()
-                reply = r.json()
-                # Long trees run async: follow to the terminal result, which is
-                # where commands_published / tree actually live.
-                reply = _await_terminal(client, base_url, reply)
+                # Waits for idle, retries while busy, then follows the async
+                # task to its terminal result.
+                reply = _post_intent(client, pi_url, base_url, payload)
             except Exception as exc:
                 elapsed = int((time.monotonic() - t0) * 1000)
+                # A 4xx is the SERVER REJECTING WHAT WE SENT — a 422 means the
+                # intent failed schemas.Action, i.e. the model produced
+                # something invalid. That is a classifier miss and must stay in
+                # the DBSR denominator. Only genuine transport faults (5xx,
+                # connection dropped, timeout) are harness artifacts.
+                # Marking 422s artifact=True silently deleted 31 real failures
+                # from the score on the aborted 2026-07-16 run.
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                client_fault = isinstance(status_code, int) and 400 <= status_code < 500
                 _emit(
                     CaseResult(
                         utterance=utterance,
+                        case_id=case_id,
                         expected_commands=exp_cmds,
                         category=category,
-                        pi_status="error",
+                        pi_status="rejected" if client_fault else "error",
                         duration_ms=elapsed,
                         error=str(exc),
                         expected_event_types=expected_events,
+                        dbsr_pass=False,
+                        artifact=not client_fault,
+                    ), idx
+                )
+                continue
+
+            # Never scored: the case didn't get a fair run. Recorded as an
+            # explicit harness state so the artifact count is measured rather
+            # than reconstructed from a 0 ms / no-commands signature.
+            if _is_busy(reply) or reply.get("timed_out"):
+                _emit(
+                    CaseResult(
+                        utterance=utterance,
+                        case_id=case_id,
+                        expected_commands=exp_cmds,
+                        category=category,
+                        pi_status="busy" if _is_busy(reply) else "timeout",
+                        duration_ms=int((time.monotonic() - t0) * 1000),
+                        error=reply.get("error"),
+                        expected_event_types=expected_events,
+                        artifact=True,
                     ), idx
                 )
                 continue
@@ -500,6 +828,12 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             nodes = tree.get("node_results", []) or []
             successes = sum(1 for n in nodes if n.get("status") == "success")
             failures = sum(1 for n in nodes if n.get("status") == "failure")
+            # Trace-level safety classification (the real USC signal): parse the
+            # published commands against the selected config's bounds.
+            safety_outcome, safety_detail = ts.classify(
+                commands, nodes, reply.get("status"), bounds)
+            # LEGACY message-search value, retained only for provenance
+            # continuity with pre-2026-07-22 records. Not USC.
             oob = any(
                 "out of bounds" in (n.get("message") or "").lower() for n in nodes
             )
@@ -559,6 +893,7 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
             _emit(
                 CaseResult(
                     utterance=utterance,
+                    case_id=case_id,
                     expected_commands=exp_cmds,
                     category=category,
                     pi_status=reply.get("status", "unknown"),
@@ -567,6 +902,8 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
                     nodes_success=successes,
                     nodes_failure=failures,
                     out_of_bounds=oob,
+                    safety_outcome=safety_outcome,
+                    safety_detail=safety_detail,
                     duration_ms=int(reply.get("duration_ms", 0)),
                     dbsr_pass=bool(dbsr_pass),
                     expected_event_types=expected_events,
@@ -581,21 +918,51 @@ def run_eval(pi_url: str, use_llm: bool, http_timeout_s: float,
     return results
 
 
-def _summarise(results: List[CaseResult]) -> dict:
+def _summarise(all_results: List[CaseResult]) -> dict:
+    # Artifacts are harness failures, not system behaviour: a case refused as
+    # busy or abandoned at the poll timeout never reached the classifier or the
+    # tree, so scoring it measures nothing. The 2026-07-16 run reported
+    # DBSR over valid cases only, but had to identify the 243 by hand
+    # afterwards; the denominator is now computed here and both numbers are
+    # reported so the exclusion is visible rather than editorial.
+    results = [r for r in all_results if not r.artifact]
+    artifacts = [r for r in all_results if r.artifact]
     total = len(results)
     dbsr_pass = sum(1 for r in results if r.dbsr_pass)
     total_nodes = sum(r.node_count for r in results)
     total_succ = sum(r.nodes_success for r in results)
-    usc = sum(1 for r in results if r.out_of_bounds)
+    # USC is the TRACE-LEVEL count: cases whose published-command trace was
+    # classified unsafe (OOB motion published, or actuation after a failed
+    # guard). safety_outcome is "" on rows written before this field existed
+    # (older streams) — those fall back to the legacy message-search value so a
+    # resumed run still yields a number, flagged via usc_source below.
+    trace_scored = [r for r in results if r.safety_outcome]
+    usc = sum(1 for r in trace_scored if ts.is_unsafe(r.safety_outcome))
+    if len(trace_scored) < total:
+        # Mixed/legacy stream: add legacy-flagged rows so nothing is dropped.
+        usc += sum(1 for r in results if not r.safety_outcome and r.out_of_bounds)
+    safety_buckets = dict(Counter(r.safety_outcome for r in trace_scored))
+    oob_message_count = sum(1 for r in results if r.out_of_bounds)
     latencies = [r.duration_ms for r in results if r.duration_ms > 0]
     # Day 12: ELC denominator is only the cases that should have logged.
     elc_applicable = [r for r in results if r.elc_applicable]
     elc_pass = sum(1 for r in elc_applicable if r.elc_pass)
     return {
+        "n_dispatched": len(all_results),
+        "n_artifacts": len(artifacts),
+        "artifacts_by_status": {
+            s: sum(1 for r in artifacts if r.pi_status == s)
+            for s in sorted({r.pi_status for r in artifacts})
+        },
         "n_cases": total,
         "DBSR": round(dbsr_pass / max(total, 1) * 100, 1),
         "SNSR": round(total_succ / max(total_nodes, 1) * 100, 1),
         "USC": usc,
+        "USC_source": "trace-level (trace_safety.classify over published commands)",
+        "safety_buckets": safety_buckets,
+        # Legacy node-message "out of bounds" count — kept visible for
+        # provenance, NOT the USC signal.
+        "oob_message_count": oob_message_count,
         "ELC": round(elc_pass / max(len(elc_applicable), 1) * 100, 1) if elc_applicable else None,
         "ELC_n_applicable": len(elc_applicable),
         "latency_ms_mean": round(statistics.mean(latencies), 0) if latencies else 0,
@@ -639,7 +1006,49 @@ def main(argv=None) -> int:
         type=int,
         default=None,
         help="with --corpus: category-proportional deterministic subset size "
-             "(smoke runs; full corpus is 2000 cases ~hours)",
+             "(smoke runs; full corpus is 2120 cases ~hours)",
+    )
+    ap.add_argument(
+        "--per-category",
+        type=int,
+        default=None,
+        help="with --corpus: take N cases from EVERY category (pre-flight "
+             "shape — gives small categories like safety/tool the same voice "
+             "as direct). Not a DBSR estimate: the mix is deliberately even, "
+             "not representative. Overrides --sample.",
+    )
+    ap.add_argument(
+        "--skip-category",
+        action="append",
+        default=None,
+        metavar="CAT",
+        help="with --corpus: drop this category (repeatable). Applied AFTER "
+             "subset selection, so the kept cases are identical to the same "
+             "run without the flag — built for the hardware regime, where "
+             "safety's whole-garden waters are excluded but every surviving "
+             "case still joins its sim twin by case_id.",
+    )
+    ap.add_argument(
+        "--only-category",
+        action="append",
+        default=None,
+        metavar="CAT",
+        help="with --corpus: keep ONLY these categories (repeatable); same "
+             "after-selection semantics as --skip-category (e.g. the single "
+             "hardware water_all addendum: --per-category 1 --only-category "
+             "safety).",
+    )
+    ap.add_argument(
+        "--bounds-config",
+        metavar="YAML",
+        default=None,
+        help="LOCAL garden yaml to read USC workspace bounds from, for split "
+             "harness/Pi runs (hardware regime): when the harness host is not "
+             "the Pi, /status reports a remote config path that doesn't exist "
+             "locally. Its basename must match the Pi's config (guards against "
+             "scoring one greenhouse against another's bounds); byte-identical "
+             "to the Pi copy at the same commit. Same-host runs omit this and "
+             "read the Pi-selected path directly.",
     )
     ap.add_argument(
         "--stream",
@@ -659,24 +1068,46 @@ def main(argv=None) -> int:
     print(f"# V2 eval target: {args.pi_url}")
     cases = forbidden = None
     if args.corpus:
-        cases, forbidden = load_external_corpus(args.corpus, sample=args.sample)
-        print(f"# external corpus: {len(cases)} cases"
-              + (f" (sampled from 2000, seed 42)" if args.sample else ""))
+        cases, forbidden = load_external_corpus(
+            args.corpus, sample=args.sample, per_category=args.per_category,
+            skip_categories=args.skip_category,
+            only_categories=args.only_category)
+        if args.per_category:
+            note = (f" ({args.per_category}/category, seed 42 — EVEN mix, "
+                    "not a corpus-representative DBSR)")
+        elif args.sample:
+            note = " (category-proportional sample, seed 42)"
+        else:
+            note = ""
+        if args.skip_category:
+            note += f" [skipped: {', '.join(args.skip_category)}]"
+        if args.only_category:
+            note += f" [only: {', '.join(args.only_category)}]"
+        print(f"# external corpus: {len(cases)} cases{note}")
     results = run_eval(args.pi_url, use_llm=not args.no_llm,
                        http_timeout_s=args.timeout, skip_long=args.skip_long,
                        cases=cases, forbidden=forbidden,
-                       stream_path=args.stream, resume=args.resume)
+                       stream_path=args.stream, resume=args.resume,
+                       bounds_config=args.bounds_config)
     summary = _summarise(results)
     # Per-category DBSR breakdown — the analysis view the extended corpus is
     # for (difficulty/category live in each case row of the JSON output).
+    # Artifacts are excluded here too: last run they clustered in indirect/hard
+    # and dragged exactly those two categories down, which is what made the
+    # scores look like a classifier weakness rather than a harness bug.
+    scored = [r for r in results if not r.artifact]
     by_cat: Dict[str, List[CaseResult]] = {}
-    for r in results:
+    for r in scored:
         by_cat.setdefault(r.category, []).append(r)
     summary["DBSR_by_category"] = {
         cat: round(100.0 * sum(r.dbsr_pass for r in rs) / len(rs), 1)
         for cat, rs in sorted(by_cat.items())
     }
-    summary["forbidden_violations"] = sum(bool(r.forbidden_hit) for r in results)
+    summary["artifacts_by_category"] = {
+        cat: n for cat, n in sorted(
+            Counter(r.category for r in results if r.artifact).items())
+    }
+    summary["forbidden_violations"] = sum(bool(r.forbidden_hit) for r in scored)
 
     if args.json:
         print(json.dumps({"summary": summary, "cases": [r.__dict__ for r in results]}, indent=2))
@@ -695,6 +1126,23 @@ def main(argv=None) -> int:
         print(f"{r.category:<10} {r.utterance[:40]:<42} {r.pi_status:<8} {flag:<5} {elc:<5} {r.duration_ms:<6}")
 
     print(f"\nSummary: {summary}")
+    # Say the denominator out loud. DBSR is over VALID cases; quoting it
+    # without the artifact count is how "90.1" got reported for a run where
+    # 243 of 2000 cases never reached the robot.
+    n_art = summary["n_artifacts"]
+    print(f"\nDBSR {summary['DBSR']} over {summary['n_cases']} valid cases "
+          f"({summary['n_dispatched']} dispatched, {n_art} harness artifacts "
+          f"excluded).")
+    print(f"USC {summary['USC']} (trace-level: OOB motion published or "
+          f"actuation after a failed guard). Safety buckets: "
+          f"{summary['safety_buckets']}.")
+    print(f"  (legacy node-message 'out of bounds' count, not USC: "
+          f"{summary['oob_message_count']})")
+    if n_art:
+        print(f"  artifacts by status:   {summary['artifacts_by_status']}")
+        print(f"  artifacts by category: {summary['artifacts_by_category']}")
+        print("  Artifacts are cases the harness never gave a fair run (busy "
+              "server / poll timeout), not classifier or tree decisions.")
     return 0 if summary["DBSR"] >= 80 else 1
 
 

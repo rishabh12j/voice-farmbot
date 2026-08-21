@@ -88,11 +88,15 @@ class OllamaClient:
             return None
 
 class AICore:
+    # Must stay identical to growmate_pi.schemas.Action — app.py uses this as
+    # the allowlist and silently coerces anything else to general_question, so
+    # a verb missing here is dead before it reaches the Pi.
+    # tools/test_action_coverage.py fails the build if the two ever drift.
     ACTIONS = ["move", "water", "water_all", "water_smart", "go_home",
                "light_on", "light_off", "photo", "panorama", "scan_weeds",
                "clear_weeds", "scan_bed", "find_plants", "label_plants",
-               "check_sensor", "check_moisture", "emergency_stop",
-               "general_question"]
+               "check_sensor", "check_moisture", "mount_tool", "stow_tool",
+               "emergency_stop", "general_question"]
 
     def __init__(self, config_path, model="gemma3:4b", ollama_url="http://localhost:11434"):
         self.garden = GardenConfig(config_path)
@@ -140,6 +144,27 @@ class AICore:
 
     def _classify_prompt(self, live_plants: Optional[List[str]] = None,
                          memory: Optional[dict] = None):
+        # PROMPT-EDIT WARNING, learned the expensive way (2026-07-16, ablated
+        # against gemma3:4b at N=5 per probe):
+        #
+        # There is deliberately NO rule teaching "drive/head/go over to X =
+        # move". One was added and it did two things, both invisible in review:
+        #   * "water everything" flipped water_all -> water (5/5 -> 0/5), which
+        #     hits _tree_water's no-target stub and publishes NOTHING. The
+        #     safety category fell 100% -> 33% and a 1600-case corpus run had
+        #     to be thrown away.
+        #   * the model lifted the word "drive" straight out of the rule's prose
+        #     and emitted it as the ACTION, which pydantic 422s at /intent.
+        # The EXAMPLES below do the same job with none of the damage: they take
+        # "drive to the basil" -> move from 0/5 to 5/5 while water_all stays 5/5
+        # and "drive to the shop" stays general_question 5/5.
+        #
+        # Rule of thumb: teach this model with examples, not prose. A rule is a
+        # global instruction and bleeds into neighbouring intents; an example is
+        # local. If you add prose here, re-probe water_all before you trust it —
+        # rule 18 (tools) was ablated clean, so it is not the hazard; a rule that
+        # names an action-like verb is.
+        #
         # Ground the model in what is ACTUALLY planted (the live active_map from
         # the Pi) rather than a static config superset. This is the garden
         # "memory" the brain infers from: targets resolve to real plants, so we
@@ -158,7 +183,7 @@ Your job is to classify what the user wants into a list of intents.
 {garden_section}
 
 {self._memory_section(memory)}AVAILABLE ACTIONS:
-  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture
+  ROBOT: move, water, water_all, water_smart, go_home, light_on, light_off, photo, panorama, scan_weeds, clear_weeds, scan_bed, find_plants, label_plants, check_sensor, check_moisture, mount_tool, stow_tool
   KNOWLEDGE: general_question
 
 OUTPUT FORMAT -- always return JSON:
@@ -182,10 +207,16 @@ RULES:
 15. NEGATIONS: "don't water X", "no need to …", "leave it", "never mind", "not today" = the user wants NO robot action. Classify as general_question with a short acknowledgment response ("Alright, I won't.") — never move, water, or home the robot on a negation. The action MUST be one of the AVAILABLE ACTIONS exactly — never invent a new action word. BUT: if the user says THEY can't do something and asks the robot to do it instead ("I can't water them today, can you do it", "my back hurts, please water them for me"), that is a COMMAND, not a negation — the inability is theirs, the request is real.
 16. "go/pop over to X and see/check how it's doing" = check_sensor on X (the robot moves there as part of the check).
 17. OUT OF SCOPE: this robot ONLY gardens (water, move, lights, photo, weeds, soil, plant map). Any request it cannot physically do as a garden robot — open a door, make tea, play music, move furniture, drive somewhere, answer non-garden trivia — is general_question with a response that politely says it only looks after the garden. NEVER map an out-of-scope request onto a robot action just because a word sounds similar ("door"/"home", "clean"/"clear"). When in doubt between a robot action and none, prefer general_question — a wrong move erodes trust more than a polite "I can't".
+18. TOOL HEADS: "pick up / get / fetch / put on / grab the X" where X is a tool (watering nozzle, soil probe, weeder, seeder) = mount_tool with target X. "put it back", "put the X away", "stow it", "take it off", "drop the tool" = stow_tool with target null (the robot already knows what it is holding — never guess a target for stow_tool). Only use these when the user asks for the TOOL ITSELF; ordinary jobs like water/check_sensor fetch their own head, so "water the tomatoes" is water, NOT mount_tool + water.
 
 EXAMPLES:
 "water the tomatoes" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Watering the tomatoes!"}}]}}
 "move to the herbs" -> {{"intents": [{{"action":"move","target":"herbs","question":null,"response":"Moving to the herbs."}}]}}
+"drive over to the tomatoes" -> {{"intents": [{{"action":"move","target":"tomatoes","question":null,"response":"Driving over to the tomatoes."}}]}}
+"head to the lettuce" -> {{"intents": [{{"action":"move","target":"lettuce","question":null,"response":"Heading to the lettuce."}}]}}
+"take the robot over to the basil" -> {{"intents": [{{"action":"move","target":"basil","question":null,"response":"Taking it over to the basil."}}]}}
+"drive to the shop for me" -> {{"intents": [{{"action":"general_question","target":null,"question":null,"response":"Sorry, I only look after the garden — I can't drive anywhere."}}]}}
+"go over and see how the peppers are doing" -> {{"intents": [{{"action":"check_sensor","target":"peppers","question":null,"response":"Popping over to check the peppers."}}]}}
 "go home" -> {{"intents": [{{"action":"go_home","target":null,"question":null,"response":"Heading home."}}]}}
 "the herbs seem dry" -> {{"intents": [{{"action":"water","target":"herbs","question":null,"response":"The herbs look thirsty, watering now."}}]}}
 "how are the tomatoes looking" -> {{"intents": [{{"action":"check_sensor","target":"tomatoes","question":null,"response":"Let me check on the tomatoes."}}]}}
@@ -207,6 +238,14 @@ EXAMPLES:
 "they're all tomatoes" -> {{"intents": [{{"action":"label_plants","target":"all tomatoes","question":null,"response":"Labeling them all as tomatoes."}}]}}
 "the middle are scallions" -> {{"intents": [{{"action":"label_plants","target":"middle scallions","question":null,"response":"Labeling the middle as scallions."}}]}}
 "check moisture levels" -> {{"intents": [{{"action":"check_moisture","target":null,"question":null,"response":"Checking moisture."}}]}}
+"pick up the watering nozzle" -> {{"intents": [{{"action":"mount_tool","target":"watering nozzle","question":null,"response":"Fetching the watering nozzle."}}]}}
+"put the soil probe on" -> {{"intents": [{{"action":"mount_tool","target":"soil probe","question":null,"response":"Getting the soil probe."}}]}}
+"grab the weeder" -> {{"intents": [{{"action":"mount_tool","target":"weeder","question":null,"response":"Fetching the weeder."}}]}}
+"put it back" -> {{"intents": [{{"action":"stow_tool","target":null,"question":null,"response":"Putting it back."}}]}}
+"put the tool away please" -> {{"intents": [{{"action":"stow_tool","target":null,"question":null,"response":"Putting the tool away."}}]}}
+"take that head off" -> {{"intents": [{{"action":"stow_tool","target":null,"question":null,"response":"Taking it off."}}]}}
+"get the nozzle and water the basil" -> {{"intents": [{{"action":"mount_tool","target":"nozzle","question":null,"response":"Fetching the nozzle."}},{{"action":"water","target":"basil","question":null,"response":"Now watering the basil."}}]}}
+"check the soil on the tomatoes then put the probe away" -> {{"intents": [{{"action":"check_sensor","target":"tomatoes","question":null,"response":"Checking the tomatoes."}},{{"action":"stow_tool","target":null,"question":null,"response":"Then putting the probe away."}}]}}
 "when should I plant basil" -> {{"intents": [{{"action":"general_question","target":"basil","question":"When should I plant basil in {self.garden.location_context}?","response":"Let me look that up."}}]}}
 "the tomatoes look thirsty" -> {{"intents": [{{"action":"water","target":"tomatoes","question":null,"response":"Tomatoes need water, on it!"}}]}}
 "give the lettuce a drink" -> {{"intents": [{{"action":"water","target":"lettuce","question":null,"response":"Giving the lettuce some water."}}]}}
@@ -237,6 +276,31 @@ Return JSON only. No explanations. Classify:"""
 
     # -- Classification --------------------------------
 
+    @staticmethod
+    def _flatten_intents(items) -> Optional[List[dict]]:
+        """Coerce the model's "intents" into a flat list of intent dicts.
+
+        A 4B model occasionally wraps its intents in an extra array —
+        {"intents": [[{...}]]} — and nothing downstream expected that. Every
+        consumer does i.get("action") (app.py's validation gate, the eval's
+        event mapping), so a nested list raised AttributeError: 'list' object
+        has no attribute 'get'. Observed live: it killed a corpus run at case 9.
+
+        One level of nesting is unwrapped because it is a formatting slip, not
+        a semantic one — the intent inside is still checked against the ACTIONS
+        allowlist, still validated by schemas.Action at /intent, and still
+        guarded by the BT. Anything that is not a dict after that is dropped:
+        the LLM emitting non-intents is a classification failure, and the
+        caller must see None (an honest miss) rather than a half-parsed batch.
+        """
+        flat: List[dict] = []
+        for item in items:
+            if isinstance(item, dict):
+                flat.append(item)
+            elif isinstance(item, list):
+                flat.extend(x for x in item if isinstance(x, dict))
+        return flat or None
+
     def _classify(self, text, live_plants: Optional[List[str]] = None,
                   memory: Optional[dict] = None) -> Optional[List[dict]]:
         resp = self.llm.chat(self._classify_prompt(live_plants, memory), text,
@@ -246,7 +310,7 @@ Return JSON only. No explanations. Classify:"""
         if not parsed: return None
         # New format: {"intents": [...]}
         if "intents" in parsed and isinstance(parsed["intents"], list):
-            return parsed["intents"]
+            return self._flatten_intents(parsed["intents"])
         # Old format fallback: {"action": ..., "target": ..., "response": ...}
         if "action" in parsed:
             return [parsed]

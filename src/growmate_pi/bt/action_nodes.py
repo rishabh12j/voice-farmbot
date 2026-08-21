@@ -879,6 +879,93 @@ class UnmountTool(_ToolChange):
                          timeout_s=timeout_s, pin_usable=pin_usable, name=name)
 
 
+class StowTool(_ToolChange):
+    """Put back whichever head is currently on, resolved when the node ticks.
+
+    ``UnmountTool`` needs its bay index at construction, but which head is on
+    is only known once the tree runs: in "check the soil then put the probe
+    away" the mount happens in an earlier node, so reading ``ToolState`` while
+    building would see an empty UTM and stow nothing. Resolving in
+    ``initialise`` keeps multi-intent requests honest.
+
+    An empty UTM is a clean SUCCESS with a spoken line, not a FAILURE — asking
+    to put back a tool that isn't on is a user mistake, not a robot fault (same
+    Q-design as an unknown plant name). This node speaks for itself rather than
+    leaving a trailing ``Respond`` to do it, because only the node knows which
+    of those two things happened.
+    """
+
+    def __init__(self, bridge, tools_by_name: Dict[str, int],
+                 timeout_s: float = TOOL_CHANGE_TIMEOUT_S,
+                 pin_usable: bool = True, name: Optional[str] = None):
+        # index is a placeholder — initialise() replaces it with the real bay
+        # of whatever turns out to be mounted.
+        super().__init__(bridge, index=1, tool_name="tool", mount=False,
+                         timeout_s=timeout_s, pin_usable=pin_usable,
+                         name=name or "StowTool")
+        self._by_name = dict(tools_by_name)
+        self._nothing_to_do: Optional[str] = None
+        self._spoke = False
+        self._bb = self.attach_blackboard_client(name=f"{self.name}-tts")
+        self._bb.register_key("tts_text", access=py_trees.common.Access.WRITE)
+
+    def _say(self, message: str) -> None:
+        try:
+            existing = self._bb.tts_text
+        except KeyError:
+            existing = ""
+        self._bb.tts_text = f"{existing} {message}".strip()
+
+    def initialise(self):
+        self._nothing_to_do = None
+        self._spoke = False
+        current = self._tool_state.current()
+        if current is None:
+            self._nothing_to_do = "There's no tool on the arm at the moment."
+            return
+        if self._tool_state.is_unknown():
+            self._nothing_to_do = (
+                "There's a head on the arm but I don't know which one, so I "
+                "won't move it. It needs taking off by hand."
+            )
+            return
+        index = self._by_name.get(current)
+        if index is None:
+            self._nothing_to_do = (
+                f"The {current.replace('_', ' ')} isn't in my tool bay list, "
+                "so I don't know where to put it back."
+            )
+            return
+        self._index = int(index)
+        self._tool_name = current
+        # Match the naming _ToolChange would have used, so the failure-speech
+        # table in intent_server keys off "Unmount" as it does for a swap.
+        self.name = f"Unmount({current})"
+        super().initialise()
+
+    def update(self):
+        if self._nothing_to_do is not None:
+            if not self._spoke:
+                self._spoke = True
+                self._say(self._nothing_to_do)
+            self.feedback_message = "nothing to stow"
+            return py_trees.common.Status.SUCCESS
+        status = super().update()
+        if status == py_trees.common.Status.SUCCESS and not self._spoke:
+            self._spoke = True
+            spoken = self._tool_name.replace("_", " ")
+            # Say only what the evidence supports. With the seat pin readable
+            # the bay release is confirmed; without it all we know is that the
+            # choreography ran and drained, so don't claim the tool is home.
+            self._say(
+                f"I've put the {spoken} back."
+                if self._pin_usable
+                else f"I've finished putting the {spoken} back — give it a "
+                     "quick look to be sure it's seated."
+            )
+        return status
+
+
 class EnsureTool(py_trees.behaviour.Behaviour):
     """Guarantee ``tool_name`` is the mounted head, swapping only if needed.
 

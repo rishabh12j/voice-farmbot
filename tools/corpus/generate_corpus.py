@@ -659,33 +659,508 @@ for h in HARD_HAND:
     forbidden = h[5] if len(h) > 5 else None
     pool_hard.append((h[0], h[1], h[2], h[3], h[4], forbidden))
 
+# ---------------------------------------------------------------- tools -----
+# mount_tool / stow_tool. Added 2026-07 and deliberately ADDITIVE: this block
+# must not change any of the original 2000 cases, so it
+#   (a) runs on its own seeded stream and restores the global one after, and
+#   (b) is capped as a NEW category appended last in CAPS, so it displaces
+#       nothing and its cases sort to GM-2001+ leaving existing ids stable.
+# Without (a) every random.choice/shuffle below would shift and the whole
+# corpus would silently re-roll.
+#
+# The spread matters as much as the coverage: an older gardener asks for the
+# nozzle in many unexpected ways, so the same TRANSFORMS the hard category uses
+# (STT homophones, fillers, politeness, elderly preamble, stutter) are applied
+# here rather than hand-writing flat phrasings.
+
+# Bays are from gh1.yaml, the corpus's target robot; mounting bay N publishes
+# T_N_1 and releasing it publishes T_N_2. test_wire_grammar asserts every
+# configured index is mountable, so these stay honest.
+TOOL_HEADS = {
+    "watering nozzle": 2, "nozzle": 2, "water nozzle": 2,
+    "soil probe": 1, "soil sensor": 1, "probe": 1,
+    "weeder": 4,
+    "seeder": 3,
+}
+STOW_BAY = 2  # the harness parks watering_nozzle before each stow case
+
+# Sound like a tool, aren't on this robot -> clean refusal, and must never
+# move the UTM.
+NOT_TOOLS = ["jackhammer", "lawnmower", "hedge trimmer", "shovel", "rake",
+             "strimmer", "chainsaw", "leaf blower", "pruning shears", "trowel"]
+
+MOUNT_T = ["pick up the {t}", "get the {t}", "fetch the {t}", "put the {t} on",
+           "grab the {t}", "mount the {t}", "put on the {t}", "i need the {t}",
+           "can you get the {t}", "attach the {t}", "bring the {t} over",
+           "load up the {t}"]
+STOW_T = ["put it back", "put the tool back", "put that back", "stow the tool",
+          "take it off", "take the tool off", "put it away",
+          "put the tool away", "pop it back in the bay", "take that head off",
+          "back in the holder please", "you can put that down now",
+          "drop the tool off", "return the tool to its slot"]
+NOT_TOOL_T = ["pick up the {t}", "get the {t}", "fetch me the {t}",
+              "put the {t} on", "grab the {t}"]
+
+# Tool words the STT mishears. Kept OUT of the shared HOMOPHONES dict at module
+# scope: "watering" occurs in hard_bases, so adding it there would change which
+# word corrupt() picks for existing hard cases and re-roll them.
+TOOL_HOMOPHONES = {
+    "nozzle": ["nozzel", "nozle", "nossle"],
+    "probe": ["prob", "probes", "prowl"],
+    "weeder": ["weeda", "reader", "wheeler"],
+    "seeder": ["seeda", "cedar", "sealer"],
+    "tool": ["toole", "tull"],
+    "soil": ["soyle", "sile"],
+}
+
+pool_tool = []
+tool_priority = set()
+
+_rand_state = random.getstate()
+_homophones_backup = dict(HOMOPHONES)
+random.seed(4242)
+HOMOPHONES.update(TOOL_HOMOPHONES)
+
+tool_bases = []
+for _spoken, _bay in TOOL_HEADS.items():
+    for _tmpl in MOUNT_T:
+        tool_bases.append((_tmpl.format(t=_spoken), "robot_command", [f"T_{_bay}_1"]))
+for _tmpl in STOW_T:
+    tool_bases.append((_tmpl, "robot_command", [f"T_{STOW_BAY}_2"]))
+
+for _u, _cls, _cmds in tool_bases:
+    pool_tool.append(("plain", _u, _cls, _cmds, "Tool head request", None))
+
+# Refusals: never mount a different head just because the name was close.
+for _nt in NOT_TOOLS:
+    for _tmpl in NOT_TOOL_T:
+        _u = _tmpl.format(t=_nt)
+        pool_tool.append(("unknown_tool", _u, "refusal", [],
+                          "Tool this robot doesn't have", ["T_"]))
+        tool_priority.add(_u)
+
+# Guarantee a baseline, but keep it SMALL. The priority set is taken before the
+# shuffle, so if it approaches the cap it crowds out the transformed spread
+# entirely — which is the whole point of the category. Baseline is ~20% of the
+# cap; the rest is the many-ways-of-asking mix.
+for _spoken in list(TOOL_HEADS)[:8]:
+    tool_priority.add(f"pick up the {_spoken}")
+for _tmpl in STOW_T[:4]:
+    tool_priority.add(_tmpl)
+for _nt in NOT_TOOLS[:12]:
+    tool_priority.add(f"pick up the {_nt}")
+
+for _ in range(400):  # oversample; dedupe + the cap trim it
+    for _sub, _fn, _desc in TRANSFORMS:
+        _base_u, _cls, _cmds = random.choice(tool_bases)
+        _out = _fn(_base_u)
+        if _out:
+            pool_tool.append((_sub, _out, _cls, _cmds, _desc, None))
+
+HOMOPHONES.clear()
+HOMOPHONES.update(_homophones_backup)
+random.setstate(_rand_state)
+
+# -------------------------------------------------- wave 2: demo-derived ----
+# 380 cases (-> 2500) written against what older adults ACTUALLY said at the
+# 2026-06/07 community demonstrations, not against what a generator imagines
+# they'd say. Everything here is a speech PATTERN abstracted from the demo
+# sessions: no participant name, personal circumstance, or verbatim personal
+# remark is reproduced. (The transcripts themselves are gitignored personal
+# data; this file is on a public remote. Patterns are not personal data —
+# quotes would be.)
+#
+# Why this wave exists — the generated transforms above are mechanical, and the
+# demo showed three specific ways that costs realism:
+#
+# 1. THE HOMOPHONES ARE INVENTED AND WRONG. The generator guesses the STT hears
+#    "walter"/"wadder" for "water". What it ACTUALLY produced in the field was
+#    "butter" ("I heard you say butter the tomatoes"), and "lettuce" came back
+#    as "letters" / "lattices" repeatedly across two separate sessions. None of
+#    those three strings appear anywhere in the first 2120 cases: the corpus was
+#    testing errors the system doesn't make and ignoring the ones it does.
+# 2. DISFLUENCY ISN'T UNIFORM. repeatify() duplicates a random word. Real
+#    speakers stumble on the HARD word — the plant name. One attendee: asked for
+#    the lettuces, stopped, said she didn't know what she'd called it, then said
+#    it twice more. The stumble is always on the species.
+# 3. POLITENESS IS LOCAL. The observed wrapper is Irish-English and trails the
+#    command ("for us please", "would you ever"), rather than the generic
+#    prefixes above.
+#
+# These cases are tagged source="demo_observed" and sort LAST, so they take
+# GM-2121+ and every existing id stays put.
+
+DEMO_SPECIES = [
+    ("spearmint", "spearmint"), ("spearmint", "mint"),
+    ("tomato", "tomatoes"), ("tomato", "tomato plants"),
+    ("scallion", "scallions"), ("scallion", "spring onions"),
+    ("pepper", "peppers"), ("pepper", "mixed peppers"),
+    ("lettuce", "lettuce"), ("lettuce", "lettuces"),
+    ("marigold", "marigolds"), ("basil", "basil"),
+]
+
+# Observed in the field, not guessed. Kept OUT of the module-level HOMOPHONES:
+# "water" appears in hard_bases, so extending that dict would re-roll the hard
+# category and change 2120 existing cases.
+OBSERVED_STT = {
+    "water":     ["butter"],                 # heard live: "butter the tomatoes"
+    "lettuce":   ["letters", "lattices"],    # heard repeatedly, two sessions
+    "lettuces":  ["letters", "lattices"],
+    "scallions": ["stallions"],
+    "spearmint": ["spare mint"],
+    "marigolds": ["mary golds"],
+}
+
+# Trailing Irish-English politeness, as observed ("...for us please").
+DEMO_SUFFIX = ["for us please", "please", "would you", "if you wouldn't mind",
+               "when you get a chance", "there's a good lad", "thanks a million"]
+DEMO_PREFIX = ["would you ever", "could you", "can you", "sure would you",
+               "be a pet and", "when you get a second"]
+
+# Why an older gardener is asking the robot instead of doing it — abstracted
+# from the demo's recurring themes (heavy cans, digging, getting back up).
+DEMO_WHY = [
+    "the watering can is too heavy for me now",
+    "i can't be getting down on that ground",
+    "it's easy enough to get down but not to get back up",
+    "my hands aren't what they were",
+    "i'm not able for the digging anymore",
+    "the heat is at me today",
+    "i've the hip playing up",
+]
+
+pool_demo = {}          # category -> list of pool items
+demo_priority = set()
+
+_st = random.getstate()
+random.seed(90210)      # private stream; restored below so wave 1 is untouched
+
+
+def _d(cat, sub, u, cls, cmds, desc, forb=None, prio=False):
+    pool_demo.setdefault(cat, []).append((sub, u, cls, cmds, desc, forb))
+    if prio:
+        demo_priority.add(u)
+
+
+def _stumble(word):
+    """A real stumble lands ON the hard word. Returns variants of that word."""
+    head = word[:3] if len(word) > 4 else word[:2]
+    return [
+        f"{head}- {word}",          # restart mid-word
+        f"um {word}",
+        f"{word}, {word}",          # say it twice, as observed
+        f"the {word} i mean the {word}",
+    ]
+
+
+def _stt(u):
+    """Apply an OBSERVED mishearing, if the utterance contains a known word."""
+    words = u.split()
+    idx = [i for i, w in enumerate(words) if w.lower().strip(",") in OBSERVED_STT]
+    if not idx:
+        return None
+    i = random.choice(idx)
+    key = words[i].lower().strip(",")
+    words[i] = random.choice(OBSERVED_STT[key])
+    return " ".join(words)
+
+
+# ---- direct (55): what wave 1 does NOT already contain -----------------------
+# Plain phrasings ("water the tomatoes") are wave 1's job and collide on dedupe,
+# which is correct — this wave is only worth its slots where it adds something
+# wave 1 cannot: the mishearings that actually happen, and stumbles that land on
+# the plant name.
+_direct_bases = []
+for sp, alias in DEMO_SPECIES:
+    _direct_bases += [
+        (f"water the {alias}", [f"@move:{sp}", "D_W_1"]),
+        (f"water all the {alias}", [f"@move:{sp}", "D_W_1"]),
+        (f"give the {alias} a drink", [f"@move:{sp}"]),
+        (f"move to the {alias}", ["M "]),
+        (f"move over to the {alias}", ["M "]),
+    ]
+
+# Every observed mishearing, not a random one — these strings appear nowhere in
+# wave 1, which is the point.
+for u, cmds in _direct_bases:
+    words = u.split()
+    for i, w in enumerate(words):
+        key = w.lower().strip(",")
+        for wrong in OBSERVED_STT.get(key, []):
+            v = words[:]
+            v[i] = wrong
+            _d("direct", "observed_stt", " ".join(v), "robot_command", cmds,
+               "Mishearing observed at the demo", prio=True)
+
+# Stumble on the species, as observed.
+for sp, alias in DEMO_SPECIES:
+    for v in _stumble(alias):
+        _d("direct", "species_stumble", f"water the {v}", "robot_command",
+           [f"@move:{sp}", "D_W_1"], "Stumble on the plant name")
+        _d("direct", "species_stumble", f"move to the {v}", "robot_command",
+           ["M "], "Stumble on the plant name")
+
+# Trailing Irish politeness on a plain command.
+for sp, alias in DEMO_SPECIES:
+    _d("direct", "irish_politeness", f"water the {alias} for us please",
+       "robot_command", [f"@move:{sp}", "D_W_1"], "Trailing politeness, as heard")
+    _d("direct", "irish_politeness", f"move to the {alias} please",
+       "robot_command", ["M "], "Move with please, as heard")
+
+# The plain phrasings last: they will mostly collide with wave 1 and be skipped,
+# which is the intended outcome.
+for u, cmds in _direct_bases:
+    _d("direct", "demo_plain", u, "robot_command", cmds, "Demo phrasing")
+
+# ---- hard (115): the realism core ------------------------------------------
+# Self-correction only where the name is GENUINELY ambiguous. The observed case
+# was a speaker wavering between "lettuces" and "lettuce" — an awkward plural —
+# then saying she didn't know what she'd called it. Smearing that template over
+# every species produces "the basil, i don't know what i called them, the basil",
+# which nobody says: no one is uncertain about basil. That would be the same
+# mechanical transform this wave exists to correct. So: real alternations only.
+NAME_WOBBLE = [
+    ("lettuce", "lettuces", "lettuce"),
+    ("lettuce", "lettuce", "lettuces"),
+    ("lettuce", "little gem", "lettuce"),
+    ("spearmint", "mint", "spearmint"),
+    ("spearmint", "spearmint", "mint"),
+    ("scallion", "spring onions", "scallions"),
+    ("scallion", "scallions", "spring onions"),
+    ("scallion", "green onions", "scallions"),
+    ("tomato", "tomato plants", "tomatoes"),
+    ("pepper", "mixed peppers", "peppers"),
+    ("pepper", "peppers", "mixed peppers"),
+    ("marigold", "marigolds", "marigold"),
+]
+for sp, said, meant in NAME_WOBBLE:
+    _d("hard", "species_selfcorrect", f"water all the {said}, {meant} i mean",
+       "robot_command", [f"@move:{sp}"], "Correct the plant name mid-sentence", prio=True)
+    _d("hard", "species_selfcorrect",
+       f"can you water the {said} i don't know what i called them, the {meant}",
+       "robot_command", [f"@move:{sp}"], "Unsure what the plant is called", prio=True)
+    _d("hard", "species_selfcorrect", f"the {said} or the {meant} whatever you call them, give them a drink",
+       "robot_command", [f"@move:{sp}"], "Offers both names, unsure which")
+
+for sp, alias in DEMO_SPECIES:
+    # Retry after not being understood — no full stops; people just say it again.
+    _d("hard", "retry", f"water the {alias}... water the {alias}",
+       "robot_command", [f"@move:{sp}"], "Repeat after a non-understanding")
+    # trailing Irish politeness
+    for suf in random.sample(DEMO_SUFFIX, 3):
+        _d("hard", "irish_politeness", f"water the {alias} {suf}",
+           "robot_command", [f"@move:{sp}"], "Trailing politeness, as heard")
+    for pre in random.sample(DEMO_PREFIX, 2):
+        _d("hard", "irish_politeness", f"{pre} water the {alias}",
+           "robot_command", [f"@move:{sp}"], "Leading politeness, as heard")
+    # why-they're-asking, the demo's recurring theme
+    for why in random.sample(DEMO_WHY, 2):
+        _d("hard", "elderly_context", f"{why} so would you water the {alias}",
+           "robot_command", [f"@move:{sp}"], "Reason for asking, as heard")
+    # stumble inside a longer sentence
+    _d("hard", "species_stumble", f"would you ever give the {_stumble(alias)[0]} a drink",
+       "robot_command", [f"@move:{sp}"], "Stumble mid-sentence")
+    s = _stt(f"water all the {alias} please")
+    if s:
+        _d("hard", "observed_stt", s, "robot_command", [f"@move:{sp}"],
+           "Mishearing inside a polite request")
+
+# ---- query (25) -------------------------------------------------------------
+for sp, alias in DEMO_SPECIES:
+    _d("query", "demo_plain", f"how are the {alias} getting on", "robot_query",
+       ["D_S_C"], "Status, demo phrasing", prio=True)
+    _d("query", "irish_politeness", f"would you check the {alias} for us please",
+       "robot_query", ["D_S_C"], "Status with trailing politeness")
+    _d("query", "demo_plain", f"is the ground dry at the {alias}", "robot_query",
+       ["D_S_C"], "Soil question, demo phrasing")
+    _d("query", "species_stumble", f"how are the {_stumble(alias)[0]} doing",
+       "robot_query", ["D_S_C"], "Stumble in a status question")
+    s = _stt(f"how are the {alias} looking")
+    if s:
+        _d("query", "observed_stt", s, "robot_query", ["D_S_C"],
+           "Mishearing in a status question")
+
+# ---- multi (20) -------------------------------------------------------------
+for sp, alias in DEMO_SPECIES:
+    _d("multi", "demo_chain", f"water the {alias} for us please and then go home",
+       "robot_command", [f"@move:{sp}", "H_0"], "Chain, demo phrasing", prio=True)
+    _d("multi", "demo_chain", f"check the {alias} and water them if they need it",
+       "robot_command", ["D_S_C"], "Check then water")
+    _d("multi", "demo_chain", f"would you water the {alias} and take a photo for us",
+       "robot_command", [f"@move:{sp}", "I_1"], "Water then photo, demo phrasing")
+
+# ---- refusal (40): plants the demo crowd actually named, none of them in gh1 -
+# Plural, because that is how they were said ("I have cabbages, and I have
+# onions"). Using the singular here produced "how are the cabbage getting on",
+# which is not English and tests nothing about refusal.
+DEMO_ABSENT = ["cabbages", "onions", "rhubarb", "runner beans", "spuds",
+               "carrots", "courgettes", "strawberries", "garlic", "leeks"]
+for p in DEMO_ABSENT:
+    _d("refusal", "unknown_species", f"water the {p} for us please", "refusal", [],
+       "Plant the demo crowd named, not in gh1", prio=True)
+    _d("refusal", "unknown_species", f"would you ever water the {p}", "refusal", [],
+       "Plant the demo crowd named, not in gh1")
+for p in DEMO_ABSENT:
+    _d("refusal", "unknown_species", f"the {p} could do with a drink", "refusal", [],
+       "Indirect ask for an absent plant")
+    _d("refusal", "unknown_species", f"move over to the {p}", "refusal", [],
+       "Move to an absent plant")
+    _d("refusal", "unknown_species", f"how are the {p} getting on", "refusal", [],
+       "Status query on an absent plant")
+    _d("refusal", "unknown_species", f"i've {p} in at home, would you water them",
+       "refusal", [], "Talks about their own plants, not gh1's")
+
+# ---- out_of_scope (45): what the demo crowd asked for that it CANNOT do -----
+DEMO_IMPOSSIBLE = [
+    "dig up the bed for me", "dig the garden over", "turn the soil for us",
+    "put the clay in for me", "fertilise the soil", "put fertiliser on the beds",
+    "spread the compost", "prune the tomato plants", "pick the tomatoes for me",
+    "harvest the lettuce", "pull that big weed by the door", "mow the lawn",
+    "clean the water head", "descale the nozzle", "fix the hose",
+    "carry the watering can over", "lift that bag of compost",
+    "plant these seeds i brought", "put up a trellis", "open the greenhouse door",
+    "close the vents it's roasting", "put the heating on in here",
+    "tell me the price of one of these", "order me another robot",
+    "ring my daughter", "put the kettle on", "make us a cup of tea",
+    "read out my messages", "put the radio on", "what's on the telly tonight",
+]
+for u in DEMO_IMPOSSIBLE:
+    _d("out_of_scope", "demo_impossible", u, "out_of_scope", [],
+       "Asked at the demo; the gantry cannot do it", prio=True)
+for u in DEMO_IMPOSSIBLE:
+    _d("out_of_scope", "demo_impossible", f"would you ever {u}", "out_of_scope", [],
+       "Politely asked for the impossible")
+for u in DEMO_IMPOSSIBLE[:15]:
+    _d("out_of_scope", "demo_impossible", f"{u} for us please", "out_of_scope", [],
+       "Impossible ask with trailing politeness")
+
+# ---- general (35): what the demo crowd actually asked about -----------------
+DEMO_QUESTIONS = [
+    "how is the weather looking today", "will it rain later",
+    "is it too cold to plant out yet", "what should i be planting this month",
+    "when do i sow the cabbage", "do the tomatoes need feeding",
+    "how often should i water in this heat", "is the soil any good in that end",
+    "why are the marigolds struggling", "what grows well in a glass house",
+    "can i grow spuds in a bag", "when do i lift the onions",
+    "should i be watering in the evening", "do slugs go for lettuce",
+    "is it worth putting fertiliser down", "how long do scallions take",
+    "what do i do with the weeds after", "is rain water better for them",
+    "will the frost get them", "do peppers need a lot of sun",
+    "how do i keep the greenfly off", "when should i take the tomatoes in",
+    "is it too late to sow basil", "do i need to feed the soil every year",
+    "what's the best thing for a small glass house",
+]
+for u in DEMO_QUESTIONS:
+    _d("general", "demo_advice", u, "general", [], "Asked at the demo", prio=True)
+for u in DEMO_QUESTIONS:
+    _d("general", "demo_advice", f"tell us this, {u}", "general", [],
+       "Conversational opener, as heard")
+
+# ---- negation (25) ----------------------------------------------------------
+for sp, alias in DEMO_SPECIES:
+    _d("negation", "plant_negation", f"don't water the {alias}, they're grand",
+       "negation", [], "Irish 'grand' negation", [f"@move:{sp}", "D_W_1"], prio=True)
+for sp, alias in DEMO_SPECIES:
+    _d("negation", "plant_negation", f"leave the {alias} alone for today",
+       "negation", [], "Leave-alone negation", [f"@move:{sp}", "D_W_1"])
+    _d("negation", "plant_negation", f"the {alias} are grand, don't be watering them",
+       "negation", [], "Irish 'grand' negation", [f"@move:{sp}", "D_W_1"])
+for u in ["no no leave it", "don't bother, sure it's after raining",
+          "ah leave it now", "no need, they're only just done",
+          "hold off there a minute", "you're grand, leave it",
+          "don't be at that now"]:
+    _d("negation", "blanket_negation", u, "negation", [],
+       "Blanket negation, demo phrasing", ["D_W_1", "M "], prio=True)
+
+# ---- tool (20): natural tool phrasings + heads it hasn't --------------------
+for u, t in [("put the water head on for us", "watering_nozzle"),
+             ("get the water tool head", "watering_nozzle"),
+             ("would you ever put the spray head on", "watering_nozzle"),
+             ("pop the soil sensor on", "soil_sensor"),
+             ("get the probe out for us please", "soil_sensor"),
+             ("put the weeding head on", "weeder"),
+             ("get the seeding head", "seeder")]:
+    bay = {"watering_nozzle": 2, "soil_sensor": 1, "weeder": 4, "seeder": 3}[t]
+    _d("tool", "demo_plain", u, "robot_command", [f"T_{bay}_1"],
+       "Tool head, demo phrasing", prio=True)
+for u in ["take that head off for us please", "put the head back would you",
+          "that's grand you can put it away now", "pop the tool back in"]:
+    _d("tool", "demo_plain", u, "robot_command", ["T_2_2"],
+       "Stow, demo phrasing", prio=True)
+for u in ["put the digging head on", "get the fertiliser head",
+          "put the pruning head on", "get the harvesting head",
+          "put the mowing head on", "get the spade head",
+          "put the fork attachment on", "get the hedge cutting head"]:
+    _d("tool", "unknown_tool", u, "refusal", [],
+       "A head this robot doesn't have", ["T_"], prio=True)
+for u, t in [("get the sprayer for us", "watering_nozzle"),
+             ("put on the watering head please", "watering_nozzle"),
+             ("would you put the soil probe on", "soil_sensor"),
+             ("get the weeder out", "weeder"),
+             ("put the seeder on for us please", "seeder")]:
+    bay = {"watering_nozzle": 2, "soil_sensor": 1, "weeder": 4, "seeder": 3}[t]
+    _d("tool", "irish_politeness", u, "robot_command", [f"T_{bay}_1"],
+       "Tool head with demo politeness")
+for u in ["take it off there for us", "put that back where it came from",
+          "you can drop that head now", "stow it away please"]:
+    _d("tool", "demo_plain", u, "robot_command", ["T_2_2"], "Stow, demo phrasing")
+
+random.setstate(_st)   # wave 1's stream is exactly where it was
+
+DEMO_TARGET = {"direct": 55, "hard": 115, "query": 25, "multi": 20,
+               "refusal": 40, "out_of_scope": 45, "general": 35,
+               "negation": 25, "tool": 20}
+_DEMO_DIFF = {"direct": "easy", "hard": "hard", "query": "easy", "multi": "medium",
+              "refusal": "medium", "out_of_scope": "medium", "general": "easy",
+              "negation": "hard", "tool": "medium"}
+assert sum(DEMO_TARGET.values()) == 380, sum(DEMO_TARGET.values())
+
+# NOTE: the wave is added to the corpus AFTER the assembly below, not here.
+# Adding it first looked equivalent — raise each cap by the number seeded and
+# `need` stays the same — but it isn't: C.add() claims the utterance in the
+# dedupe set, so a demo phrasing that collides with one wave 1 would generate
+# STEALS it, and the assembly silently draws a different case in its place.
+# Measured: seeding "can you water the lettuce" here dropped that case from
+# wave 1 and shifted every id after it. Appending afterwards resolves every
+# collision in wave 1's favour, which is the direction that keeps 2120 ids
+# stable.
+
 # ------------------------------------------------------------ assembly ------
 
+# "tool" is appended LAST on purpose. CAT_ORDER derives from these keys and ids
+# are assigned in that order, so a new category at the end takes GM-2001+ and
+# every original id stays put. Inserting it anywhere else would renumber the
+# corpus and orphan every GM- reference in the eval record.
+# Wave 1's caps, UNCHANGED. The demo wave is appended after this assembly runs,
+# so these must stay exactly as they were or the draws below shift.
 CAPS = {
     "direct": 380, "indirect": 200, "query": 180, "general": 190,
     "emergency": 40, "multi": 140, "safety": 15, "refusal": 175,
     "hard": 340, "negation": 100, "out_of_scope": 240,
+    "tool": 120,
 }
-assert sum(CAPS.values()) == 2000
+assert sum(CAPS.values()) == 2120, sum(CAPS.values())
 
 POOLS = {
     "direct": pool_direct, "indirect": pool_indirect, "query": pool_query,
     "general": pool_general, "emergency": pool_emergency, "multi": pool_multi,
     "safety": pool_safety, "refusal": pool_refusal, "hard": pool_hard,
-    "negation": pool_negation, "out_of_scope": pool_oos,
+    "negation": pool_negation, "out_of_scope": pool_oos, "tool": pool_tool,
 }
 
 DIFFICULTY = {
     "direct": "easy", "indirect": "medium", "query": "easy", "general": "easy",
     "emergency": "easy", "multi": "medium", "safety": "medium",
     "refusal": "medium", "hard": "hard", "negation": "hard",
-    "out_of_scope": "medium",
+    "out_of_scope": "medium", "tool": "medium",
 }
 
-# Items that must survive sampling: hand-written hard cases and blanket negations
+# Items that must survive sampling: hand-written hard cases, blanket negations,
+# and the tool baseline (one mount per head, some plain stows, every refusal).
 PRIORITY = {
     "hard": set(h[1] for h in HARD_HAND),
     "negation": set(u for (sub, u, *_rest) in pool_negation if sub == "blanket_negation"),
+    "tool": tool_priority,
 }
 
 for cat, cap in CAPS.items():
@@ -712,9 +1187,38 @@ for cat, cap in CAPS.items():
         raise SystemExit(f"Pool exhausted for {cat}: needed {need}, got {added} "
                          f"(pool size {len(POOLS[cat])})")
 
-# Stable ordering: category order, then utterance; then assign ids
+# ---- wave 2 lands here: after wave 1 is complete and its utterances claimed --
+# Any demo phrasing that collides with a wave 1 case is skipped (C.add returns
+# False) and the next candidate is taken, so wave 1 is untouched by
+# construction rather than by luck. That is why the pools above carry headroom.
+demo_added = {}
+for cat, want in DEMO_TARGET.items():
+    items = pool_demo.get(cat, [])
+    items.sort(key=lambda it: (it[1] not in demo_priority, it[1]))  # priority first
+    n = 0
+    for sub, u, cls, cmds, desc, forb in items:
+        if n >= want:
+            break
+        if C.add(cat, sub, _DEMO_DIFF[cat], u, cls, cmds, desc,
+                 forbidden=forb, source="demo_observed"):
+            n += 1
+    demo_added[cat] = n
+    if n < want:
+        raise SystemExit(
+            f"demo pool exhausted for {cat}: wanted {want}, got {n} "
+            f"(pool {len(items)}) — add more phrasings, do not lower the target")
+
+# Stable ordering, then ids. The FIRST key is the wave: everything from wave 1
+# sorts ahead of everything from wave 2, so the original 2120 keep GM-0001..
+# GM-2120 and the demo-derived cases take GM-2121..GM-2500. Sorting by category
+# first instead would interleave the new cases by utterance and renumber the
+# whole corpus, orphaning every GM- reference in the eval record and making old
+# result JSONLs unjoinable.
 CAT_ORDER = list(CAPS.keys())
-C.cases.sort(key=lambda c: (CAT_ORDER.index(c["category"]), c["source"] != "seed", c["utterance"]))
+C.cases.sort(key=lambda c: (c["source"] == "demo_observed",
+                            CAT_ORDER.index(c["category"]),
+                            c["source"] != "seed",
+                            c["utterance"]))
 for i, c in enumerate(C.cases, 1):
     c["id"] = f"GM-{i:04d}"
 
@@ -730,6 +1234,27 @@ corpus = {
         "generator": "generate_corpus.py (seed=42, deterministic)",
         "total_cases": len(C.cases),
         "seed_cases": sum(1 for c in C.cases if c["source"] == "seed"),
+        "demo_observed_cases": sum(1 for c in C.cases if c["source"] == "demo_observed"),
+        "waves": {
+            "wave_1": "GM-0001..GM-2120 — 43 hand-written seeds plus generated "
+                      "transforms (seed 42).",
+            "wave_2": "GM-2121..GM-2500 — 380 cases written against speech "
+                      "patterns observed at the 2026-06/07 community "
+                      "demonstrations. Patterns only: no participant name, "
+                      "personal circumstance, or verbatim personal remark is "
+                      "reproduced (the transcripts are personal data and are "
+                      "not in this repository; this file is public).",
+        },
+        "wave_2_rationale": (
+            "Wave 1's disfluency is mechanical — a random word is duplicated, a "
+            "filler is inserted at a random index, and the homophones are "
+            "invented. The demos showed all three are wrong in the same "
+            "direction: the STT actually renders 'water' as 'butter' and "
+            "'lettuce' as 'letters'/'lattices' (none of which occur in wave 1), "
+            "and speakers stumble on the plant name specifically, not on a "
+            "random word. Wave 2 supplies the observed errors and puts the "
+            "disfluency where it actually falls."
+        ),
         "target_greenhouse": "gh1 (Maynooth)",
         "active_species_gh1": list(GH1.keys()),
         "farmbotdev_species_treated_as_refusals_on_gh1": OTHER_GH_SPECIES,
@@ -742,12 +1267,25 @@ corpus = {
             "photo_of_plant": "asserts I_1 only; tighten to @move + I_1 if your pipeline moves first",
             "forbidden_commands": "must NOT appear in the emitted sequence (negation and self-correction cases)",
             "refusal/negation/general/out_of_scope": "terminal success requires zero robot commands",
+            "T_<n>_1 / T_<n>_2": "tool bay <n> mounted / released; bays are from gh1.yaml",
+            "tool category precondition": (
+                "stow cases (expected T_2_2) assume the watering nozzle is on, and "
+                "mount cases assume an empty UTM. ToolState is process state that "
+                "persists across cases, so the harness MUST park it via POST "
+                "/tool_state before each tool case or the expected command is "
+                "whatever the previous case happened to leave mounted."
+            ),
         },
     },
     "cases": C.cases,
 }
 
-with open(str(__import__("pathlib").Path(__file__).parent / "growmate_test_corpus.json"), "w") as f:
+# encoding is explicit: ensure_ascii=False means non-ASCII reaches the file, and
+# without this Python uses the platform default (cp1252 on Windows) and writes
+# mojibake that json.load then refuses. Latent until wave 2's metadata became
+# the first non-ASCII in the corpus. load_corpus.py reads utf-8 to match.
+with open(str(__import__("pathlib").Path(__file__).parent / "growmate_test_corpus.json"),
+          "w", encoding="utf-8") as f:
     json.dump(corpus, f, indent=2, ensure_ascii=False)
 
 print(f"total: {len(C.cases)}")

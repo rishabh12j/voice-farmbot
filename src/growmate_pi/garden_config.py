@@ -11,11 +11,55 @@ intent's ``target`` string into ``(x, y, z, water_quantity)``.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import yaml
+
+
+# Words that carry no identity of their own. Dropped before token matching so
+# "the lettuce bed" and "lettuce" resolve alike, and so a filler-only target
+# ("the bed") resolves to nothing rather than to whichever key happens to
+# contain the word. Same idea as the _FILLERS set in bt/builder.py.
+_FILLERS = frozenset({
+    "the", "a", "an", "my", "our", "some", "that", "this", "there",
+    "please", "bed", "beds", "patch", "patches", "row", "rows",
+    "section", "plant", "plants", "position", "area",
+})
+
+
+def _tokens(s: str, extra_fillers: frozenset = frozenset()) -> frozenset:
+    """Lowercase content tokens of ``s``, punctuation and fillers removed."""
+    drop = _FILLERS | extra_fillers
+    return frozenset(
+        t for t in re.split(r"[^a-z0-9]+", s.lower()) if t and t not in drop
+    )
+
+
+# Generic words that name no particular head. Dropping them lets "the watering
+# tool" reach watering_nozzle, while a bare "the tool" reduces to nothing and
+# resolves to None — better a refusal than an arbitrary head on the UTM.
+_TOOL_FILLERS = frozenset({"tool", "tools", "head", "attachment", "thing", "one"})
+
+# Spoken names for the tool heads. The config ``tools:`` blocks are keyed by the
+# canonical name and carry no aliases today, so these defaults live here rather
+# than in YAML — gh2's config file has live uncommitted edits and must not be
+# touched just to teach the robot a synonym. A config may still add its own via
+# ``tools: <name>: aliases: [...]``, which takes precedence.
+_TOOL_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "watering_nozzle": ("watering nozzle", "nozzle", "water nozzle",
+                        "watering head", "watering can", "sprayer",
+                        "spray head", "hose", "watering tool", "water tool"),
+    "soil_sensor": ("soil sensor", "soil probe", "probe", "moisture sensor",
+                    "moisture probe", "soil moisture sensor", "sensor",
+                    "soil tool"),
+    "weeder": ("weeder", "weeding tool", "weed tool", "weed puller"),
+    "rotating_weeder": ("rotating weeder", "rotary weeder", "spinning weeder"),
+    "seeder": ("seeder", "seed injector", "seeding tool", "planter",
+               "seed tool"),
+}
 
 
 @dataclass
@@ -52,6 +96,78 @@ class GardenConfig:
             for a in loc.get("aliases", []):
                 self._lookup[a.lower()] = (loc, "location")
 
+        # Spoken tool name -> canonical key, built only from heads actually
+        # configured on THIS robot: gh2 has no rotating_weeder, so "rotating
+        # weeder" must resolve to None there and let the tree refuse rather
+        # than mount some other head.
+        self._tool_lookup: Dict[str, str] = {}
+        for canon in self.tools_by_name():
+            self._tool_lookup[canon] = canon
+            self._tool_lookup[canon.replace("_", " ")] = canon
+            for a in _TOOL_ALIASES.get(canon, ()):
+                self._tool_lookup.setdefault(a, canon)
+            for a in (self.tools.get(canon) or {}).get("aliases", []) or []:
+                self._tool_lookup[str(a).lower().strip()] = canon
+
+    def resolve_tool(self, name: Optional[str]) -> Optional[str]:
+        """Resolve a spoken tool name ("the watering nozzle") to a config key.
+
+        None when the name matches no head configured on this robot, which is
+        what lets ``_tree_mount_tool`` refuse cleanly instead of mounting the
+        wrong thing. Exact names and aliases win; otherwise the same
+        token-boundary rule as ``resolve_target``, with generic words like
+        "tool" stripped so a bare "the tool" resolves to nothing.
+        """
+        if not name or not self._tool_lookup:
+            return None
+        key = name.lower().strip()
+        if key in self._tool_lookup:
+            return self._tool_lookup[key]
+        want = _tokens(key, _TOOL_FILLERS)
+        if not want:
+            return None
+        best: Optional[str] = None
+        best_score = 0.0
+        for spoken, canon in self._tool_lookup.items():
+            have = _tokens(spoken.replace("_", " "), _TOOL_FILLERS)
+            if not have or not (want <= have or have <= want):
+                continue
+            score = len(want & have) / len(want | have)
+            if score > best_score:
+                best, best_score = canon, score
+        return best
+
+    def _fuzzy(self, key: str) -> Optional[Tuple[Dict, str]]:
+        """Token-boundary fallback for a name that is not an exact key/alias.
+
+        This used to be a bare substring test (``key in k or k in key``), which
+        was the mechanism behind the refusal misses: an unknown target that
+        shared any substring with a config key resolved to that key's
+        coordinates, so the caller drove the gantry to a stale alias position
+        instead of refusing. Whole-token matching keeps "the lettuce bed" ->
+        "lettuce" while letting an unknown species fall through to None, which
+        is what lets the tree refuse cleanly.
+
+        Explicit ``aliases:`` are unaffected — they are exact keys and are
+        matched before this runs. Best overlap wins rather than first hit, so
+        the result no longer depends on dict insertion order.
+        """
+        want = _tokens(key)
+        if not want:
+            return None
+        best: Optional[Tuple[Dict, str]] = None
+        best_score = 0.0
+        for k, v in self._lookup.items():
+            have = _tokens(k)
+            if not have or not (want <= have or have <= want):
+                continue
+            # Jaccard: an exact token match (1.0) beats a partial one, so
+            # "pepper" prefers "pepper" over "sweet pepper".
+            score = len(want & have) / len(want | have)
+            if score > best_score:
+                best, best_score = v, score
+        return best
+
     def resolve_target(self, name: Optional[str]) -> Optional[ResolvedTarget]:
         """Resolve a plant/location name (or alias) to coordinates.
 
@@ -61,13 +177,7 @@ class GardenConfig:
         if not name:
             return None
         key = name.lower().strip()
-        match = self._lookup.get(key)
-        if not match:
-            # Fall back to fuzzy substring match (matches legacy GardenConfig)
-            for k, v in self._lookup.items():
-                if key in k or k in key:
-                    match = v
-                    break
+        match = self._lookup.get(key) or self._fuzzy(key)
         if not match:
             return None
         item, kind = match

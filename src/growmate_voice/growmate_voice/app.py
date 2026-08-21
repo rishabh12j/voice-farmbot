@@ -126,7 +126,8 @@ _NEVER_CONFIRM = {"estop", "reset", "emergency_stop"}
 # confidently-wrong "you watered it" data. This flag is the master kill-switch;
 # the live honesty gate is _memory_features_on().
 _MEMORY_FEATURES_ENABLED = True
-_PENDING_TTL_S = 10.0
+_PENDING_TTL_S = 120.0  # was 10.0; widened so a slow STT+LLM confirm round-trip
+                        # (e.g. Ollama on WSL/CPU) does not expire mid-demo
 
 
 def _memory_features_on() -> bool:
